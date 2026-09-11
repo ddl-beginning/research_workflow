@@ -1,0 +1,28 @@
+{
+  "schema_version": "stage_contract.v1",
+  "plan_id": "plan-demo-001",
+  "stage_id": "stage-geometry-001",
+  "user_visible_goal": "Reduce the visible contour artifact without increasing runtime beyond the budget.",
+  "hypothesis": "The artifact is caused by the current contour sampling abstraction, not by the renderer itself.",
+  "experiment": "Run one bounded sampling change and report measurements against the frozen baseline.",
+  "falsifier": "A controlled change leaves the artifact metric unchanged or worsens it while runtime rises.",
+  "abstraction_layer": "contour-sampling",
+  "allowed_paths": ["src/demo"],
+  "read_first": ["README.md", "src/demo/README.md"],
+  "acceptance": [
+    "artifact metric improves against baseline",
+    "runtime remains at or below 100 ms",
+    "the scoped test passes"
+  ],
+  "stop_rules": [
+    "stop after 5 iterations",
+    "stop and ask for a human route choice after 3 unresolved same-layer failures"
+  ],
+  "critic_mode": "NONE",
+  "max_iterations": 5,
+  "measurement_commands": ["python -m unittest discover -s tests"],
+  "metadata": {
+    "fixture": true,
+    "lane": "fake-codex"
+  }
+}

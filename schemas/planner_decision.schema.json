@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "planner_decision.schema.json",
+  "title": "Planner decision",
+  "type": "object",
+  "properties": {
+    "schema_version": {"type": "string", "pattern": "^planner_decision\\.v[0-9]+$"},
+    "decision_id": {"type": "string", "minLength": 1},
+    "plan_id": {"type": "string", "minLength": 1},
+    "stage_id": {"type": "string", "minLength": 1},
+    "task_id": {"type": "string", "minLength": 1},
+    "iteration_index": {"type": "integer", "minimum": 1},
+    "decision": {"type": "string", "enum": ["CONTINUE", "REPLAN", "STAGE_READY", "HUMAN_GATE", "BLOCKED"]},
+    "reason": {"type": "string", "minLength": 1},
+    "silent": {"type": "boolean"},
+    "human_gate_required": {"type": "boolean"},
+    "architecture_reset": {"type": "boolean"},
+    "architecture_check": {
+      "type": "object",
+      "properties": {
+        "triggered": {"type": "boolean"},
+        "trigger": {"type": "string", "minLength": 1},
+        "threshold": {"type": "integer", "minimum": 2},
+        "same_abstraction_count": {"type": "integer", "minimum": 0},
+        "user_visible_failure": {"type": "boolean"},
+        "user_visible_improvement": {"type": "boolean"},
+        "no_user_visible_improvement": {"type": "boolean"},
+        "route": {"type": ["string", "null"], "enum": ["KEEP_COURSE", "REPLAN", null]},
+        "legacy_route": {"type": ["string", "null"], "enum": ["ARCHITECTURE_RESET", null]},
+        "planner_decision": {"type": ["string", "null"], "enum": ["REPLAN", null]},
+        "reason": {"type": "string", "minLength": 1},
+        "result_status": {"type": ["string", "null"]}
+      }
+    }
+  },
+  "anyOf": [
+    {
+      "required": ["decision", "reason", "silent", "human_gate_required", "architecture_reset"]
+    },
+    {
+      "required": ["schema_version", "decision_id", "plan_id", "stage_id", "iteration_index", "decision", "reason", "silent", "human_gate_required", "architecture_check", "architecture_reset", "task_id"]
+    }
+  ]
+}

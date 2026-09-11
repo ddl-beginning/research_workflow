@@ -1,0 +1,30 @@
+{
+  "schema_version": "fake_planner_cases.v1",
+  "cases": [
+    {
+      "name": "ordinary_iteration",
+      "inputs": {"result_status": "SUCCEEDED"},
+      "expected": "CONTINUE"
+    },
+    {
+      "name": "failed_route",
+      "inputs": {"result_status": "FAILED", "scientific_result": "FALSIFIED"},
+      "expected": "REPLAN"
+    },
+    {
+      "name": "milestone",
+      "inputs": {"result_status": "SUCCEEDED", "stage_ready": true},
+      "expected": "STAGE_READY"
+    },
+    {
+      "name": "architecture_reset_replan",
+      "inputs": {"result_status": "FAILED", "architecture_reset": true},
+      "expected": "REPLAN"
+    },
+    {
+      "name": "executor_blocked",
+      "inputs": {"result_status": "BLOCKED"},
+      "expected": "BLOCKED"
+    }
+  ]
+}

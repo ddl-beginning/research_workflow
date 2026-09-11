@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Bounded GPT Project Discovery report",
+  "description": "One approval-bound, FRESH Project Discovery result. Repository claims are only promoted when a local verifier records evidence.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "project_id",
+    "brief_digest",
+    "brief_revision",
+    "evidence_digest",
+    "status",
+    "real_goal",
+    "search_summary",
+    "candidate_repositories",
+    "relevant_non_repo_methods",
+    "primary_recommendation",
+    "why_primary",
+    "simpler_alternative",
+    "important_risks",
+    "facts_needing_local_verification",
+    "no_direct_match_found",
+    "alternatives",
+    "consultation",
+    "anti_tunnel_rule_applied",
+    "production_architecture_selected",
+    "stage_started",
+    "business_source_modified",
+    "consultation_count",
+    "gpt_calls",
+    "external_calls",
+    "path"
+  ],
+  "properties": {
+    "schema_version": { "const": "discovery_report.v1" },
+    "project_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "brief_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "brief_revision": { "type": "integer", "minimum": 1 },
+    "evidence_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "status": { "const": "DISCOVERY_COMPLETE" },
+    "real_goal": { "type": "string", "minLength": 1, "maxLength": 12000 },
+    "search_summary": { "type": "string", "minLength": 1, "maxLength": 12000 },
+    "candidate_repositories": {
+      "type": "array",
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["repo_url"],
+        "properties": {
+          "repo_url": { "type": "string", "minLength": 1, "maxLength": 2000 },
+          "name": {},
+          "apparent_match": {},
+          "reusable_part": {},
+          "likely_gap": {},
+          "expected_modification": {},
+          "license": {},
+          "maintenance": {},
+          "reason_to_consider": {},
+          "local_verification": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["verified_locally", "claims_source"],
+            "properties": {
+              "verified_locally": { "const": true },
+              "claims_source": { "const": "LOCAL_VERIFIER" }
+            }
+          }
+        }
+      }
+    },
+    "relevant_non_repo_methods": {
+      "type": "array",
+      "maxItems": 8,
+      "items": { "type": "string", "maxLength": 4000 }
+    },
+    "primary_recommendation": {
+      "type": ["string", "object", "null"]
+    },
+    "why_primary": { "type": "string", "maxLength": 12000 },
+    "simpler_alternative": { "type": "string", "maxLength": 12000 },
+    "important_risks": {
+      "type": "array",
+      "maxItems": 16,
+      "items": { "type": "string", "maxLength": 4000 }
+    },
+    "facts_needing_local_verification": {
+      "type": "array",
+      "maxItems": 16,
+      "items": { "type": "string", "maxLength": 4000 }
+    },
+    "no_direct_match_found": { "type": "boolean" },
+    "alternatives": {
+      "type": "array",
+      "maxItems": 4,
+      "items": { "type": ["string", "object"] }
+    },
+    "consultation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "project_url", "request_count", "claims_digest", "evidence_digest"],
+      "properties": {
+        "mode": { "const": "fresh" },
+        "project_url": { "type": "string", "pattern": "^https?://[^\\s]+$" },
+        "request_count": { "const": 1 },
+        "claims_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "evidence_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "anti_tunnel_rule_applied": { "const": true },
+    "production_architecture_selected": { "const": false },
+    "stage_started": { "const": false },
+    "business_source_modified": { "const": false },
+    "consultation_count": { "const": 1 },
+    "gpt_calls": { "const": 1 },
+    "external_calls": { "const": 1 },
+    "path": { "const": ".research/discovery/DISCOVERY_REPORT.json" },
+    "retention_manifest_path": { "type": "string", "minLength": 1 },
+    "retention_manifest_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "available_assets_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "asset_pack_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "available_assets_used": { "type": "array", "maxItems": 32, "items": { "type": "string", "maxLength": 200 } },
+    "candidate_zero_asset_id": { "type": ["string", "null"], "maxLength": 200 },
+    "asset_layer_marker": { "const": "AVAILABLE_ASSET_LAYER_PASS" },
+    "marker": { "const": "GPT_PROJECT_DISCOVERY_PASS" },
+    "persistent_inventory": {
+      "type": "array",
+      "maxItems": 256,
+      "items": { "type": "string", "minLength": 1, "maxLength": 1000 }
+    }
+  }
+}

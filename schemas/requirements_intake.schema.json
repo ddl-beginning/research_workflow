@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Requirements intake result",
+  "description": "Bounded local result envelope for the project-level requirements intake.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema_version", "operation", "project_id", "state", "status", "question_count", "gpt_calls"],
+  "properties": {
+    "schema_version": { "const": "requirements_intake_result.v1" },
+    "operation": { "type": "string", "minLength": 1 },
+    "project_id": { "type": "string", "minLength": 1 },
+    "state": { "enum": ["DRAFT", "WAITING_USER_APPROVAL", "APPROVED", "CANCELLED"] },
+    "status": { "type": "string", "minLength": 1 },
+    "question_count": { "type": "integer", "minimum": 0, "maximum": 1 },
+    "questions": { "type": "array", "maxItems": 1 },
+    "original_requirement": { "type": "string" },
+    "requirement_baseline": { "type": "object" },
+    "requirement_baseline_display": { "type": "object" },
+    "gpt_calls": { "const": 0 },
+    "external_calls": { "const": 0 }
+  }
+}

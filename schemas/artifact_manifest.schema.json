@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "artifact_manifest.schema.json",
+  "title": "Immutable Stage artifact manifest",
+  "type": "object",
+  "properties": {
+    "manifest_version": {"type": "string", "const": "artifact_manifest.v1"},
+    "stage_id": {"type": "string", "minLength": 1},
+    "required_roles": {"type": "array", "items": {"type": "string"}},
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "artifact_id": {"type": "string", "minLength": 1},
+          "stage_id": {"type": "string", "minLength": 1},
+          "lane": {"type": "string", "enum": ["primary", "challenger"]},
+          "role": {"type": "string", "enum": ["representative_good", "representative_hard", "worst_case", "before_after", "metrics_summary"]},
+          "path": {"type": "string", "minLength": 1},
+          "basename": {"type": "string", "minLength": 1},
+          "media_type": {"type": "string"},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "size_bytes": {"type": "integer", "minimum": 0},
+          "uri": {"type": "string", "minLength": 1},
+          "metadata": {"type": "object"}
+        },
+        "required": ["artifact_id", "stage_id", "lane", "role", "path", "basename", "media_type", "sha256", "size_bytes", "uri", "metadata"],
+        "additionalProperties": false
+      }
+    },
+    "manifest_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  },
+  "required": ["manifest_version", "stage_id", "required_roles", "artifacts", "manifest_digest"],
+  "additionalProperties": false
+}

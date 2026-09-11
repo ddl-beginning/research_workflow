@@ -1,0 +1,9 @@
+{
+  "stage_id": "stage-geometry-001",
+  "metrics": {
+    "artifact_score": 1.0,
+    "runtime_ms": 80
+  },
+  "artifact_refs": ["artifact://baseline/geometry-v1"],
+  "source": "stage_start"
+}

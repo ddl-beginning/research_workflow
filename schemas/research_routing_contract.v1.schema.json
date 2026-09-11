@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "research_routing_contract.v1.schema.json",
+  "title": "Research routing contract V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["research_status", "unresolved_gaps", "next_action", "design_status"],
+  "properties": {
+    "research_status": {"enum": ["CONTINUE", "SUFFICIENT", "NEEDS_EXPERIMENT", "BLOCKED"]},
+    "unresolved_gaps": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "next_action": {"enum": ["TARGETED_RESEARCH", "MINIMAL_EXPERIMENT", "DESIGN_SYNTHESIS", "HUMAN_DESIGN_REVIEW", "STOP"]},
+    "design_status": {"enum": ["NOT_STARTED", "DRAFT", "READY_FOR_HUMAN_REVIEW"]}
+  }
+}
+

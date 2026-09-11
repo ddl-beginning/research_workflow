@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stage_contract.schema.json",
+  "title": "Stage contract",
+  "type": "object",
+  "description": "Contract for one bounded research stage. The legacy branch keeps the PoC fixtures compatible; the modern branch carries the explicit stage bookkeeping fields.",
+  "properties": {
+    "schema_version": {"type": "string", "pattern": "^stage_contract\\.v[0-9]+$"},
+    "plan_id": {"type": "string", "minLength": 1},
+    "project_goal": {"type": "string", "minLength": 1},
+    "stage_id": {"type": "string", "minLength": 1},
+    "stage_name": {"type": "string", "minLength": 1},
+    "user_visible_goal": {"type": "string", "minLength": 1},
+    "stage_scope": {"type": ["string", "array", "object"]},
+    "baseline_ref": {"type": ["string", "array", "object"]},
+    "acceptance_description": {"type": ["string", "array", "object"]},
+    "review_artifacts": {"type": ["array", "object"]},
+    "protected_paths": {"type": "array", "items": {"type": "string"}},
+    "allowed_paths": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+    "read_first": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "hypothesis": {"type": "string", "minLength": 1},
+    "experiment": {"type": "string", "minLength": 1},
+    "falsifier": {"type": "string", "minLength": 1},
+    "abstraction_layer": {"type": "string", "minLength": 1},
+    "acceptance": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+    "stop_rules": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+    "critic_mode": {"type": "string", "enum": ["NONE", "MAJOR_CHALLENGER"]},
+    "max_iterations": {"type": "integer", "minimum": 1},
+    "retry_budget": {"type": "integer", "minimum": 1, "maximum": 100},
+    "execution_attempt_budget": {"type": "integer", "minimum": 1, "maximum": 100},
+    "max_execution_attempts": {"type": "integer", "minimum": 1, "maximum": 100},
+    "measurement_commands": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "metadata": {"type": "object"},
+    "status": {"type": "string", "enum": ["DRAFT", "PLANNED", "ACTIVE", "STAGE_READY", "HUMAN_GATE", "BLOCKED", "ACCEPTED", "REJECTED"]},
+    "iteration_count": {"type": "integer", "minimum": 0},
+    "same_abstraction_iteration_count": {"type": "integer", "minimum": 0}
+  },
+  "anyOf": [
+    {
+      "required": [
+        "schema_version", "plan_id", "stage_id", "user_visible_goal",
+        "hypothesis", "experiment", "falsifier", "abstraction_layer",
+        "allowed_paths", "acceptance", "stop_rules", "critic_mode",
+        "max_iterations"
+      ]
+    },
+    {
+      "required": [
+        "project_goal", "plan_id", "schema_version", "stage_id", "stage_name",
+        "user_visible_goal", "stage_scope", "baseline_ref", "acceptance_description",
+        "review_artifacts", "protected_paths", "allowed_paths", "status",
+        "iteration_count", "same_abstraction_iteration_count", "hypothesis",
+        "experiment", "falsifier", "abstraction_layer", "acceptance", "stop_rules",
+        "critic_mode", "max_iterations"
+      ]
+    }
+  ]
+}

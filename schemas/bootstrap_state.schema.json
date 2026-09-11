@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bootstrap_state.schema.json",
+  "title": "Bootstrap to Step 15 hand-off state v1",
+  "description": "Alias for bootstrap_state.v1.schema.json.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version", "status", "markers", "next_action", "project_scope_verified",
+    "project_id", "discovery", "blueprint", "state_digest", "stage_created", "stage_started"
+  ],
+  "properties": {
+    "schema_version": {"const": "bootstrap_state.v1"},
+    "status": {"enum": ["BOOTSTRAP_COMPLETE", "READY_FOR_STAGE_PLANNING"]},
+    "marker": {"const": "PROJECT_BOOTSTRAP_RESEARCH_PASS"},
+    "markers": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+    "next_action": {"const": "READY_FOR_STAGE_PLANNING"},
+    "project_scope_verified": {"const": true},
+    "project_id": {"type": "string", "minLength": 1, "maxLength": 200},
+    "brief_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "context_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "discovery_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "blueprint_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "discovery": {
+      "type": "object", "required": ["status"],
+      "properties": {
+        "marker": {"const": "GPT_PROJECT_DISCOVERY_PASS"},
+        "status": {"const": "DISCOVERY_COMPLETE"},
+        "path": {"const": ".research/discovery/DISCOVERY_REPORT.json"},
+        "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "report_path": {"const": ".research/discovery/DISCOVERY_REPORT.json"},
+        "report_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "anyOf": [
+        {"required": ["path", "digest"]},
+        {"required": ["report_path", "report_digest"]}
+      ],
+      "additionalProperties": true
+    },
+    "blueprint": {
+      "type": "object", "required": ["status"],
+      "properties": {
+        "marker": {"const": "GPT_CODEX_BLUEPRINT_REVIEW_PASS"},
+        "status": {"const": "PROJECT_BLUEPRINT_READY"},
+        "path": {"const": ".research/blueprint/PROJECT_BLUEPRINT.md"},
+        "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "blueprint_path": {"const": ".research/blueprint/PROJECT_BLUEPRINT.md"},
+        "blueprint_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "anyOf": [
+        {"required": ["path", "digest"]},
+        {"required": ["blueprint_path", "blueprint_digest"]}
+      ],
+      "additionalProperties": true
+    },
+    "state_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "stage_created": {"const": false},
+    "stage_started": {"const": false},
+    "production_architecture_selected": {"const": false},
+    "business_source_modified": {"const": false}
+  }
+}

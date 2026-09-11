@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "git_baseline.schema.json",
+  "title": "Immutable Git baseline",
+  "type": "object",
+  "properties": {
+    "baseline_version": {"type": "string", "const": "git_baseline.v1"},
+    "repository_root": {"type": "string", "minLength": 1},
+    "repository_path": {"type": "string", "minLength": 1},
+    "git_root": {"type": "string", "minLength": 1},
+    "commit_sha": {"type": ["string", "null"], "pattern": "^[0-9a-fA-F]{40}$"},
+    "stage_id": {"type": "string", "minLength": 1},
+    "dirty": {"type": "boolean"},
+    "dirty_summary": {
+      "type": "object",
+      "required": ["dirty", "entries", "tracked_diff_digest", "untracked_file_digests"],
+      "properties": {
+        "dirty": {"type": "boolean"},
+        "entries": {"type": "array"},
+        "tracked_diff_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "untracked_file_digests": {"type": "object"}
+      },
+      "additionalProperties": false
+    },
+    "metrics_refs": {"type": "array", "items": {"type": "string"}},
+    "review_refs": {"type": "array", "items": {"type": "string"}},
+    "config_refs": {"type": "array", "items": {"type": "string"}},
+    "baseline_metrics_refs": {"type": "array", "items": {"type": "string"}},
+    "baseline_review_refs": {"type": "array", "items": {"type": "string"}},
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  },
+  "required": [
+    "baseline_version", "repository_root", "repository_path", "git_root", "commit_sha", "dirty",
+    "dirty_summary", "metrics_refs", "review_refs", "config_refs",
+    "baseline_metrics_refs", "baseline_review_refs", "digest"
+  ],
+  "additionalProperties": false
+}

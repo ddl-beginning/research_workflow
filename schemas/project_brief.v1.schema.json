@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Canonical project brief v1",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema_version", "project_id", "intake_mode", "state", "status", "brief", "gpt_calls", "original_requirement", "requirement_baseline"],
+  "properties": {
+    "schema_version": { "const": "project_brief.v1" },
+    "project_id": { "type": "string", "minLength": 1 },
+    "intake_mode": { "enum": ["USER_CONFIRMED_BRIEF", "CODEX_REQUIREMENTS_INTERVIEW"] },
+    "state": { "enum": ["DRAFT", "WAITING_USER_APPROVAL", "APPROVED", "CANCELLED"] },
+    "status": { "type": "string", "minLength": 1 },
+    "brief": { "type": "object" },
+    "original_requirement": { "type": "string", "maxLength": 20000 },
+    "requirement_baseline": {
+      "type": "object",
+      "required": ["schema_version", "confirmed", "inferred", "unknown", "blocking_unknown"],
+      "properties": {
+        "schema_version": { "const": "requirement_baseline.v1" },
+        "confirmed": { "type": "object" },
+        "inferred": { "type": "object" },
+        "unknown": { "type": "array", "items": { "type": "string" } },
+        "blocking_unknown": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "gpt_calls": { "const": 0 }
+  }
+}

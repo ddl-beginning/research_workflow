@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stage_contract.v1.schema.json",
+  "title": "Stage controller contract v1",
+  "description": "Stable, user-authored contract for one bounded research stage.",
+  "type": "object",
+  "properties": {
+    "schema_version": {"type": "string", "const": "stage_contract.v1"},
+    "project_id": {"type": "string", "minLength": 1},
+    "repository_root": {"type": "string", "minLength": 1},
+    "stage_id": {"type": "string", "minLength": 1},
+    "stage_name": {"type": "string", "minLength": 1},
+    "project_goal": {"type": "string", "minLength": 1},
+    "stage_goal": {"type": "string", "minLength": 1},
+    "user_visible_goal": {"type": "string", "minLength": 1},
+    "inputs": {"type": ["array", "object"]},
+    "protected_paths": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "allowed_paths": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+    "acceptance_description": {"type": "string", "minLength": 1},
+    "required_checks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "review_artifact_requirements": {
+      "type": ["array", "object"],
+      "minItems": 1
+    },
+    "baseline": {"type": "object"},
+    "status": {"type": "string", "enum": ["PLANNED", "ACTIVE", "STAGE_READY", "APPROVED", "BLOCKED", "STOPPED"]},
+    "lane_mode": {"type": "string", "enum": ["PRIMARY", "MAJOR_CHALLENGER"]},
+    "comparison_mode": {"type": "string", "enum": ["PRIMARY", "MAJOR_CHALLENGER"]},
+    "critic_mode": {"type": "string", "enum": ["NONE", "PRIMARY", "MAJOR_CHALLENGER"]},
+    "max_iterations": {"type": "integer", "minimum": 1},
+    "retry_budget": {"type": "integer", "minimum": 1, "maximum": 100},
+    "execution_attempt_budget": {"type": "integer", "minimum": 1, "maximum": 100},
+    "max_execution_attempts": {"type": "integer", "minimum": 1, "maximum": 100},
+    "metadata": {"type": "object"},
+    "source_stage_id": {"type": "string", "minLength": 1},
+    "source_stage_result_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "integration_target": {"type": "string", "minLength": 1},
+    "verification_spec": {"type": "object"}
+  },
+  "required": [
+    "schema_version", "project_id", "repository_root", "stage_id", "stage_name",
+    "project_goal", "stage_goal", "user_visible_goal", "inputs", "protected_paths",
+    "allowed_paths", "acceptance_description", "required_checks",
+    "review_artifact_requirements", "baseline", "status"
+  ],
+  "additionalProperties": true
+}

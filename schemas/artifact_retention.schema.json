@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Artifact retention manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "project_id", "brief_digest", "artifacts", "digest"],
+  "properties": {
+    "schema_version": { "const": "artifact_retention.v1" },
+    "project_id": { "type": "string", "maxLength": 200 },
+    "brief_digest": { "type": "string", "maxLength": 128 },
+    "artifacts": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["path", "class"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1, "maxLength": 1000 },
+          "class": { "enum": ["CANONICAL", "MILESTONE_EVIDENCE", "ACTIVE_REFERENCE", "EPHEMERAL"] }
+        }
+      }
+    },
+    "context_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "context_resource_count": { "type": "integer", "minimum": 0, "maximum": 9 },
+    "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}

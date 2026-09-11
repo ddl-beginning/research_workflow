@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stage_context_pack.schema.json",
+  "title": "Bounded stage context pack",
+  "type": "object",
+  "description": "Compact, resumable context. resources is deliberately bounded to the nine named resource classes.",
+  "properties": {
+    "pack_version": {"type": "string", "pattern": "^stage_context_pack\\.v[0-9]+$"},
+    "plan_id": {"type": "string", "minLength": 1},
+    "stage_id": {"type": "string", "minLength": 1},
+    "task_id": {"type": "string", "minLength": 1},
+    "iteration_index": {"type": "integer", "minimum": 0},
+    "resource_classes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 9,
+      "uniqueItems": true,
+      "items": {"type": "string", "enum": ["user_plan", "stage_contract", "baseline", "latest_result", "critic_packet", "decision_history", "stop_rules", "acceptance", "safety"]}
+    },
+    "resource_count": {"type": "integer", "minimum": 0, "maximum": 9},
+    "resources": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 9,
+      "properties": {
+        "user_plan": {"type": "object"},
+        "stage_contract": {"type": "object"},
+        "baseline": {"type": ["object", "null"]},
+        "latest_result": {"type": "object"},
+        "critic_packet": {"type": "object"},
+        "decision_history": {"type": "object"},
+        "stop_rules": {"type": "object"},
+        "acceptance": {"type": "object"},
+        "safety": {"type": "object"}
+      },
+      "additionalProperties": false
+    },
+    "digest": {"type": "string", "minLength": 1}
+  },
+  "anyOf": [
+    {
+      "required": ["pack_version", "plan_id", "stage_id", "iteration_index", "resource_classes", "resource_count", "resources", "digest"]
+    },
+    {
+      "required": ["plan_id", "task_id", "resource_classes", "resources"]
+    }
+  ]
+}

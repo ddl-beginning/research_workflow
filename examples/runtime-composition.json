@@ -1,0 +1,20 @@
+{
+  "schema_version": "runtime_composition.v1",
+  "stage": {
+    "state_path": ".research/stage-state.json",
+    "contract_path": ".research/stages/example-stage/contract.json",
+    "receipt_root": ".research/integration"
+  },
+  "executor": {
+    "providers": ["openai-codex"],
+    "preferred_provider": "openai-codex",
+    "preferred_model": "luna",
+    "fallback_model": null,
+    "auth_mode": "chatgpt",
+    "timeout_seconds": 900,
+    "artifact_dir": null
+  },
+  "bridge": {
+    "enabled": false
+  }
+}

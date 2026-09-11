@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stage_integration_receipt.schema.json",
+  "title": "Bounded Step 9 integration receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"type": "string", "const": "stage_integration_receipt.v1"},
+    "marker": {"type": ["string", "null"], "enum": ["CODEX_GPT_STAGE_INTEGRATION_PASS", "CODEX_GPT_STAGE_INTEGRATION_BLOCKED", null]},
+    "stage_id": {"type": "string", "minLength": 1, "maxLength": 256},
+    "status": {"type": "string", "enum": ["PLANNED", "ACTIVE", "STAGE_READY", "APPROVED", "BLOCKED", "STOPPED"]},
+    "failure_code": {"type": ["string", "null"], "maxLength": 128},
+    "stop_reason": {"type": ["string", "null"], "maxLength": 256},
+    "baseline_digest": {"type": ["string", "null"]},
+    "iteration_index": {"type": "integer", "minimum": 0},
+    "open_iteration_index": {"type": ["integer", "null"], "minimum": 1},
+    "attempt_count": {"type": "integer", "minimum": 0},
+    "retry_count": {"type": "integer", "minimum": 0},
+    "retry_budget": {"type": "integer", "minimum": 1, "maximum": 100},
+    "execution_evidence_complete": {"type": "boolean"},
+    "latest_attempt": {"type": ["object", "null"]},
+    "latest_stage_result": {"type": ["object", "null"]},
+    "stage_result_binding": {"type": ["object", "null"]},
+    "consultation_count": {"type": "integer", "minimum": 0, "maximum": 32},
+    "latest_evidence": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "revision": {"type": "integer", "minimum": 1},
+        "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "abstraction_layer": {"type": "string", "minLength": 1, "maxLength": 256},
+        "user_visible_improvement": {"type": ["boolean", "null"]},
+        "architecture": {"type": "object"}
+      },
+      "required": ["revision", "digest", "abstraction_layer", "user_visible_improvement", "architecture"]
+    },
+    "consultations": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {"type": "object", "additionalProperties": true}
+    },
+    "events": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {"type": "object", "additionalProperties": true}
+    }
+  },
+  "required": [
+    "schema_version", "marker", "stage_id", "status", "failure_code", "stop_reason", "baseline_digest",
+    "iteration_index", "consultation_count", "latest_evidence", "consultations", "events"
+  ]
+}

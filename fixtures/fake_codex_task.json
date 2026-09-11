@@ -1,0 +1,23 @@
+{
+  "schema_version": "codex_task.v1",
+  "plan_id": "plan-demo-001",
+  "stage_id": "stage-geometry-001",
+  "task_id": "task-fixture-primary-001",
+  "lane": "fake-codex",
+  "objective": "Run the bounded contour-sampling experiment and measure artifact_score and runtime_ms.",
+  "allowed_paths": ["src/demo"],
+  "read_first": ["README.md", "src/demo/README.md"],
+  "context_refs": ["stage://stage-geometry-001/baseline/example"],
+  "acceptance": ["artifact metric improves against baseline", "runtime remains at or below 100 ms"],
+  "measurement_commands": ["python -m unittest discover -s tests"],
+  "tool_policy": {
+    "network": "deny",
+    "write_scope": ["src/demo"],
+    "destructive_actions": "deny"
+  },
+  "result_schema": "codex_result.schema.json",
+  "stop_rules": ["stop after 5 iterations"],
+  "iteration_index": 1,
+  "abstraction_layer": "contour-sampling",
+  "critic_role": "none"
+}

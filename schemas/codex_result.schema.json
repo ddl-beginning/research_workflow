@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "codex_result.schema.json",
+  "title": "Scoped Codex result report",
+  "type": "object",
+  "properties": {
+    "schema_version": {"type": "string", "pattern": "^codex_result\\.v[0-9]+$"},
+    "plan_id": {"type": "string", "minLength": 1},
+    "stage_id": {"type": "string", "minLength": 1},
+    "task_id": {"type": "string", "minLength": 1},
+    "iteration_index": {"type": "integer", "minimum": 1},
+    "stage_iteration_index": {"type": "integer", "minimum": 1},
+    "attempt_index": {"type": "integer", "minimum": 1},
+    "attempt_number": {"type": "integer", "minimum": 1},
+    "retry_budget": {"type": "integer", "minimum": 1, "maximum": 100},
+    "execution_failure": {"type": "object"},
+    "contract_satisfied": {"type": "boolean"},
+    "result_valid": {"type": "boolean"},
+    "turn_completed": {"type": "boolean"},
+    "status": {"type": "string", "enum": ["SUCCEEDED", "FAILED", "BLOCKED", "ERROR", "FAILURE"]},
+    "summary": {"type": "string", "minLength": 1},
+    "changed_files": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "tests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "status"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "status": {"type": "string", "enum": ["PASS", "FAIL", "SKIP", "ERROR"]},
+          "detail": {"type": "string"}
+        }
+      }
+    },
+    "measurements": {"type": "object"},
+    "metrics": {"type": "object"},
+    "evidence_refs": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "review_artifacts": {"type": "array"},
+    "problems_discovered": {"type": "array"},
+    "abstraction_layer": {"type": "string", "minLength": 1},
+    "scientific_result": {"type": "string", "enum": ["SUPPORTED", "FALSIFIED", "AMBIGUOUS"]},
+    "stage_ready": {"type": "boolean"},
+    "user_visible_failure": {"type": "boolean"},
+    "human_gate_required": {"type": "boolean"},
+    "decision_reason": {"type": "string", "minLength": 1},
+    "stop_reason": {"type": "string", "minLength": 1},
+    "baseline_digest": {"type": "string", "minLength": 1}
+  },
+  "anyOf": [
+    {
+      "required": [
+        "schema_version", "plan_id", "stage_id", "task_id", "iteration_index",
+        "status", "summary", "changed_files", "tests", "measurements",
+        "evidence_refs", "abstraction_layer", "stage_ready", "user_visible_failure",
+        "human_gate_required"
+      ]
+    },
+    {
+      "required": [
+        "plan_id", "stage_id", "task_id", "iteration_index", "status", "summary",
+        "changed_files", "tests", "metrics", "review_artifacts", "problems_discovered"
+      ]
+    }
+  ]
+}

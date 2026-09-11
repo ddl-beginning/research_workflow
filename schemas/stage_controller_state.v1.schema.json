@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stage_controller_state.v1.schema.json",
+  "title": "Stage controller state with bounded execution attempts",
+  "description": "Append-only Stage history with independent Stage iteration and execution-attempt coordinates.",
+  "type": "object",
+  "properties": {
+    "schema_version": {"type": "string", "const": "stage_controller_state.v1"},
+    "revision": {"type": "integer", "minimum": 0},
+    "current_stage_id": {"type": ["string", "null"]},
+    "active_stage_id": {"type": ["string", "null"]},
+    "stages": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "contract": {"type": "object"},
+          "status": {"type": "string", "enum": ["PLANNED", "ACTIVE", "STAGE_READY", "APPROVED", "BLOCKED", "STOPPED"]},
+          "iteration_index": {"type": "integer", "minimum": 0},
+          "open_iteration_index": {"type": ["integer", "null"], "minimum": 1},
+          "attempt_count": {"type": "integer", "minimum": 0},
+          "retry_count": {"type": "integer", "minimum": 0},
+          "retry_budget": {"type": "integer", "minimum": 1, "maximum": 100},
+          "retry_semantics_version": {"type": "string", "const": "stage_retry_semantics.v1"},
+          "executor_requests": {"type": "array"},
+          "execution_attempts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "attempt_index": {"type": "integer", "minimum": 1},
+                "attempt_number": {"type": "integer", "minimum": 1},
+                "iteration_index": {"type": "integer", "minimum": 1},
+                "stage_iteration_index": {"type": "integer", "minimum": 1},
+                "request_id": {"type": ["string", "null"]},
+                "status": {"type": "string", "enum": ["REQUESTED", "HISTORICAL", "SUCCEEDED", "SUCCESS", "COMPLETE", "COMPLETED", "FAILED", "FAILURE", "ERROR", "INVALID", "BLOCKED"]},
+                "outcome": {"type": "string", "minLength": 1},
+                "request": {"type": ["object", "null"]},
+                "result": {"type": ["object", "null"]},
+                "provenance": {"type": "object"},
+                "execution_failure": {"type": "object"}
+              },
+              "required": ["attempt_index", "iteration_index", "request_id", "status", "outcome", "request"]
+            }
+          },
+          "latest_result": {"type": ["object", "null"]},
+          "latest_stage_result": {"type": ["object", "null"]},
+          "stage_result_binding": {"type": ["object", "null"]},
+          "execution_evidence_complete": {"type": "boolean"},
+          "events": {"type": "array"}
+        },
+        "required": [
+          "contract", "status", "iteration_index", "open_iteration_index",
+          "attempt_count", "retry_count", "retry_budget",
+          "retry_semantics_version", "executor_requests", "execution_attempts",
+          "execution_evidence_complete", "events"
+        ]
+      }
+    },
+    "events": {"type": "array"}
+  },
+  "required": ["schema_version", "revision", "current_stage_id", "active_stage_id", "stages", "events"]
+}

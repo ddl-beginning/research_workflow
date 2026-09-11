@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stage_context.schema.json",
+  "title": "Bounded Stage context v1",
+  "type": "object",
+  "properties": {
+    "context_version": {"type": "string", "const": "stage_context.v1"},
+    "pack_version": {"type": "string", "const": "stage_context_pack.v2"},
+    "plan_id": {"type": "string", "minLength": 1},
+    "stage_id": {"type": "string", "minLength": 1},
+    "task_id": {"type": "string", "minLength": 1},
+    "iteration_index": {"type": "integer", "minimum": 0},
+    "mode": {"type": "string", "enum": ["NORMAL", "FRESH"]},
+    "project_goal": {"type": "string", "minLength": 1},
+    "stage": {},
+    "user_visible_goal": {"type": "string", "minLength": 1},
+    "established_facts": {"type": "array"},
+    "current_method": {},
+    "baseline_summary": {},
+    "latest_result": {},
+    "current_blocker": {},
+    "rejected_directions": {"type": "array"},
+    "protected_constraints": {},
+    "recent_decisions": {"type": "array"},
+    "artifact_refs": {"type": "array"},
+    "git_baseline": {"type": "object"},
+    "resources": {"type": "object", "minProperties": 1, "maxProperties": 9},
+    "resource_classes": {"type": "array", "minItems": 1, "maxItems": 9, "uniqueItems": true, "items": {"type": "string"}},
+    "resource_count": {"type": "integer", "minimum": 1, "maximum": 9},
+    "selection": {
+      "type": "object",
+      "required": ["mode", "max_resource_classes", "overflow", "selected_classes", "compressed_classes", "fresh_excluded_classes"],
+      "properties": {
+        "mode": {"type": "string", "enum": ["NORMAL", "FRESH"]},
+        "max_resource_classes": {"type": "integer", "minimum": 1, "maximum": 9},
+        "overflow": {"type": "string", "enum": ["compress", "reject"]},
+        "selected_classes": {"type": "array", "items": {"type": "string"}},
+        "compressed_classes": {"type": "array", "items": {"type": "string"}},
+        "fresh_excluded_classes": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": false
+    },
+    "manifest": {
+      "type": "object",
+      "required": ["resource_digests", "file_digests", "manifest_digest"],
+      "properties": {
+        "resource_digests": {"type": "object"},
+        "file_digests": {"type": "object"},
+        "manifest_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "additionalProperties": false
+    },
+    "delta": {
+      "type": "object",
+      "required": ["mode", "changed_resources", "added_resources", "removed_resources", "reused_files"],
+      "properties": {
+        "mode": {"type": "string", "enum": ["NORMAL", "FRESH"]},
+        "changed_resources": {"type": "array"},
+        "added_resources": {"type": "array"},
+        "removed_resources": {"type": "array"},
+        "unchanged_resources": {"type": "array"},
+        "reused_files": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": false
+    },
+    "fresh_isolation_verified": {"type": "boolean"},
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  },
+  "required": [
+    "context_version", "pack_version", "plan_id", "stage_id", "task_id",
+    "iteration_index", "mode", "project_goal", "stage", "user_visible_goal",
+    "established_facts", "current_method", "baseline_summary", "latest_result",
+    "current_blocker", "rejected_directions", "protected_constraints",
+    "recent_decisions", "artifact_refs", "git_baseline", "resources",
+    "resource_classes", "resource_count", "selection", "manifest", "delta",
+    "fresh_isolation_verified", "digest"
+  ],
+  "additionalProperties": false
+}

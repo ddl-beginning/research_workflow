@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Canonical available project assets",
+  "description": "Bounded metadata-only inventory shared by Discovery and Blueprint review.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "project_id",
+    "revision",
+    "created_at",
+    "updated_at",
+    "brief_digest",
+    "local_project_present",
+    "assets",
+    "assets_digest",
+    "rejected_candidates",
+    "candidate_relationships",
+    "digest",
+    "marker"
+  ],
+  "properties": {
+    "schema_version": { "const": "available_assets.v1" },
+    "project_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "revision": { "type": "integer", "minimum": 1 },
+    "created_at": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "updated_at": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "brief_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "local_project_present": { "type": "boolean" },
+    "assets_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "rejected_candidates": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["identity", "reason"],
+        "properties": {
+          "identity": { "type": "string", "minLength": 1, "maxLength": 2000 },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 1000 }
+        }
+      }
+    },
+    "candidate_relationships": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["candidate_asset_id", "related_asset_id", "relationship", "reason"],
+        "properties": {
+          "candidate_asset_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "related_asset_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "relationship": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 1000 }
+        }
+      }
+    },
+    "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "marker": { "const": "AVAILABLE_ASSET_LAYER_PASS" },
+    "assets": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "asset_id",
+          "kind",
+          "role",
+          "source",
+          "local_ref_or_url",
+          "verified",
+          "summary",
+          "capabilities",
+          "known_gaps",
+          "important_constraints",
+          "protected",
+          "digest",
+          "upload_policy"
+        ],
+        "properties": {
+          "asset_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "kind": {
+            "enum": [
+              "requirement",
+              "user_repository",
+              "cloned_repository",
+              "dataset",
+              "documentation",
+              "baseline_result",
+              "review_artifact",
+              "script",
+              "tool",
+              "library",
+              "external_repository",
+              "other"
+            ]
+          },
+          "role": {
+            "enum": ["core_requirement", "candidate_base", "supporting_asset", "baseline", "evidence", "tooling"]
+          },
+          "source": { "type": "string", "minLength": 1, "maxLength": 2000 },
+          "local_ref_or_url": { "type": "string", "maxLength": 2000 },
+          "verified": { "type": "boolean" },
+          "summary": { "type": "string", "maxLength": 2000 },
+          "capabilities": { "type": "array", "maxItems": 16, "items": { "type": "string", "maxLength": 4000 } },
+          "known_gaps": { "type": "array", "maxItems": 16, "items": { "type": "string", "maxLength": 4000 } },
+          "important_constraints": { "type": "array", "maxItems": 16, "items": { "type": "string", "maxLength": 4000 } },
+          "protected": { "type": "boolean" },
+          "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "upload_policy": { "enum": ["never", "canonical_only", "metadata_only", "on_demand_explicit"] },
+          "is_candidate": { "type": "boolean" },
+          "candidate_status": { "type": "string", "maxLength": 64 },
+          "verification": { "type": "object", "additionalProperties": true },
+          "unverified_claims": { "type": "array", "maxItems": 16, "items": { "type": "string", "maxLength": 1000 } }
+        }
+      }
+    }
+  }
+}

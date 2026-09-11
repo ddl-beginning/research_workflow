@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Canonical project brief",
+  "description": "Step 11 Codex-native requirements intake state. No transcript, confidence score, discovery result, Stage state, or GPT response is stored.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "project_id",
+    "project_identity",
+    "repository_root",
+    "intake_mode",
+    "state",
+    "status",
+    "brief_status",
+    "next_action",
+    "rough_requirement",
+    "original_requirement",
+    "brief",
+    "requirement_baseline",
+    "repository_facts",
+    "revision",
+    "created_at",
+    "updated_at",
+    "approved_at",
+    "approval",
+    "cancelled_at",
+    "cancel_reason",
+    "cancellation",
+    "next_question",
+    "questions",
+    "gpt_calls",
+    "external_calls"
+  ],
+  "properties": {
+    "schema_version": { "const": "project_brief.v1" },
+    "project_id": {
+      "type": "string",
+      "pattern": "^project-[a-f0-9]{24}$",
+      "minLength": 32,
+      "maxLength": 64
+    },
+    "project_identity": {
+      "type": "object",
+      "required": ["project_id", "repository_root", "identity_method"],
+      "properties": {
+        "project_id": { "type": "string" },
+        "repository_root": { "type": "string", "minLength": 1 },
+        "identity_method": { "const": "resolved_repository_path_sha256" }
+      },
+      "additionalProperties": false
+    },
+    "repository_root": { "type": "string", "minLength": 1 },
+    "intake_mode": {
+      "enum": ["USER_CONFIRMED_BRIEF", "CODEX_REQUIREMENTS_INTERVIEW"]
+    },
+    "mode": {
+      "enum": ["USER_CONFIRMED_BRIEF", "CODEX_REQUIREMENTS_INTERVIEW"]
+    },
+    "state": {
+      "enum": ["DRAFT", "WAITING_USER_APPROVAL", "APPROVED", "CANCELLED"]
+    },
+    "status": {
+      "enum": ["NEEDS_MORE_USER_INPUT", "WAITING_USER_APPROVAL", "APPROVED", "CANCELLED"]
+    },
+    "brief_status": {
+      "enum": ["DRAFT", "WAITING_USER_APPROVAL", "APPROVED", "CANCELLED"]
+    },
+    "next_action": {
+      "enum": ["NEEDS_MORE_USER_INPUT", "WAITING_USER_APPROVAL", "APPROVED", "CANCELLED"]
+    },
+    "rough_requirement": { "type": "string", "maxLength": 20000 },
+    "original_requirement": { "type": "string", "maxLength": 20000 },
+    "brief": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "problem_statement": { "type": "string", "maxLength": 20000 },
+        "goal": { "type": "string", "maxLength": 20000 },
+        "desired_outcome": { "type": "string", "maxLength": 20000 },
+        "input": { "type": ["string", "array", "object"] },
+        "expected_output": { "type": ["string", "array", "object"] },
+        "success_criteria": { "type": "array", "items": { "type": "string" } },
+        "constraints": { "type": "array", "items": { "type": "string" } },
+        "non_goals": { "type": "array", "items": { "type": "string" } },
+        "scope": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "requirement_baseline": {
+      "type": "object",
+      "required": ["schema_version", "confirmed", "inferred", "unknown", "blocking_unknown"],
+      "properties": {
+        "schema_version": { "const": "requirement_baseline.v1" },
+        "confirmed": { "type": "object", "additionalProperties": true },
+        "inferred": { "type": "object", "additionalProperties": true },
+        "unknown": { "type": "array", "items": { "type": "string" }, "maxItems": 32 },
+        "blocking_unknown": { "type": "array", "items": { "type": "string" }, "maxItems": 32 }
+      },
+      "additionalProperties": false
+    },
+    "requirement_sources": {
+      "type": "object",
+      "properties": {
+        "confirmed_fields": { "type": "array", "items": { "type": "string" }, "maxItems": 32 }
+      },
+      "additionalProperties": false
+    },
+    "repository_facts": {
+      "type": "object",
+      "required": ["checked_read_only", "repository_name", "has_git_metadata", "top_level_entries", "detected_project_markers"],
+      "properties": {
+        "checked_read_only": { "const": true },
+        "repository_name": { "type": "string" },
+        "has_git_metadata": { "type": "boolean" },
+        "top_level_entries": { "type": "array", "items": { "type": "string" }, "maxItems": 80 },
+        "detected_project_markers": { "type": "array", "items": { "type": "string" }, "maxItems": 32 }
+      },
+      "additionalProperties": false
+    },
+    "revision": { "type": "integer", "minimum": 1 },
+    "created_at": { "type": "string", "minLength": 1 },
+    "updated_at": { "type": "string", "minLength": 1 },
+    "approved_at": { "type": ["string", "null"] },
+    "approval": { "type": ["object", "null"], "additionalProperties": true },
+    "cancelled_at": { "type": ["string", "null"] },
+    "cancel_reason": { "type": ["string", "null"] },
+    "cancellation": { "type": ["object", "null"], "additionalProperties": true },
+    "next_question": {
+      "type": ["object", "null"],
+      "required": ["id", "kind", "text"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "kind": { "const": "core" },
+        "text": { "type": "string", "minLength": 1, "maxLength": 4000 }
+      },
+      "additionalProperties": false
+    },
+    "questions": {
+      "type": "array",
+      "maxItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "kind", "text"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "kind": { "const": "core" },
+          "text": { "type": "string", "minLength": 1, "maxLength": 4000 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "gpt_calls": { "const": 0 },
+    "external_calls": { "const": 0 }
+  }
+}

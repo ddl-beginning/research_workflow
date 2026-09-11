@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "workflow_checkpoint.v1.schema.json",
+  "title": "Workflow runtime checkpoint v1",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "workspace_root",
+    "checkpoint_path",
+    "project_brief_path",
+    "project_id",
+    "brief_revision",
+    "brief_state",
+    "brief_digest",
+    "phase",
+    "next_action",
+    "last_operation",
+    "updated_at"
+  ],
+  "properties": {
+    "schema_version": {"const": "workflow_checkpoint.v1"},
+    "workspace_root": {"type": "string", "minLength": 1},
+    "checkpoint_path": {"type": "string", "minLength": 1},
+    "project_brief_path": {"type": "string", "minLength": 1},
+    "project_id": {"type": "string", "minLength": 1},
+    "brief_revision": {"type": "integer", "minimum": 0},
+    "brief_state": {"type": "string", "minLength": 1},
+    "brief_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "phase": {"enum": ["INTAKE", "WAITING_USER_APPROVAL", "READY", "AWAITING_DESIGN_REVIEW", "DESIGN_ACCEPTED", "PLANNED", "RUNNING", "COMPLETE", "BLOCKED"]},
+    "next_action": {"enum": ["ASK_REQUIREMENT", "REQUEST_BRIEF_APPROVAL", "REQUEST_DESIGN_REVIEW", "RUN_WORKFLOW", "CONTINUE_WORKFLOW", "COMPLETE", "BLOCKED"]},
+    "design_review_state": {"enum": ["NOT_REQUIRED", "AWAITING_DESIGN_REVIEW", "ACCEPTED"]},
+    "design_review": {"type": "object"},
+    "last_operation": {"type": "string", "minLength": 1},
+    "updated_at": {"type": "string", "minLength": 1},
+    "last_run": {"type": "object"}
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stage_review.schema.json",
+  "title": "Human stage review",
+  "type": "object",
+  "properties": {
+    "schema_version": {"type": "string", "pattern": "^stage_review\\.v[0-9]+$"},
+    "review_id": {"type": "string", "minLength": 1},
+    "plan_id": {"type": "string", "minLength": 1},
+    "stage_id": {"type": "string", "minLength": 1},
+    "iteration_index": {"type": "integer", "minimum": 1},
+    "outcome": {"type": "string", "enum": ["ACCEPT", "REJECT"]},
+    "reviewer": {"type": "string", "minLength": 1},
+    "rationale": {"type": "string", "minLength": 1},
+    "baseline_comparison": {"type": "object"},
+    "review_artifacts": {"type": "array"},
+    "problems_discovered": {"type": "array"},
+    "human_decision": {"type": "boolean"}
+  },
+  "anyOf": [
+    {
+      "required": ["schema_version", "review_id", "plan_id", "stage_id", "iteration_index", "outcome", "reviewer", "rationale", "baseline_comparison", "human_decision"]
+    },
+    {
+      "required": ["plan_id", "stage_id", "outcome", "reviewer", "rationale"]
+    }
+  ]
+}

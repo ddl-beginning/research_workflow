@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Bounded project context v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "project_id",
+    "brief_digest",
+    "brief_revision",
+    "status",
+    "resources",
+    "context_digest",
+    "markdown"
+  ],
+  "properties": {
+    "schema_version": { "const": "project_context.v1" },
+    "project_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "brief_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "brief_revision": { "type": "integer", "minimum": 1 },
+    "status": { "const": "PROJECT_CONTEXT_READY" },
+    "path": { "type": "string", "minLength": 1 },
+    "retention_manifest_path": { "type": "string", "minLength": 1 },
+    "retention_manifest_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "marker": { "const": "PROJECT_CONTEXT_COMPACTION_PASS" },
+    "context_resource_count": { "type": "integer", "minimum": 0, "maximum": 9 },
+    "resources": {
+      "type": "array",
+      "maxItems": 9,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "class", "path", "digest"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "class": { "enum": ["CANONICAL", "MILESTONE_EVIDENCE", "ACTIVE_REFERENCE", "EPHEMERAL"] },
+          "path": { "type": "string", "minLength": 1, "maxLength": 1000 },
+          "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "summary": { "type": "string", "maxLength": 1200 }
+        }
+      }
+    },
+    "brief": { "type": "object", "additionalProperties": true },
+    "context": { "type": "object", "additionalProperties": true },
+    "content": { "type": "object", "additionalProperties": true },
+    "target": {},
+    "inputs": {},
+    "outputs": {},
+    "user_visible_success": {},
+    "constraints": {},
+    "non_goals": {},
+    "preferences": {},
+    "decisions": {},
+    "selected_route": {},
+    "rejected_routes": {},
+    "unresolved_questions": {},
+    "next_action": {},
+    "artifact_refs": {},
+    "git_identity": {},
+    "retention": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["canonical", "milestone_evidence", "active_reference", "ephemeral"],
+      "properties": {
+        "canonical": { "type": "array", "items": { "type": "string" }, "maxItems": 64 },
+        "milestone_evidence": { "type": "array", "items": { "type": "string" }, "maxItems": 64 },
+        "active_reference": { "type": "array", "items": { "type": "string" }, "maxItems": 64 },
+        "ephemeral": { "type": "array", "items": { "type": "string" }, "maxItems": 64 }
+      }
+    },
+    "retention_manifest_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "context_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "markdown": { "type": "string", "minLength": 1, "maxLength": 120000 }
+  }
+}

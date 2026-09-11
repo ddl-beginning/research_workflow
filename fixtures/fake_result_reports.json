@@ -1,0 +1,60 @@
+{
+  "schema_version": "fake_result_cases.v1",
+  "reports": [
+    {
+      "schema_version": "codex_result.v1",
+      "plan_id": "plan-demo-001",
+      "stage_id": "stage-geometry-001",
+      "task_id": "task-fixture-primary-001",
+      "iteration_index": 1,
+      "status": "SUCCEEDED",
+      "summary": "The bounded sampling change reduced the artifact score.",
+      "changed_files": ["src/demo/sampling.txt"],
+      "tests": [{"name": "scoped smoke", "status": "PASS"}],
+      "measurements": {"artifact_score": 0.7, "runtime_ms": 82},
+      "evidence_refs": ["artifact://result/geometry-v1"],
+      "abstraction_layer": "contour-sampling",
+      "scientific_result": "SUPPORTED",
+      "stage_ready": false,
+      "user_visible_failure": false,
+      "human_gate_required": false
+    },
+    {
+      "schema_version": "codex_result.v1",
+      "plan_id": "plan-demo-001",
+      "stage_id": "stage-geometry-001",
+      "task_id": "task-fixture-primary-002",
+      "iteration_index": 2,
+      "status": "FAILED",
+      "summary": "The second attempt did not improve the artifact.",
+      "changed_files": ["src/demo/sampling.txt"],
+      "tests": [{"name": "scoped smoke", "status": "PASS"}],
+      "measurements": {"artifact_score": 1.1, "runtime_ms": 84},
+      "evidence_refs": ["artifact://result/geometry-v2"],
+      "abstraction_layer": "contour-sampling",
+      "scientific_result": "FALSIFIED",
+      "stage_ready": false,
+      "user_visible_failure": true,
+      "human_gate_required": false
+    },
+    {
+      "schema_version": "codex_result.v1",
+      "plan_id": "plan-demo-001",
+      "stage_id": "stage-geometry-001",
+      "task_id": "task-fixture-primary-003",
+      "iteration_index": 3,
+      "status": "BLOCKED",
+      "summary": "The fake executor refused an out-of-scope request.",
+      "changed_files": [],
+      "tests": [{"name": "scoped smoke", "status": "SKIP", "detail": "blocked before execution"}],
+      "measurements": {},
+      "evidence_refs": ["artifact://result/geometry-v3"],
+      "abstraction_layer": "contour-sampling",
+      "scientific_result": "AMBIGUOUS",
+      "stage_ready": false,
+      "user_visible_failure": true,
+      "human_gate_required": false,
+      "stop_reason": "scope check"
+    }
+  ]
+}

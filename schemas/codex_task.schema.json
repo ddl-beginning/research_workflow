@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "codex_task.schema.json",
+  "title": "Scoped fake-Codex task",
+  "type": "object",
+  "properties": {
+    "schema_version": {"type": "string", "pattern": "^codex_task\\.v[0-9]+$"},
+    "plan_id": {"type": "string", "minLength": 1},
+    "stage_id": {"type": "string", "minLength": 1},
+    "task_id": {"type": "string", "minLength": 1},
+    "lane": {"type": "string", "const": "fake-codex"},
+    "objective": {"type": "string", "minLength": 1},
+    "allowed_paths": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+    "protected_paths": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "baseline_digest": {"type": "string", "minLength": 8},
+    "read_first": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "context_refs": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+    "acceptance": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+    "measurement_commands": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "tool_policy": {
+      "type": "object",
+      "required": ["network", "write_scope", "destructive_actions"],
+      "properties": {
+        "network": {"type": "string", "const": "deny"},
+        "write_scope": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "destructive_actions": {"type": "string", "const": "deny"}
+      }
+    },
+    "result_schema": {"type": "string", "minLength": 1},
+    "stop_rules": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+    "iteration_index": {"type": "integer", "minimum": 1},
+    "stage_iteration_index": {"type": "integer", "minimum": 1},
+    "attempt_index": {"type": "integer", "minimum": 1},
+    "attempt_number": {"type": "integer", "minimum": 1},
+    "retry_budget": {"type": "integer", "minimum": 1, "maximum": 100},
+    "abstraction_layer": {"type": "string", "minLength": 1},
+    "critic_role": {"type": "string", "enum": ["none", "primary", "challenger"]}
+  },
+  "required": [
+    "schema_version", "plan_id", "stage_id", "task_id", "lane", "objective",
+    "allowed_paths", "read_first", "context_refs", "acceptance",
+    "measurement_commands", "tool_policy", "result_schema", "stop_rules",
+    "iteration_index", "abstraction_layer", "critic_role"
+  ]
+}
