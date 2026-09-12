@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Workflow V2 Stage",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "stage_id", "workspace_id", "project_id", "objective_fingerprint", "target_identity", "required_capabilities", "purpose", "repair_depth", "baseline_digest", "status", "budgets", "owner_stage_id", "current_iteration_id", "current_assessment_id", "predecessor_stage_id", "semantic_baseline_diff_digest"],
+  "properties": {
+    "schema_version": {"const": "stage.v2"},
+    "stage_id": {"type": "string", "minLength": 8},
+    "workspace_id": {"type": "string", "minLength": 8},
+    "project_id": {"type": "string", "minLength": 1},
+    "objective_fingerprint": {"type": "string", "minLength": 8},
+    "target_identity": {"type": "string", "minLength": 1},
+    "required_capabilities": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "purpose": {"type": "string", "enum": ["DOMAIN", "INFRASTRUCTURE_REPAIR"]},
+    "repair_depth": {"type": "integer", "minimum": 0, "maximum": 1},
+    "baseline_digest": {"type": "string", "minLength": 8},
+    "status": {"type": "string", "enum": ["PLANNED", "ACTIVE", "READY", "CLOSED", "STOPPED"]},
+    "budgets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_iterations", "max_attempts_per_iteration", "max_attempts_total", "max_revalidation_ops", "max_validator_revisions", "max_dependency_nodes", "max_dependency_depth", "max_descendant_attempts"],
+      "properties": {
+        "max_iterations": {"type": "integer", "minimum": 0},
+        "max_attempts_per_iteration": {"type": "integer", "minimum": 0},
+        "max_attempts_total": {"type": "integer", "minimum": 0},
+        "max_revalidation_ops": {"type": "integer", "minimum": 0},
+        "max_validator_revisions": {"type": "integer", "minimum": 0},
+        "max_dependency_nodes": {"type": "integer", "minimum": 0},
+        "max_dependency_depth": {"type": "integer", "minimum": 0},
+        "max_descendant_attempts": {"type": "integer", "minimum": 0}
+      }
+    },
+    "owner_stage_id": {"type": ["string", "null"]},
+    "current_iteration_id": {"type": ["string", "null"]},
+    "current_assessment_id": {"type": ["string", "null"]},
+    "predecessor_stage_id": {"type": ["string", "null"]},
+    "semantic_baseline_diff_digest": {"type": ["string", "null"]}
+  }
+}

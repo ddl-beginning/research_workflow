@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Workflow V2 Semantic Iteration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "iteration_id", "stage_id", "index", "solution_fingerprint", "opened_by", "requires_next_iteration", "review_identity", "technical_change_digest"],
+  "properties": {
+    "schema_version": {"const": "semantic_iteration.v2"},
+    "iteration_id": {"type": "string", "minLength": 8},
+    "stage_id": {"type": "string", "minLength": 1},
+    "index": {"type": "integer", "minimum": 1},
+    "solution_fingerprint": {"type": "string", "minLength": 8},
+    "opened_by": {"type": "string", "enum": ["START", "ADVANCE_ITERATION"]},
+    "requires_next_iteration": {"type": "boolean"},
+    "review_identity": {"type": ["string", "null"], "minLength": 8},
+    "technical_change_digest": {"type": ["string", "null"], "minLength": 8}
+  }
+}

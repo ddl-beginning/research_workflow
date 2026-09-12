@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Workflow V2 Dependency",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "parent_id", "child_id", "predicate", "input_binding", "output_contract_digest", "authorization_decision_id", "child_status"],
+  "properties": {
+    "schema_version": {"const": "dependency.v2"},
+    "parent_id": {"type": "string", "minLength": 8},
+    "child_id": {"type": "string", "minLength": 8},
+    "predicate": {"type": "string", "minLength": 1},
+    "input_binding": {"type": "object"},
+    "output_contract_digest": {"type": "string", "minLength": 8},
+    "authorization_decision_id": {"type": "string", "minLength": 8},
+    "child_status": {"const": "PLANNED"}
+  }
+}

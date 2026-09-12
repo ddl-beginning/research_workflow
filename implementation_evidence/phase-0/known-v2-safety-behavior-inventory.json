@@ -1,0 +1,56 @@
+{
+  "inventory_version": "phase-0.v1",
+  "absorbed_later_by_contract": [
+    {
+      "capability": "workspace identity normalization",
+      "source": "V2 evidence: src/project_context.py, src/project_discovery.py; tests/test_windows_workspace_identity.py",
+      "reason": "Preserves ordinary/extended Windows spelling equivalence while rejecting different identities and protected boundaries.",
+      "evidence": "V2_ARCHITECTURE_HANDOFF.md §5 and §6; WORKFLOW_SELF_HOST_GAPS.md lines 19-24",
+      "target_replacement": "shared identity/provenance guard in canonical controller contracts"
+    },
+    {
+      "capability": "ARTIFACT_ONLY admission boundary",
+      "source": "V2 evidence: src/openai_codex_executor.py; tests/test_artifact_only_provider.py",
+      "reason": "Separates required artifact completeness from the Stage allowed/protected write boundary.",
+      "evidence": "WORKFLOW_SELF_HOST_GAPS.md lines 17-31; V2_ARCHITECTURE_HANDOFF.md lines 198-211",
+      "target_replacement": "shared baseline/scope validator used by observation assessment"
+    },
+    {
+      "capability": "same-iteration engineering retry",
+      "source": "V2 evidence: src/stage_controller.py; tests/test_same_iteration_engineering_retry.py and tests/test_stage_retry_semantics.py",
+      "reason": "Retains new attempt identity, same semantic iteration, bounded budget and immutable prior evidence.",
+      "evidence": "V2_ARCHITECTURE_HANDOFF.md lines 128-139",
+      "target_replacement": "REQUEST_EXECUTION with typed retry/ENGINEERING_FIX reason"
+    },
+    {
+      "capability": "provenance and result identity safety",
+      "source": "HOST/V2 src/contracts.py, src/stage_controller.py and execution tests",
+      "reason": "Provider observations must be linked to committed request identity; assessment identity must be distinct and reproducible.",
+      "evidence": "V2_LIFECYCLE_ARCHITECTURE_DECISION.md §D, §E, §G",
+      "target_replacement": "immutable observation plus versioned assessment contracts"
+    },
+    {
+      "capability": "subject-bound Human decision",
+      "source": "V2 evidence: src/gpt_stage_planning.py, src/stage_planning.py; tests/test_stage_planning_human_decision.py",
+      "reason": "Prevents stale choices from applying to a changed requirement/design/plan/assessment.",
+      "evidence": "V2_ARCHITECTURE_DECISION.md §J; V2_ARCHITECTURE_HANDOFF.md lines 141-152",
+      "target_replacement": "single REQUEST_DECISION/APPLY_DECISION resolver across four boundaries"
+    },
+    {
+      "capability": "dependency safety invariants",
+      "source": "V2 evidence: src/active_prerequisite.py and src/active_prerequisite_runtime.py",
+      "reason": "Retains bounded child ownership, parent preservation and no automatic semantic advancement.",
+      "evidence": "V2_ARCHITECTURE_HANDOFF.md lines 168-181; architecture decision §I",
+      "target_replacement": "ordinary bounded ADD_DEPENDENCY/SATISFY_DEPENDENCY transitions"
+    }
+  ],
+  "not_absorbed_as_authority": [
+    "controlled recovery lifecycle",
+    "recovery/bootstrap lifecycle",
+    "review_only success path",
+    "recovery-specific binder",
+    "active prerequisite snapshot restore special case",
+    "bind_existing_execution_result production shortcut",
+    "legacy retry auto-migration production authority"
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Workflow V2 Provider Observation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "observation_id", "stage_id", "iteration_id", "attempt_id", "provider_result_digest", "evidence_manifest_digest", "provider_terminal_status", "raw_provider_claim", "provenance", "failure", "outputs", "immutable"],
+  "properties": {
+    "schema_version": {"const": "provider_observation.v2"},
+    "observation_id": {"type": "string", "minLength": 8},
+    "stage_id": {"type": "string", "minLength": 1},
+    "iteration_id": {"type": "string", "minLength": 1},
+    "attempt_id": {"type": "string", "minLength": 8},
+    "provider_result_digest": {"type": "string", "minLength": 8},
+    "evidence_manifest_digest": {"type": "string", "minLength": 8},
+    "provider_terminal_status": {"type": "string", "enum": ["SUCCEEDED", "FAILED", "ERROR", "UNKNOWN"]},
+    "raw_provider_claim": {"type": "object"},
+    "provenance": {"type": "object"},
+    "failure": {"type": ["object", "null"]},
+    "outputs": {"type": "object"},
+    "immutable": {"const": true}
+  }
+}

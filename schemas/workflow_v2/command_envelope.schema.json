@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Workflow V2 Command Envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "workspace_id", "command_id", "expected_revision", "command_type", "subject_id", "payload_digest"],
+  "properties": {
+    "schema_version": {"const": "command_envelope.v2"},
+    "workspace_id": {"type": "string", "minLength": 8},
+    "command_id": {"type": "string", "minLength": 8},
+    "expected_revision": {"type": "integer", "minimum": 0},
+    "command_type": {"type": "string", "enum": ["REGISTER_STAGE", "START", "REQUEST_EXECUTION", "RECORD_OBSERVATION", "ASSESS_RESULT", "APPLY_GPT_DECISION", "ADVANCE_ITERATION", "REQUEST_DECISION", "APPLY_DECISION", "ADD_DEPENDENCY", "SATISFY_DEPENDENCY", "RESOLVE_BLOCKER", "APPLY_RECEIPT", "COMMIT_INTEGRATION", "CLOSEOUT", "STOP"]},
+    "subject_id": {"type": "string", "minLength": 1},
+    "payload_digest": {"type": "string", "minLength": 8}
+  }
+}

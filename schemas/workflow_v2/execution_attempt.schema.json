@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Workflow V2 Execution Attempt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "attempt_id", "stage_id", "iteration_id", "request_id", "request_digest", "provenance", "purpose", "effect_state", "attempt_index", "committed", "status"],
+  "properties": {
+    "schema_version": {"const": "execution_attempt.v2"},
+    "attempt_id": {"type": "string", "minLength": 8},
+    "stage_id": {"type": "string", "minLength": 1},
+    "iteration_id": {"type": "string", "minLength": 1},
+    "request_id": {"type": "string", "minLength": 8},
+    "request_digest": {"type": "string", "minLength": 8},
+    "provenance": {"type": "object"},
+    "purpose": {"type": "string", "enum": ["DOMAIN", "INFRASTRUCTURE_REPAIR"]},
+    "effect_state": {"type": "string", "enum": ["INTENT_COMMITTED", "NOT_SENT_PROVEN", "SENT_UNSETTLED", "UNKNOWN", "RECEIPT_OBSERVED", "SETTLED", "CONFLICT"]},
+    "attempt_index": {"type": "integer", "minimum": 1},
+    "committed": {"type": "boolean"},
+    "status": {"type": "string", "enum": ["REQUESTED", "OBSERVED", "FAILED", "SETTLED", "UNKNOWN"]}
+  }
+}

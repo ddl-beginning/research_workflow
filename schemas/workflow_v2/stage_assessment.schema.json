@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Workflow V2 Stage Assessment",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "assessment_id", "stage_id", "baseline_digest", "iteration_id", "attempt_id", "provider_result_digest", "evidence_manifest_digest", "validator_code_digest", "validation_contract_revision", "correction_receipt_digest", "verdict", "checks", "limitations", "supersedes_assessment_id", "revalidation"],
+  "properties": {
+    "schema_version": {"const": "stage_assessment.v2"},
+    "assessment_id": {"type": "string", "minLength": 8},
+    "stage_id": {"type": "string", "minLength": 1},
+    "baseline_digest": {"type": "string", "minLength": 8},
+    "iteration_id": {"type": "string", "minLength": 8},
+    "attempt_id": {"type": "string", "minLength": 8},
+    "provider_result_digest": {"type": "string", "minLength": 8},
+    "evidence_manifest_digest": {"type": "string", "minLength": 8},
+    "validator_code_digest": {"type": "string", "minLength": 8},
+    "validation_contract_revision": {"type": "string", "minLength": 1},
+    "correction_receipt_digest": {"type": ["string", "null"], "minLength": 8},
+    "verdict": {"type": "string", "enum": ["ADMISSIBLE", "REJECTED", "INSUFFICIENT"]},
+    "checks": {"type": "object"},
+    "limitations": {"type": "array", "items": {"type": "string"}},
+    "supersedes_assessment_id": {"type": ["string", "null"], "minLength": 8},
+    "revalidation": {"type": "boolean"}
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Workflow V2 Evidence Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "manifest_id", "stage_id", "attempt_id", "required_artifact_paths", "changed_paths", "allowed_paths", "protected_paths", "path_inventory", "complete"],
+  "properties": {
+    "schema_version": {"const": "evidence_manifest.v2"},
+    "manifest_id": {"type": "string", "minLength": 8},
+    "stage_id": {"type": "string", "minLength": 1},
+    "attempt_id": {"type": "string", "minLength": 8},
+    "required_artifact_paths": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "changed_paths": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "allowed_paths": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+    "protected_paths": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "path_inventory": {"type": "array", "items": {"type": "object"}},
+    "complete": {"type": "boolean"}
+  }
+}
