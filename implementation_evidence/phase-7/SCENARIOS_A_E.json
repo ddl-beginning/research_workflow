@@ -1,0 +1,100 @@
+{
+  "evidence_kind": "REAL_SELF_HOST_VALIDATION_SCENARIOS",
+  "external_provider_or_gpt_called": true,
+  "scenarios": [
+    {
+      "attempt_count": 2,
+      "distinct_attempts": true,
+      "final_status": "STOPPED",
+      "first_assessment_verdict": "REJECTED",
+      "first_attempt_id": "attempt-command-phase7-a-first-20260912",
+      "first_observation_preserved": true,
+      "journal": "D:\\work\\research_tools\\research_supervisor_v2_lifecycle_candidate\\implementation_evidence\\phase-7\\scenarios\\run-20260912-203100\\A\\.workflow-v2\\journal.json",
+      "name": "same-iteration retry after a retryable engineering failure",
+      "same_iteration": true,
+      "scenario": "A",
+      "second_assessment_verdict": "ADMISSIBLE",
+      "second_attempt_id": "attempt-command-phase7-a-second-20260912",
+      "status": "PASS"
+    },
+    {
+      "assessment_id": "assessment-27f0b6db32e6db699c611559e42da576569637e802adf3b47a68a71f44329ab4",
+      "assessment_verdict": "REJECTED",
+      "final_status": "STOPPED",
+      "iteration_count": 2,
+      "journal": "D:\\work\\research_tools\\research_supervisor_v2_lifecycle_candidate\\implementation_evidence\\phase-7\\scenarios\\run-20260912-203100\\B\\controller\\.workflow-v2\\journal.json",
+      "name": "real GPT typed NEXT_ITERATION replan",
+      "new_iteration_id": "iteration-command-phase7-b-replan-20260912-2",
+      "old_iteration_id": "iteration-command-stage-phase7-scenario-b-20260912-start-20260912",
+      "provider_failure_inference": false,
+      "review": {
+        "consultation_id": "CONSULT-20260912-113204-c4b00104",
+        "conversation_id": "6aa53853-4b50-83e8-b703-705a89826c4e",
+        "decision": "REPLAN",
+        "packet_sha256": "f1cbdd07d89c9b1bad2d430db187e1e216a65459ab1c7b928546403874cf868b",
+        "raw_response_persisted": false,
+        "receipt_path": "D:\\work\\research_tools\\research_supervisor_v2_lifecycle_candidate\\implementation_evidence\\phase-7\\scenarios\\run-20260912-203100\\B\\gpt-review\\.consultations\\CONSULT-20260912-113204-c4b00104\\receipt.json",
+        "replan_subtype": "NEXT_ITERATION",
+        "request_count": 1,
+        "response_sha256": "63367dd0b6034f2c685f291455f2980ba659733847eb9c33e1a8e67e1044c5c0"
+      },
+      "scenario": "B",
+      "status": "PASS"
+    },
+    {
+      "final_status": "STOPPED",
+      "journal": "D:\\work\\research_tools\\research_supervisor_v2_lifecycle_candidate\\implementation_evidence\\phase-7\\scenarios\\run-20260912-203100\\C\\controller\\.workflow-v2\\journal.json",
+      "name": "Human validator correction and real GPT revalidation review",
+      "new_assessment_id": "assessment-45f968ea92ad5cfb9b5b7d12483cca40d18d04220d272cf5f58ef25890d9ec60",
+      "new_assessment_verdict": "ADMISSIBLE",
+      "old_assessment_id": "assessment-e76a841e7d7a7434d73efc01be1f67d927f18c3b1b303bc9de99ba6419a6b944",
+      "old_assessment_preserved": true,
+      "provider_attempt_count": 1,
+      "ready_status": "READY",
+      "review": {
+        "consultation_id": "CONSULT-20260912-113253-ae7130d0",
+        "conversation_id": "6aa53880-e600-83e8-8576-8dc026c50515",
+        "decision": "STAGE_READY",
+        "packet_sha256": "132ddf59c104326d07d725aa90d9a65ea34a8c08164939dd28fe2dc56c6ebe53",
+        "raw_response_persisted": false,
+        "receipt_path": "D:\\work\\research_tools\\research_supervisor_v2_lifecycle_candidate\\implementation_evidence\\phase-7\\scenarios\\run-20260912-203100\\C\\gpt-review\\.consultations\\CONSULT-20260912-113253-ae7130d0\\receipt.json",
+        "request_count": 1,
+        "response_sha256": "35de534b2643a3b0f5783dfa5a6d3056c4ba1b3f6b62e1268ddff793779a786e"
+      },
+      "scenario": "C",
+      "status": "PASS"
+    },
+    {
+      "child_id": "stage-phase7-scenario-d-child-20260912",
+      "child_status": "CLOSED",
+      "dependency_status": "SATISFIED",
+      "executable_owner_after": "stage-phase7-scenario-d-parent-20260912",
+      "journal": "D:\\work\\research_tools\\research_supervisor_v2_lifecycle_candidate\\implementation_evidence\\phase-7\\scenarios\\run-20260912-203100\\D\\.workflow-v2\\journal.json",
+      "name": "dependency child normal closeout and ownership return",
+      "parent_id": "stage-phase7-scenario-d-parent-20260912",
+      "parent_pending_decision_id": "decision-phase7-d-parent-pending-20260912",
+      "parent_status_after": "PLANNED",
+      "parent_status_before": "PLANNED",
+      "pending_parent_decision_preserved": true,
+      "scenario": "D",
+      "status": "PASS"
+    },
+    {
+      "assessment_blocked": true,
+      "attempt_id": "attempt-command-phase7-e-request-20260912",
+      "effect_state": "UNKNOWN",
+      "final_status": "ACTIVE",
+      "journal": "D:\\work\\research_tools\\research_supervisor_v2_lifecycle_candidate\\implementation_evidence\\phase-7\\scenarios\\run-20260912-203100\\E\\.workflow-v2\\journal.json",
+      "name": "crash/reload with unknown external effect blocks replay",
+      "operation_id": "operation-command-phase7-e-request-20260912",
+      "reloaded_attempt_id": "attempt-command-phase7-e-request-20260912",
+      "reloaded_operation_id": "operation-command-phase7-e-request-20260912",
+      "same_identity_after_reload": true,
+      "scenario": "E",
+      "status": "PASS",
+      "stop_blocked": true,
+      "unknown_external_effect_blocker": true
+    }
+  ],
+  "status": "PASS"
+}

@@ -1,0 +1,80 @@
+{
+  "evidence_kind": "phase7_final_preservation_recheck",
+  "host_before_digest": "1aaa2c1ad39e2bca3b69e956e8bed7a0c917e69dffcc963e3581ab94295b4c5b",
+  "host_after_digest": "1aaa2c1ad39e2bca3b69e956e8bed7a0c917e69dffcc963e3581ab94295b4c5b",
+  "host_file_count_before": 158,
+  "host_file_count_after": 158,
+  "host_unchanged": true,
+  "host_after_walk_errors": [],
+  "frozen_named_files_before": [
+    {
+      "path": ".research/stage-state.json",
+      "raw_sha256": "79279547899819c5b300bcc1f30b5666563d2b4caf3b8cea884dba5290dffc51",
+      "bytes": 835734
+    },
+    {
+      "path": ".research/workflow-state.json",
+      "raw_sha256": "bacf6b0044d308a76a5a76a095eb343f73437aa4ff6f1913503e0b097cd1339e",
+      "bytes": 10947
+    },
+    {
+      "path": ".research/PROJECT_BRIEF.json",
+      "raw_sha256": "2344b2869ddc1cdb62c646d2e47a7f10133823fbab68083d6faa31de2b668e8f",
+      "bytes": 8023
+    },
+    {
+      "path": ".research/blueprint/BLUEPRINT_MANIFEST.json",
+      "raw_sha256": "0188b124a04c615afcb0151cc467ba3bb7a78dfd672d5e5a8802182e63876c67",
+      "bytes": 25431
+    },
+    {
+      "path": ".research/stages/project-package-portability-falsification-v2/CANONICAL_PARENT_ATTEMPT_02.json",
+      "raw_sha256": "982e8df9c4d0a5ff9fc6541291a57da5634ec19a5890a2ccb93f39ae1c0764cd",
+      "bytes": 106901
+    },
+    {
+      "path": ".research/stages/project-package-portability-falsification-v2/CANONICAL_ADMISSION_HUMAN_GATE.json",
+      "raw_sha256": "28ff2d27fa9d346efdfb415923b7df8997123ea3af91acde33ad414dad7dbb0f",
+      "bytes": 1855
+    }
+  ],
+  "frozen_named_files_after": [
+    {
+      "path": ".research/stage-state.json",
+      "raw_sha256": "79279547899819c5b300bcc1f30b5666563d2b4caf3b8cea884dba5290dffc51",
+      "bytes": 835734
+    },
+    {
+      "path": ".research/workflow-state.json",
+      "raw_sha256": "bacf6b0044d308a76a5a76a095eb343f73437aa4ff6f1913503e0b097cd1339e",
+      "bytes": 10947
+    },
+    {
+      "path": ".research/PROJECT_BRIEF.json",
+      "raw_sha256": "2344b2869ddc1cdb62c646d2e47a7f10133823fbab68083d6faa31de2b668e8f",
+      "bytes": 8023
+    },
+    {
+      "path": ".research/blueprint/BLUEPRINT_MANIFEST.json",
+      "raw_sha256": "0188b124a04c615afcb0151cc467ba3bb7a78dfd672d5e5a8802182e63876c67",
+      "bytes": 25431
+    },
+    {
+      "path": ".research/stages/project-package-portability-falsification-v2/CANONICAL_PARENT_ATTEMPT_02.json",
+      "raw_sha256": "982e8df9c4d0a5ff9fc6541291a57da5634ec19a5890a2ccb93f39ae1c0764cd",
+      "bytes": 106901
+    },
+    {
+      "path": ".research/stages/project-package-portability-falsification-v2/CANONICAL_ADMISSION_HUMAN_GATE.json",
+      "raw_sha256": "28ff2d27fa9d346efdfb415923b7df8997123ea3af91acde33ad414dad7dbb0f",
+      "bytes": 1855
+    }
+  ],
+  "frozen_named_files_unchanged": true,
+  "frozen_git_head_before": "15fdb58cfbe91987e3a5112a9937e716bf265f59",
+  "frozen_git_head_after": "15fdb58cfbe91987e3a5112a9937e716bf265f59",
+  "frozen_git_status_count_before": 67,
+  "frozen_git_status_count_after": 67,
+  "frozen_status_unchanged": true,
+  "candidate_only_output": "D:\\work\\research_tools\\research_supervisor_v2_lifecycle_candidate\\implementation_evidence\\phase-7\\preservation-final.json"
+}

@@ -1,0 +1,955 @@
+{
+  "assessments": {},
+  "attempts": {
+    "attempt-command-phase7-e-request-20260912": {
+      "attempt_id": "attempt-command-phase7-e-request-20260912",
+      "attempt_index": 1,
+      "committed": true,
+      "effect_state": "INTENT_COMMITTED",
+      "iteration_id": "iteration-command-stage-phase7-scenario-e-20260912-start-20260912",
+      "provenance": {
+        "engine_digest": "engine-e-20260912",
+        "provider": "bounded-scenario-fixture"
+      },
+      "purpose": "DOMAIN",
+      "request_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "request_id": "request-command-phase7-e-request-20260912",
+      "schema_version": "execution_attempt.v2",
+      "stage_id": "stage-phase7-scenario-e-20260912",
+      "status": "REQUESTED"
+    }
+  },
+  "blockers": {
+    "operation-command-phase7-e-request-20260912": {
+      "blocker_id": "operation-command-phase7-e-request-20260912",
+      "operation_id": "operation-command-phase7-e-request-20260912",
+      "stage_id": "stage-phase7-scenario-e-20260912",
+      "type": "UNKNOWN_EXTERNAL_EFFECT"
+    }
+  },
+  "commands": {
+    "command-phase7-e-request-20260912": {
+      "command_type": "REQUEST_EXECUTION",
+      "payload_digest": "3cb108e5c630d85aae0650f1f43553bee05131b72ddd5bb2a8c0ce608d6f3a8a",
+      "receipt": {
+        "attempt": {
+          "attempt_id": "attempt-command-phase7-e-request-20260912",
+          "attempt_index": 1,
+          "committed": true,
+          "effect_state": "INTENT_COMMITTED",
+          "iteration_id": "iteration-command-stage-phase7-scenario-e-20260912-start-20260912",
+          "provenance": {
+            "engine_digest": "engine-e-20260912",
+            "provider": "bounded-scenario-fixture"
+          },
+          "purpose": "DOMAIN",
+          "request_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+          "request_id": "request-command-phase7-e-request-20260912",
+          "schema_version": "execution_attempt.v2",
+          "stage_id": "stage-phase7-scenario-e-20260912",
+          "status": "REQUESTED"
+        },
+        "command": {
+          "command_id": "command-phase7-e-request-20260912",
+          "command_type": "REQUEST_EXECUTION",
+          "expected_revision": 2,
+          "payload_digest": "3cb108e5c630d85aae0650f1f43553bee05131b72ddd5bb2a8c0ce608d6f3a8a",
+          "schema_version": "command_envelope.v2",
+          "subject_id": "stage-phase7-scenario-e-20260912",
+          "workspace_id": "workspace-phase7-scenario-e-20260912"
+        },
+        "event": {
+          "command": {
+            "command_id": "command-phase7-e-request-20260912",
+            "command_type": "REQUEST_EXECUTION",
+            "expected_revision": 2,
+            "payload_digest": "3cb108e5c630d85aae0650f1f43553bee05131b72ddd5bb2a8c0ce608d6f3a8a",
+            "schema_version": "command_envelope.v2",
+            "subject_id": "stage-phase7-scenario-e-20260912",
+            "workspace_id": "workspace-phase7-scenario-e-20260912"
+          },
+          "event_id": "event-eaca82adf13cb03266981a5c4f793a454ed5c97344e8b9b52fc5e2b73d484a4d",
+          "payload_digest": "3cb108e5c630d85aae0650f1f43553bee05131b72ddd5bb2a8c0ce608d6f3a8a",
+          "projection_digest": "bc0a0ed2b6e83935756b7e0d8b7c315cd58f92153538c4a773b3449df7a07129",
+          "result": {
+            "attempt": {
+              "attempt_id": "attempt-command-phase7-e-request-20260912",
+              "attempt_index": 1,
+              "committed": true,
+              "effect_state": "INTENT_COMMITTED",
+              "iteration_id": "iteration-command-stage-phase7-scenario-e-20260912-start-20260912",
+              "provenance": {
+                "engine_digest": "engine-e-20260912",
+                "provider": "bounded-scenario-fixture"
+              },
+              "purpose": "DOMAIN",
+              "request_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+              "request_id": "request-command-phase7-e-request-20260912",
+              "schema_version": "execution_attempt.v2",
+              "stage_id": "stage-phase7-scenario-e-20260912",
+              "status": "REQUESTED"
+            },
+            "operation": {
+              "capability_manifest": {
+                "fence": false,
+                "idempotent_submit": false,
+                "prove_not_sent": false,
+                "query_by_operation_id": false
+              },
+              "effect_state": "INTENT_COMMITTED",
+              "intent_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+              "operation_id": "operation-command-phase7-e-request-20260912",
+              "schema_version": "operation_envelope.v2",
+              "status": "INTENT",
+              "subject_id": "attempt-command-phase7-e-request-20260912",
+              "workspace_id": "workspace-phase7-scenario-e-20260912"
+            },
+            "stage": {
+              "attempt_count": 1,
+              "baseline_digest": "baseline-phase7-scenario-20260912",
+              "budgets": {
+                "max_attempts_per_iteration": 2,
+                "max_attempts_total": 4,
+                "max_dependency_depth": 2,
+                "max_dependency_nodes": 4,
+                "max_descendant_attempts": 4,
+                "max_iterations": 1,
+                "max_revalidation_ops": 2,
+                "max_validator_revisions": 3
+              },
+              "current_assessment_id": null,
+              "current_iteration_id": "iteration-command-stage-phase7-scenario-e-20260912-start-20260912",
+              "in_flight_operation_id": "operation-command-phase7-e-request-20260912",
+              "iteration_count": 1,
+              "next_action": "RECORD_OBSERVATION",
+              "objective_fingerprint": "79da612f0bf1ac4141202f502efc9575a1f8e322776225163ffdc74376873113",
+              "open_dependencies": [],
+              "owner_stage_id": "stage-phase7-scenario-e-20260912",
+              "owner_token": true,
+              "pending_decisions": [],
+              "predecessor_stage_id": null,
+              "project_id": "project-phase7-scenarios",
+              "purpose": "DOMAIN",
+              "repair_depth": 0,
+              "required_capabilities": [
+                "python"
+              ],
+              "schema_version": "stage.v2",
+              "semantic_baseline_diff_digest": null,
+              "stage_id": "stage-phase7-scenario-e-20260912",
+              "status": "ACTIVE",
+              "target_identity": "bounded/scenario-fixture",
+              "workspace_id": "workspace-phase7-scenario-e-20260912"
+            }
+          },
+          "revision": 3
+        },
+        "operation": {
+          "capability_manifest": {
+            "fence": false,
+            "idempotent_submit": false,
+            "prove_not_sent": false,
+            "query_by_operation_id": false
+          },
+          "effect_state": "INTENT_COMMITTED",
+          "intent_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+          "operation_id": "operation-command-phase7-e-request-20260912",
+          "schema_version": "operation_envelope.v2",
+          "status": "INTENT",
+          "subject_id": "attempt-command-phase7-e-request-20260912",
+          "workspace_id": "workspace-phase7-scenario-e-20260912"
+        },
+        "revision": 3,
+        "stage": {
+          "attempt_count": 1,
+          "baseline_digest": "baseline-phase7-scenario-20260912",
+          "budgets": {
+            "max_attempts_per_iteration": 2,
+            "max_attempts_total": 4,
+            "max_dependency_depth": 2,
+            "max_dependency_nodes": 4,
+            "max_descendant_attempts": 4,
+            "max_iterations": 1,
+            "max_revalidation_ops": 2,
+            "max_validator_revisions": 3
+          },
+          "current_assessment_id": null,
+          "current_iteration_id": "iteration-command-stage-phase7-scenario-e-20260912-start-20260912",
+          "in_flight_operation_id": "operation-command-phase7-e-request-20260912",
+          "iteration_count": 1,
+          "next_action": "RECORD_OBSERVATION",
+          "objective_fingerprint": "79da612f0bf1ac4141202f502efc9575a1f8e322776225163ffdc74376873113",
+          "open_dependencies": [],
+          "owner_stage_id": "stage-phase7-scenario-e-20260912",
+          "owner_token": true,
+          "pending_decisions": [],
+          "predecessor_stage_id": null,
+          "project_id": "project-phase7-scenarios",
+          "purpose": "DOMAIN",
+          "repair_depth": 0,
+          "required_capabilities": [
+            "python"
+          ],
+          "schema_version": "stage.v2",
+          "semantic_baseline_diff_digest": null,
+          "stage_id": "stage-phase7-scenario-e-20260912",
+          "status": "ACTIVE",
+          "target_identity": "bounded/scenario-fixture",
+          "workspace_id": "workspace-phase7-scenario-e-20260912"
+        }
+      },
+      "subject_id": "stage-phase7-scenario-e-20260912"
+    },
+    "command-phase7-e-unknown-receipt-20260912": {
+      "command_type": "APPLY_RECEIPT",
+      "payload_digest": "d825239549d8b6a6887dcb472fdd3c637e5228ea17d668148ae577867e299f3b",
+      "receipt": {
+        "command": {
+          "command_id": "command-phase7-e-unknown-receipt-20260912",
+          "command_type": "APPLY_RECEIPT",
+          "expected_revision": 3,
+          "payload_digest": "d825239549d8b6a6887dcb472fdd3c637e5228ea17d668148ae577867e299f3b",
+          "schema_version": "command_envelope.v2",
+          "subject_id": "stage-phase7-scenario-e-20260912",
+          "workspace_id": "workspace-phase7-scenario-e-20260912"
+        },
+        "event": {
+          "command": {
+            "command_id": "command-phase7-e-unknown-receipt-20260912",
+            "command_type": "APPLY_RECEIPT",
+            "expected_revision": 3,
+            "payload_digest": "d825239549d8b6a6887dcb472fdd3c637e5228ea17d668148ae577867e299f3b",
+            "schema_version": "command_envelope.v2",
+            "subject_id": "stage-phase7-scenario-e-20260912",
+            "workspace_id": "workspace-phase7-scenario-e-20260912"
+          },
+          "event_id": "event-99b00b279b58a2060086b6b159f7547a8dd2c2f285a26eb7c7bcd0eb44a60461",
+          "payload_digest": "d825239549d8b6a6887dcb472fdd3c637e5228ea17d668148ae577867e299f3b",
+          "projection_digest": "f76aad27a1fe6a92d6cd5203b5f9e46338c6ece030203d00bfcf655f8f5dbdff",
+          "result": {
+            "operation": {
+              "capability_manifest": {
+                "fence": false,
+                "idempotent_submit": false,
+                "prove_not_sent": false,
+                "query_by_operation_id": false
+              },
+              "effect_state": "UNKNOWN",
+              "intent_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+              "operation_id": "operation-command-phase7-e-request-20260912",
+              "receipt": {
+                "operation_id": "operation-command-phase7-e-request-20260912",
+                "query": "external effect unavailable after simulated crash"
+              },
+              "receipt_digest": "0fac9871de3cd04e4643c4fae4970e7abee1da2642e77134d5dc899cb48f881a",
+              "schema_version": "operation_envelope.v2",
+              "status": "BLOCKED",
+              "subject_id": "attempt-command-phase7-e-request-20260912",
+              "workspace_id": "workspace-phase7-scenario-e-20260912"
+            },
+            "stage": {
+              "attempt_count": 1,
+              "baseline_digest": "baseline-phase7-scenario-20260912",
+              "budgets": {
+                "max_attempts_per_iteration": 2,
+                "max_attempts_total": 4,
+                "max_dependency_depth": 2,
+                "max_dependency_nodes": 4,
+                "max_descendant_attempts": 4,
+                "max_iterations": 1,
+                "max_revalidation_ops": 2,
+                "max_validator_revisions": 3
+              },
+              "current_assessment_id": null,
+              "current_iteration_id": "iteration-command-stage-phase7-scenario-e-20260912-start-20260912",
+              "in_flight_operation_id": "operation-command-phase7-e-request-20260912",
+              "iteration_count": 1,
+              "next_action": "RECORD_OBSERVATION",
+              "objective_fingerprint": "79da612f0bf1ac4141202f502efc9575a1f8e322776225163ffdc74376873113",
+              "open_dependencies": [],
+              "owner_stage_id": "stage-phase7-scenario-e-20260912",
+              "owner_token": true,
+              "pending_decisions": [],
+              "predecessor_stage_id": null,
+              "project_id": "project-phase7-scenarios",
+              "purpose": "DOMAIN",
+              "repair_depth": 0,
+              "required_capabilities": [
+                "python"
+              ],
+              "schema_version": "stage.v2",
+              "semantic_baseline_diff_digest": null,
+              "stage_id": "stage-phase7-scenario-e-20260912",
+              "status": "ACTIVE",
+              "target_identity": "bounded/scenario-fixture",
+              "workspace_id": "workspace-phase7-scenario-e-20260912"
+            }
+          },
+          "revision": 4
+        },
+        "operation": {
+          "capability_manifest": {
+            "fence": false,
+            "idempotent_submit": false,
+            "prove_not_sent": false,
+            "query_by_operation_id": false
+          },
+          "effect_state": "UNKNOWN",
+          "intent_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+          "operation_id": "operation-command-phase7-e-request-20260912",
+          "receipt": {
+            "operation_id": "operation-command-phase7-e-request-20260912",
+            "query": "external effect unavailable after simulated crash"
+          },
+          "receipt_digest": "0fac9871de3cd04e4643c4fae4970e7abee1da2642e77134d5dc899cb48f881a",
+          "schema_version": "operation_envelope.v2",
+          "status": "BLOCKED",
+          "subject_id": "attempt-command-phase7-e-request-20260912",
+          "workspace_id": "workspace-phase7-scenario-e-20260912"
+        },
+        "revision": 4,
+        "stage": {
+          "attempt_count": 1,
+          "baseline_digest": "baseline-phase7-scenario-20260912",
+          "budgets": {
+            "max_attempts_per_iteration": 2,
+            "max_attempts_total": 4,
+            "max_dependency_depth": 2,
+            "max_dependency_nodes": 4,
+            "max_descendant_attempts": 4,
+            "max_iterations": 1,
+            "max_revalidation_ops": 2,
+            "max_validator_revisions": 3
+          },
+          "current_assessment_id": null,
+          "current_iteration_id": "iteration-command-stage-phase7-scenario-e-20260912-start-20260912",
+          "in_flight_operation_id": "operation-command-phase7-e-request-20260912",
+          "iteration_count": 1,
+          "next_action": "RECORD_OBSERVATION",
+          "objective_fingerprint": "79da612f0bf1ac4141202f502efc9575a1f8e322776225163ffdc74376873113",
+          "open_dependencies": [],
+          "owner_stage_id": "stage-phase7-scenario-e-20260912",
+          "owner_token": true,
+          "pending_decisions": [],
+          "predecessor_stage_id": null,
+          "project_id": "project-phase7-scenarios",
+          "purpose": "DOMAIN",
+          "repair_depth": 0,
+          "required_capabilities": [
+            "python"
+          ],
+          "schema_version": "stage.v2",
+          "semantic_baseline_diff_digest": null,
+          "stage_id": "stage-phase7-scenario-e-20260912",
+          "status": "ACTIVE",
+          "target_identity": "bounded/scenario-fixture",
+          "workspace_id": "workspace-phase7-scenario-e-20260912"
+        }
+      },
+      "subject_id": "stage-phase7-scenario-e-20260912"
+    },
+    "command-stage-phase7-scenario-e-20260912-register-20260912": {
+      "command_type": "REGISTER_STAGE",
+      "payload_digest": "37bbb071c628856e0b89405b1ad7d27844fe2fc87cfe360c5ab55769577ebcec",
+      "receipt": {
+        "command": {
+          "command_id": "command-stage-phase7-scenario-e-20260912-register-20260912",
+          "command_type": "REGISTER_STAGE",
+          "expected_revision": 0,
+          "payload_digest": "37bbb071c628856e0b89405b1ad7d27844fe2fc87cfe360c5ab55769577ebcec",
+          "schema_version": "command_envelope.v2",
+          "subject_id": "stage-phase7-scenario-e-20260912",
+          "workspace_id": "workspace-phase7-scenario-e-20260912"
+        },
+        "event": {
+          "command": {
+            "command_id": "command-stage-phase7-scenario-e-20260912-register-20260912",
+            "command_type": "REGISTER_STAGE",
+            "expected_revision": 0,
+            "payload_digest": "37bbb071c628856e0b89405b1ad7d27844fe2fc87cfe360c5ab55769577ebcec",
+            "schema_version": "command_envelope.v2",
+            "subject_id": "stage-phase7-scenario-e-20260912",
+            "workspace_id": "workspace-phase7-scenario-e-20260912"
+          },
+          "event_id": "event-1959cc87e9e23744d47453bf246be248100f0f65bd11aaa6730adcef4a9f8ede",
+          "payload_digest": "37bbb071c628856e0b89405b1ad7d27844fe2fc87cfe360c5ab55769577ebcec",
+          "projection_digest": "76b8d3d5c8cf2e0d5b4cd969a6d5676807cb0933fc5b2c0cba78a86b0180017f",
+          "result": {
+            "stage": {
+              "attempt_count": 0,
+              "baseline_digest": "baseline-phase7-scenario-20260912",
+              "budgets": {
+                "max_attempts_per_iteration": 2,
+                "max_attempts_total": 4,
+                "max_dependency_depth": 2,
+                "max_dependency_nodes": 4,
+                "max_descendant_attempts": 4,
+                "max_iterations": 1,
+                "max_revalidation_ops": 2,
+                "max_validator_revisions": 3
+              },
+              "current_assessment_id": null,
+              "current_iteration_id": null,
+              "in_flight_operation_id": null,
+              "iteration_count": 0,
+              "next_action": "START",
+              "objective_fingerprint": "79da612f0bf1ac4141202f502efc9575a1f8e322776225163ffdc74376873113",
+              "open_dependencies": [],
+              "owner_stage_id": null,
+              "owner_token": false,
+              "pending_decisions": [],
+              "predecessor_stage_id": null,
+              "project_id": "project-phase7-scenarios",
+              "purpose": "DOMAIN",
+              "repair_depth": 0,
+              "required_capabilities": [
+                "python"
+              ],
+              "schema_version": "stage.v2",
+              "semantic_baseline_diff_digest": null,
+              "stage_id": "stage-phase7-scenario-e-20260912",
+              "status": "PLANNED",
+              "target_identity": "bounded/scenario-fixture",
+              "workspace_id": "workspace-phase7-scenario-e-20260912"
+            }
+          },
+          "revision": 1
+        },
+        "revision": 1,
+        "stage": {
+          "attempt_count": 0,
+          "baseline_digest": "baseline-phase7-scenario-20260912",
+          "budgets": {
+            "max_attempts_per_iteration": 2,
+            "max_attempts_total": 4,
+            "max_dependency_depth": 2,
+            "max_dependency_nodes": 4,
+            "max_descendant_attempts": 4,
+            "max_iterations": 1,
+            "max_revalidation_ops": 2,
+            "max_validator_revisions": 3
+          },
+          "current_assessment_id": null,
+          "current_iteration_id": null,
+          "in_flight_operation_id": null,
+          "iteration_count": 0,
+          "next_action": "START",
+          "objective_fingerprint": "79da612f0bf1ac4141202f502efc9575a1f8e322776225163ffdc74376873113",
+          "open_dependencies": [],
+          "owner_stage_id": null,
+          "owner_token": false,
+          "pending_decisions": [],
+          "predecessor_stage_id": null,
+          "project_id": "project-phase7-scenarios",
+          "purpose": "DOMAIN",
+          "repair_depth": 0,
+          "required_capabilities": [
+            "python"
+          ],
+          "schema_version": "stage.v2",
+          "semantic_baseline_diff_digest": null,
+          "stage_id": "stage-phase7-scenario-e-20260912",
+          "status": "PLANNED",
+          "target_identity": "bounded/scenario-fixture",
+          "workspace_id": "workspace-phase7-scenario-e-20260912"
+        }
+      },
+      "subject_id": "stage-phase7-scenario-e-20260912"
+    },
+    "command-stage-phase7-scenario-e-20260912-start-20260912": {
+      "command_type": "START",
+      "payload_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "receipt": {
+        "command": {
+          "command_id": "command-stage-phase7-scenario-e-20260912-start-20260912",
+          "command_type": "START",
+          "expected_revision": 1,
+          "payload_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+          "schema_version": "command_envelope.v2",
+          "subject_id": "stage-phase7-scenario-e-20260912",
+          "workspace_id": "workspace-phase7-scenario-e-20260912"
+        },
+        "event": {
+          "command": {
+            "command_id": "command-stage-phase7-scenario-e-20260912-start-20260912",
+            "command_type": "START",
+            "expected_revision": 1,
+            "payload_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "schema_version": "command_envelope.v2",
+            "subject_id": "stage-phase7-scenario-e-20260912",
+            "workspace_id": "workspace-phase7-scenario-e-20260912"
+          },
+          "event_id": "event-01d8e23e6f0dc9effcb154ef0dbee78a2bea672af5f501ccec4b4481a3b6ceb7",
+          "payload_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+          "projection_digest": "97754f413fbd202ce027b7a18dd13684695199be9d1e19a926110c94ae6a8922",
+          "result": {
+            "iteration": {
+              "index": 1,
+              "iteration_id": "iteration-command-stage-phase7-scenario-e-20260912-start-20260912",
+              "opened_by": "START",
+              "requires_next_iteration": false,
+              "review_identity": null,
+              "schema_version": "semantic_iteration.v2",
+              "solution_fingerprint": "79da612f0bf1ac4141202f502efc9575a1f8e322776225163ffdc74376873113",
+              "stage_id": "stage-phase7-scenario-e-20260912",
+              "technical_change_digest": null
+            },
+            "stage": {
+              "attempt_count": 0,
+              "baseline_digest": "baseline-phase7-scenario-20260912",
+              "budgets": {
+                "max_attempts_per_iteration": 2,
+                "max_attempts_total": 4,
+                "max_dependency_depth": 2,
+                "max_dependency_nodes": 4,
+                "max_descendant_attempts": 4,
+                "max_iterations": 1,
+                "max_revalidation_ops": 2,
+                "max_validator_revisions": 3
+              },
+              "current_assessment_id": null,
+              "current_iteration_id": "iteration-command-stage-phase7-scenario-e-20260912-start-20260912",
+              "in_flight_operation_id": null,
+              "iteration_count": 1,
+              "next_action": "REQUEST_EXECUTION",
+              "objective_fingerprint": "79da612f0bf1ac4141202f502efc9575a1f8e322776225163ffdc74376873113",
+              "open_dependencies": [],
+              "owner_stage_id": "stage-phase7-scenario-e-20260912",
+              "owner_token": true,
+              "pending_decisions": [],
+              "predecessor_stage_id": null,
+              "project_id": "project-phase7-scenarios",
+              "purpose": "DOMAIN",
+              "repair_depth": 0,
+              "required_capabilities": [
+                "python"
+              ],
+              "schema_version": "stage.v2",
+              "semantic_baseline_diff_digest": null,
+              "stage_id": "stage-phase7-scenario-e-20260912",
+              "status": "ACTIVE",
+              "target_identity": "bounded/scenario-fixture",
+              "workspace_id": "workspace-phase7-scenario-e-20260912"
+            }
+          },
+          "revision": 2
+        },
+        "iteration": {
+          "index": 1,
+          "iteration_id": "iteration-command-stage-phase7-scenario-e-20260912-start-20260912",
+          "opened_by": "START",
+          "requires_next_iteration": false,
+          "review_identity": null,
+          "schema_version": "semantic_iteration.v2",
+          "solution_fingerprint": "79da612f0bf1ac4141202f502efc9575a1f8e322776225163ffdc74376873113",
+          "stage_id": "stage-phase7-scenario-e-20260912",
+          "technical_change_digest": null
+        },
+        "revision": 2,
+        "stage": {
+          "attempt_count": 0,
+          "baseline_digest": "baseline-phase7-scenario-20260912",
+          "budgets": {
+            "max_attempts_per_iteration": 2,
+            "max_attempts_total": 4,
+            "max_dependency_depth": 2,
+            "max_dependency_nodes": 4,
+            "max_descendant_attempts": 4,
+            "max_iterations": 1,
+            "max_revalidation_ops": 2,
+            "max_validator_revisions": 3
+          },
+          "current_assessment_id": null,
+          "current_iteration_id": "iteration-command-stage-phase7-scenario-e-20260912-start-20260912",
+          "in_flight_operation_id": null,
+          "iteration_count": 1,
+          "next_action": "REQUEST_EXECUTION",
+          "objective_fingerprint": "79da612f0bf1ac4141202f502efc9575a1f8e322776225163ffdc74376873113",
+          "open_dependencies": [],
+          "owner_stage_id": "stage-phase7-scenario-e-20260912",
+          "owner_token": true,
+          "pending_decisions": [],
+          "predecessor_stage_id": null,
+          "project_id": "project-phase7-scenarios",
+          "purpose": "DOMAIN",
+          "repair_depth": 0,
+          "required_capabilities": [
+            "python"
+          ],
+          "schema_version": "stage.v2",
+          "semantic_baseline_diff_digest": null,
+          "stage_id": "stage-phase7-scenario-e-20260912",
+          "status": "ACTIVE",
+          "target_identity": "bounded/scenario-fixture",
+          "workspace_id": "workspace-phase7-scenario-e-20260912"
+        }
+      },
+      "subject_id": "stage-phase7-scenario-e-20260912"
+    }
+  },
+  "correction_decisions": {},
+  "decisions": {},
+  "dependencies": {},
+  "events": [
+    {
+      "command": {
+        "command_id": "command-stage-phase7-scenario-e-20260912-register-20260912",
+        "command_type": "REGISTER_STAGE",
+        "expected_revision": 0,
+        "payload_digest": "37bbb071c628856e0b89405b1ad7d27844fe2fc87cfe360c5ab55769577ebcec",
+        "schema_version": "command_envelope.v2",
+        "subject_id": "stage-phase7-scenario-e-20260912",
+        "workspace_id": "workspace-phase7-scenario-e-20260912"
+      },
+      "event_id": "event-1959cc87e9e23744d47453bf246be248100f0f65bd11aaa6730adcef4a9f8ede",
+      "payload_digest": "37bbb071c628856e0b89405b1ad7d27844fe2fc87cfe360c5ab55769577ebcec",
+      "projection_digest": "76b8d3d5c8cf2e0d5b4cd969a6d5676807cb0933fc5b2c0cba78a86b0180017f",
+      "result": {
+        "stage": {
+          "attempt_count": 0,
+          "baseline_digest": "baseline-phase7-scenario-20260912",
+          "budgets": {
+            "max_attempts_per_iteration": 2,
+            "max_attempts_total": 4,
+            "max_dependency_depth": 2,
+            "max_dependency_nodes": 4,
+            "max_descendant_attempts": 4,
+            "max_iterations": 1,
+            "max_revalidation_ops": 2,
+            "max_validator_revisions": 3
+          },
+          "current_assessment_id": null,
+          "current_iteration_id": null,
+          "in_flight_operation_id": null,
+          "iteration_count": 0,
+          "next_action": "START",
+          "objective_fingerprint": "79da612f0bf1ac4141202f502efc9575a1f8e322776225163ffdc74376873113",
+          "open_dependencies": [],
+          "owner_stage_id": null,
+          "owner_token": false,
+          "pending_decisions": [],
+          "predecessor_stage_id": null,
+          "project_id": "project-phase7-scenarios",
+          "purpose": "DOMAIN",
+          "repair_depth": 0,
+          "required_capabilities": [
+            "python"
+          ],
+          "schema_version": "stage.v2",
+          "semantic_baseline_diff_digest": null,
+          "stage_id": "stage-phase7-scenario-e-20260912",
+          "status": "PLANNED",
+          "target_identity": "bounded/scenario-fixture",
+          "workspace_id": "workspace-phase7-scenario-e-20260912"
+        }
+      },
+      "revision": 1
+    },
+    {
+      "command": {
+        "command_id": "command-stage-phase7-scenario-e-20260912-start-20260912",
+        "command_type": "START",
+        "expected_revision": 1,
+        "payload_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+        "schema_version": "command_envelope.v2",
+        "subject_id": "stage-phase7-scenario-e-20260912",
+        "workspace_id": "workspace-phase7-scenario-e-20260912"
+      },
+      "event_id": "event-01d8e23e6f0dc9effcb154ef0dbee78a2bea672af5f501ccec4b4481a3b6ceb7",
+      "payload_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "projection_digest": "97754f413fbd202ce027b7a18dd13684695199be9d1e19a926110c94ae6a8922",
+      "result": {
+        "iteration": {
+          "index": 1,
+          "iteration_id": "iteration-command-stage-phase7-scenario-e-20260912-start-20260912",
+          "opened_by": "START",
+          "requires_next_iteration": false,
+          "review_identity": null,
+          "schema_version": "semantic_iteration.v2",
+          "solution_fingerprint": "79da612f0bf1ac4141202f502efc9575a1f8e322776225163ffdc74376873113",
+          "stage_id": "stage-phase7-scenario-e-20260912",
+          "technical_change_digest": null
+        },
+        "stage": {
+          "attempt_count": 0,
+          "baseline_digest": "baseline-phase7-scenario-20260912",
+          "budgets": {
+            "max_attempts_per_iteration": 2,
+            "max_attempts_total": 4,
+            "max_dependency_depth": 2,
+            "max_dependency_nodes": 4,
+            "max_descendant_attempts": 4,
+            "max_iterations": 1,
+            "max_revalidation_ops": 2,
+            "max_validator_revisions": 3
+          },
+          "current_assessment_id": null,
+          "current_iteration_id": "iteration-command-stage-phase7-scenario-e-20260912-start-20260912",
+          "in_flight_operation_id": null,
+          "iteration_count": 1,
+          "next_action": "REQUEST_EXECUTION",
+          "objective_fingerprint": "79da612f0bf1ac4141202f502efc9575a1f8e322776225163ffdc74376873113",
+          "open_dependencies": [],
+          "owner_stage_id": "stage-phase7-scenario-e-20260912",
+          "owner_token": true,
+          "pending_decisions": [],
+          "predecessor_stage_id": null,
+          "project_id": "project-phase7-scenarios",
+          "purpose": "DOMAIN",
+          "repair_depth": 0,
+          "required_capabilities": [
+            "python"
+          ],
+          "schema_version": "stage.v2",
+          "semantic_baseline_diff_digest": null,
+          "stage_id": "stage-phase7-scenario-e-20260912",
+          "status": "ACTIVE",
+          "target_identity": "bounded/scenario-fixture",
+          "workspace_id": "workspace-phase7-scenario-e-20260912"
+        }
+      },
+      "revision": 2
+    },
+    {
+      "command": {
+        "command_id": "command-phase7-e-request-20260912",
+        "command_type": "REQUEST_EXECUTION",
+        "expected_revision": 2,
+        "payload_digest": "3cb108e5c630d85aae0650f1f43553bee05131b72ddd5bb2a8c0ce608d6f3a8a",
+        "schema_version": "command_envelope.v2",
+        "subject_id": "stage-phase7-scenario-e-20260912",
+        "workspace_id": "workspace-phase7-scenario-e-20260912"
+      },
+      "event_id": "event-eaca82adf13cb03266981a5c4f793a454ed5c97344e8b9b52fc5e2b73d484a4d",
+      "payload_digest": "3cb108e5c630d85aae0650f1f43553bee05131b72ddd5bb2a8c0ce608d6f3a8a",
+      "projection_digest": "bc0a0ed2b6e83935756b7e0d8b7c315cd58f92153538c4a773b3449df7a07129",
+      "result": {
+        "attempt": {
+          "attempt_id": "attempt-command-phase7-e-request-20260912",
+          "attempt_index": 1,
+          "committed": true,
+          "effect_state": "INTENT_COMMITTED",
+          "iteration_id": "iteration-command-stage-phase7-scenario-e-20260912-start-20260912",
+          "provenance": {
+            "engine_digest": "engine-e-20260912",
+            "provider": "bounded-scenario-fixture"
+          },
+          "purpose": "DOMAIN",
+          "request_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+          "request_id": "request-command-phase7-e-request-20260912",
+          "schema_version": "execution_attempt.v2",
+          "stage_id": "stage-phase7-scenario-e-20260912",
+          "status": "REQUESTED"
+        },
+        "operation": {
+          "capability_manifest": {
+            "fence": false,
+            "idempotent_submit": false,
+            "prove_not_sent": false,
+            "query_by_operation_id": false
+          },
+          "effect_state": "INTENT_COMMITTED",
+          "intent_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+          "operation_id": "operation-command-phase7-e-request-20260912",
+          "schema_version": "operation_envelope.v2",
+          "status": "INTENT",
+          "subject_id": "attempt-command-phase7-e-request-20260912",
+          "workspace_id": "workspace-phase7-scenario-e-20260912"
+        },
+        "stage": {
+          "attempt_count": 1,
+          "baseline_digest": "baseline-phase7-scenario-20260912",
+          "budgets": {
+            "max_attempts_per_iteration": 2,
+            "max_attempts_total": 4,
+            "max_dependency_depth": 2,
+            "max_dependency_nodes": 4,
+            "max_descendant_attempts": 4,
+            "max_iterations": 1,
+            "max_revalidation_ops": 2,
+            "max_validator_revisions": 3
+          },
+          "current_assessment_id": null,
+          "current_iteration_id": "iteration-command-stage-phase7-scenario-e-20260912-start-20260912",
+          "in_flight_operation_id": "operation-command-phase7-e-request-20260912",
+          "iteration_count": 1,
+          "next_action": "RECORD_OBSERVATION",
+          "objective_fingerprint": "79da612f0bf1ac4141202f502efc9575a1f8e322776225163ffdc74376873113",
+          "open_dependencies": [],
+          "owner_stage_id": "stage-phase7-scenario-e-20260912",
+          "owner_token": true,
+          "pending_decisions": [],
+          "predecessor_stage_id": null,
+          "project_id": "project-phase7-scenarios",
+          "purpose": "DOMAIN",
+          "repair_depth": 0,
+          "required_capabilities": [
+            "python"
+          ],
+          "schema_version": "stage.v2",
+          "semantic_baseline_diff_digest": null,
+          "stage_id": "stage-phase7-scenario-e-20260912",
+          "status": "ACTIVE",
+          "target_identity": "bounded/scenario-fixture",
+          "workspace_id": "workspace-phase7-scenario-e-20260912"
+        }
+      },
+      "revision": 3
+    },
+    {
+      "command": {
+        "command_id": "command-phase7-e-unknown-receipt-20260912",
+        "command_type": "APPLY_RECEIPT",
+        "expected_revision": 3,
+        "payload_digest": "d825239549d8b6a6887dcb472fdd3c637e5228ea17d668148ae577867e299f3b",
+        "schema_version": "command_envelope.v2",
+        "subject_id": "stage-phase7-scenario-e-20260912",
+        "workspace_id": "workspace-phase7-scenario-e-20260912"
+      },
+      "event_id": "event-99b00b279b58a2060086b6b159f7547a8dd2c2f285a26eb7c7bcd0eb44a60461",
+      "payload_digest": "d825239549d8b6a6887dcb472fdd3c637e5228ea17d668148ae577867e299f3b",
+      "projection_digest": "f76aad27a1fe6a92d6cd5203b5f9e46338c6ece030203d00bfcf655f8f5dbdff",
+      "result": {
+        "operation": {
+          "capability_manifest": {
+            "fence": false,
+            "idempotent_submit": false,
+            "prove_not_sent": false,
+            "query_by_operation_id": false
+          },
+          "effect_state": "UNKNOWN",
+          "intent_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+          "operation_id": "operation-command-phase7-e-request-20260912",
+          "receipt": {
+            "operation_id": "operation-command-phase7-e-request-20260912",
+            "query": "external effect unavailable after simulated crash"
+          },
+          "receipt_digest": "0fac9871de3cd04e4643c4fae4970e7abee1da2642e77134d5dc899cb48f881a",
+          "schema_version": "operation_envelope.v2",
+          "status": "BLOCKED",
+          "subject_id": "attempt-command-phase7-e-request-20260912",
+          "workspace_id": "workspace-phase7-scenario-e-20260912"
+        },
+        "stage": {
+          "attempt_count": 1,
+          "baseline_digest": "baseline-phase7-scenario-20260912",
+          "budgets": {
+            "max_attempts_per_iteration": 2,
+            "max_attempts_total": 4,
+            "max_dependency_depth": 2,
+            "max_dependency_nodes": 4,
+            "max_descendant_attempts": 4,
+            "max_iterations": 1,
+            "max_revalidation_ops": 2,
+            "max_validator_revisions": 3
+          },
+          "current_assessment_id": null,
+          "current_iteration_id": "iteration-command-stage-phase7-scenario-e-20260912-start-20260912",
+          "in_flight_operation_id": "operation-command-phase7-e-request-20260912",
+          "iteration_count": 1,
+          "next_action": "RECORD_OBSERVATION",
+          "objective_fingerprint": "79da612f0bf1ac4141202f502efc9575a1f8e322776225163ffdc74376873113",
+          "open_dependencies": [],
+          "owner_stage_id": "stage-phase7-scenario-e-20260912",
+          "owner_token": true,
+          "pending_decisions": [],
+          "predecessor_stage_id": null,
+          "project_id": "project-phase7-scenarios",
+          "purpose": "DOMAIN",
+          "repair_depth": 0,
+          "required_capabilities": [
+            "python"
+          ],
+          "schema_version": "stage.v2",
+          "semantic_baseline_diff_digest": null,
+          "stage_id": "stage-phase7-scenario-e-20260912",
+          "status": "ACTIVE",
+          "target_identity": "bounded/scenario-fixture",
+          "workspace_id": "workspace-phase7-scenario-e-20260912"
+        }
+      },
+      "revision": 4
+    }
+  ],
+  "executable_owner_stage_id": "stage-phase7-scenario-e-20260912",
+  "iterations": {
+    "iteration-command-stage-phase7-scenario-e-20260912-start-20260912": {
+      "index": 1,
+      "iteration_id": "iteration-command-stage-phase7-scenario-e-20260912-start-20260912",
+      "opened_by": "START",
+      "requires_next_iteration": false,
+      "review_identity": null,
+      "schema_version": "semantic_iteration.v2",
+      "solution_fingerprint": "79da612f0bf1ac4141202f502efc9575a1f8e322776225163ffdc74376873113",
+      "stage_id": "stage-phase7-scenario-e-20260912",
+      "technical_change_digest": null
+    }
+  },
+  "observations": {},
+  "operations": {
+    "operation-command-phase7-e-request-20260912": {
+      "capability_manifest": {
+        "fence": false,
+        "idempotent_submit": false,
+        "prove_not_sent": false,
+        "query_by_operation_id": false
+      },
+      "effect_state": "UNKNOWN",
+      "intent_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "operation_id": "operation-command-phase7-e-request-20260912",
+      "receipt": {
+        "operation_id": "operation-command-phase7-e-request-20260912",
+        "query": "external effect unavailable after simulated crash"
+      },
+      "receipt_digest": "0fac9871de3cd04e4643c4fae4970e7abee1da2642e77134d5dc899cb48f881a",
+      "schema_version": "operation_envelope.v2",
+      "status": "BLOCKED",
+      "subject_id": "attempt-command-phase7-e-request-20260912",
+      "workspace_id": "workspace-phase7-scenario-e-20260912"
+    }
+  },
+  "revision": 4,
+  "schema_version": "workflow_v2.journal.v1",
+  "stage_runtime": {
+    "stage-phase7-scenario-e-20260912": {
+      "closeout": null,
+      "current_attempt_id": "attempt-command-phase7-e-request-20260912",
+      "execution_authorized": false,
+      "in_flight_operation_id": "operation-command-phase7-e-request-20260912",
+      "integration_operation_id": null
+    }
+  },
+  "stages": {
+    "stage-phase7-scenario-e-20260912": {
+      "baseline_digest": "baseline-phase7-scenario-20260912",
+      "budgets": {
+        "max_attempts_per_iteration": 2,
+        "max_attempts_total": 4,
+        "max_dependency_depth": 2,
+        "max_dependency_nodes": 4,
+        "max_descendant_attempts": 4,
+        "max_iterations": 1,
+        "max_revalidation_ops": 2,
+        "max_validator_revisions": 3
+      },
+      "current_assessment_id": null,
+      "current_iteration_id": "iteration-command-stage-phase7-scenario-e-20260912-start-20260912",
+      "objective_fingerprint": "79da612f0bf1ac4141202f502efc9575a1f8e322776225163ffdc74376873113",
+      "owner_stage_id": "stage-phase7-scenario-e-20260912",
+      "predecessor_stage_id": null,
+      "project_id": "project-phase7-scenarios",
+      "purpose": "DOMAIN",
+      "repair_depth": 0,
+      "required_capabilities": [
+        "python"
+      ],
+      "schema_version": "stage.v2",
+      "semantic_baseline_diff_digest": null,
+      "stage_id": "stage-phase7-scenario-e-20260912",
+      "status": "ACTIVE",
+      "target_identity": "bounded/scenario-fixture",
+      "workspace_id": "workspace-phase7-scenario-e-20260912"
+    }
+  },
+  "workspace_id": "workspace-phase7-scenario-e-20260912"
+}

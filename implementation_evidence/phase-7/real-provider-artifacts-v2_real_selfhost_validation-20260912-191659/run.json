@@ -1,0 +1,170 @@
+{
+  "acceptance": {
+    "allowed_changed_file": true,
+    "coding_e2e_accepted": true,
+    "nonempty_diff": true,
+    "required_changed_path": true,
+    "required_test_passed": true,
+    "turn_completed": true
+  },
+  "actual_model": "gpt-5.6-luna",
+  "argv": [
+    "codex.EXE",
+    "-c",
+    "windows.sandbox=\"unelevated\"",
+    "-c",
+    "model_reasoning_effort=\"max\"",
+    "exec",
+    "--json",
+    "--ephemeral",
+    "--model",
+    "gpt-5.6-luna",
+    "--cd",
+    "D:\\work\\research_tools\\v2_real_selfhost_validation-20260912-191659",
+    "--sandbox",
+    "workspace-write",
+    "--skip-git-repo-check",
+    "-"
+  ],
+  "auth_mode": "chatgpt",
+  "cwd": "D:\\work\\research_tools\\v2_real_selfhost_validation-20260912-191659",
+  "events": {
+    "file": "events.jsonl",
+    "raw_jsonl_stored": false,
+    "summary_count": 17
+  },
+  "execution_profile": "STANDARD",
+  "executor_request_id": "request-command-real-request-20260912",
+  "first_error": null,
+  "model": "gpt-5.6-luna",
+  "problems": [],
+  "profile_derivation_reason": "explicit_executor_request_standard",
+  "prompt": {
+    "bounded_request": {
+      "action_map": {
+        "execute": true,
+        "nodes": {
+          "bounded_add_fix": {
+            "owner": "CODEX",
+            "rationale": "Fix the bounded add(a, b) fixture so it returns the sum instead of the difference; run the exact required test command and leave a non-empty diff in src/add.py only."
+          }
+        },
+        "schema_version": "action_map.v1",
+        "validated": true
+      },
+      "allowed_paths": [
+        "src"
+      ],
+      "attempt_index": 1,
+      "baseline_digest": "bc6727746e22f26530803294736ad10b147b784a",
+      "execution_mode": "PRIMARY",
+      "execution_requirements": {
+        "require_nonempty_diff": true,
+        "required_changed_path": "src/add.py",
+        "required_test_command": "python -m pytest -q tests/test_add.py"
+      },
+      "iteration_index": 1,
+      "metadata": {
+        "execution_profile": "STANDARD",
+        "executor_request_id": "request-command-real-request-20260912",
+        "request_id": "request-command-real-request-20260912"
+      },
+      "objective": "Fix the bounded add(a, b) fixture so it returns the sum instead of the difference; run the exact required test command and leave a non-empty diff in src/add.py only.",
+      "plan_id": "plan-real-v2-add-20260912",
+      "preferred_provider": "openai-codex",
+      "protected_paths": [
+        ".git",
+        ".workflow-v2",
+        "tests",
+        "planning",
+        "AGENTS.override.md"
+      ],
+      "required_capabilities": [
+        "coding",
+        "execution_evidence",
+        "native_codex",
+        "model_discovery",
+        "chatgpt_auth"
+      ],
+      "retry_budget": 2,
+      "stage_id": "stage-real-v2-add-lidation-20260912-191659",
+      "task_id": "request-command-real-request-20260912",
+      "workspace_root": "D:\\work\\research_tools\\v2_real_selfhost_validation-20260912-191659"
+    },
+    "raw_prompt_stored": false,
+    "sha256": "b3c973436131f1a7640b1547441b06900ea518a71b3d796dd7194c9190e87efa"
+  },
+  "provider": "openai-codex",
+  "reasoning_effort": "max",
+  "requirements": {
+    "require_nonempty_diff": true,
+    "required_changed_path": "src/add.py",
+    "required_test_command": "python -m pytest -q tests/test_add.py"
+  },
+  "returncode": 0,
+  "sandbox": "workspace-write",
+  "schema_version": "codex_run_artifacts.v1",
+  "stderr": {
+    "bytes": 918,
+    "present": true,
+    "sha256": "a67859e7917eed296d741480c91722b3aa203a5fe93b256c485bdb87c46810f5",
+    "truncated_for_storage": false
+  },
+  "stdout": {
+    "bytes": 4832,
+    "present": true,
+    "sha256": "4c1febdaf0c02eb5f2b512a1f13a00542654a01cd0be723884e7fd8b75fa5e44",
+    "truncated_for_storage": false
+  },
+  "workspace": {
+    "after_diff": {
+      "bytes": 169,
+      "present": true,
+      "sha256": "53f61369b4ba16bd2db729ce9a56b438fe210b2bb99e9b74add5f1e020ca3349",
+      "truncated_for_storage": false
+    },
+    "after_diff_returncode": 0,
+    "after_diff_stderr": {
+      "bytes": 103,
+      "present": true,
+      "sha256": "3aa1a162d4f5e4fc1a75ce4299abcee1ed32d5c6ff5b20558755adcde56d233c",
+      "truncated_for_storage": false
+    },
+    "after_status": {
+      "bytes": 447,
+      "present": true,
+      "sha256": "d33b2de92d46205405c148a5336f0826fa08dceca0f7dcbb0318c3a5292ec7c6",
+      "truncated_for_storage": false
+    },
+    "before_diff": {
+      "bytes": 0,
+      "present": false,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "truncated_for_storage": false
+    },
+    "before_diff_returncode": 0,
+    "before_diff_stderr": {
+      "bytes": 0,
+      "present": false,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "truncated_for_storage": false
+    },
+    "before_status": {
+      "bytes": 433,
+      "present": true,
+      "sha256": "013e910747a32ecf8010c7d6f2f03d8d398365db18d6d3e0944b5d62fc2d6ee2",
+      "truncated_for_storage": false
+    },
+    "changed_files": [
+      "src/add.py",
+      ".consultations/CONSULT-20260912-111701-36c59c8e/receipt.json",
+      ".consultations/staging/PACK-20260912-111701-05a47521/LATEST_RESULT.md",
+      ".consultations/staging/PACK-20260912-111701-05a47521/STAGE_CONTEXT.md",
+      ".consultations/staging/PACK-20260912-111701-05a47521/context_manifest.json",
+      ".consultations/staging/PACK-20260912-111701-05a47521/evidence/requirement.json",
+      ".workflow-v2/journal.json",
+      ".workflow-v2/journal.json.lock"
+    ],
+    "diff_file": "workspace.diff"
+  }
+}

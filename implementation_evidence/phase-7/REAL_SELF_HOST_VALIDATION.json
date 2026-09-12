@@ -1,0 +1,147 @@
+{
+  "architecture_deviation": null,
+  "assessment": {
+    "assessment_id": "assessment-7b0c9c7e7d14d27781c43e44339ccb0751bff106ccfafd0848b1ade4eefc3c0e",
+    "validator_code_digest": "ea9010d4cb01f1abca8a4858357d6d17fbdae5a58a6eeb91abac3b180547b29e",
+    "verdict": "ADMISSIBLE"
+  },
+  "candidate_baseline_commit": "2d5e416c54256511ee6791c658ca1db7430e5d7b",
+  "candidate_validation_tool": "D:\\work\\research_tools\\research_supervisor_v2_lifecycle_candidate\\scripts\\phase7_real_self_host.py",
+  "duplicate_dispatch_count": 0,
+  "evidence_kind": "REAL_SELF_HOST_VALIDATION",
+  "external_provider_or_gpt_called": true,
+  "facade_used": false,
+  "final_revision": 9,
+  "fresh_reload": {
+    "executable_owner": null,
+    "projection_identical": true,
+    "status": "CLOSED"
+  },
+  "gpt_technical_review": {
+    "consultation_id": "CONSULT-20260912-111914-fafc8ba1",
+    "conversation_id": "6aa53553-608c-83e9-bf8e-545a8f0f3bc6",
+    "decision": "STAGE_READY",
+    "packet_digest": "1100b68fba382220481b792c60e006c74fbffcd9ccb32dd15f6520311ee82e82",
+    "receipt_path": "D:\\work\\research_tools\\v2_real_selfhost_validation-20260912-191659\\.consultations\\CONSULT-20260912-111914-fafc8ba1\\receipt.json",
+    "request_count": 1,
+    "response_digest": "08492febd5ec804b63c99df1713554182051c39f7d78df33ce12d7a40d0d2df7"
+  },
+  "historical_state_imported": false,
+  "initial_revision": 0,
+  "integration": {
+    "operation_id": "operation-command-real-commit-integration-20260912",
+    "receipt": {
+      "changed_paths": [
+        "src/add.py"
+      ],
+      "integration_commit": "0cf25de3e5599420c4f19168e0c5c0dd972cc6d2",
+      "operation_id": "operation-command-real-commit-integration-20260912",
+      "receipt_type": "local_git_integration",
+      "status": "PASS",
+      "target_manifest_digest": "7230c77ff0264d60adc21001e48fc97aa65ef5dcc8c9f74be83409a0c33accd3"
+    },
+    "settlement_proof": "690782ebe2b01e6659cd3e4bdb8d22b831cae0fb4eebb11c3c1c70938585c137",
+    "status": "PASS"
+  },
+  "journal_path": "D:\\work\\research_tools\\v2_real_selfhost_validation-20260912-191659\\.workflow-v2\\journal.json",
+  "observation": {
+    "effect_state": "SETTLED",
+    "immutable": true,
+    "observation_id": "observation-0990498eafca5577477cc8664c39e47481c21d33e70460c52939d1211f3413a6"
+  },
+  "planning": {
+    "consultation_id": "CONSULT-20260912-111701-36c59c8e",
+    "conversation_id": "6aa534d4-dc9c-83ee-a19d-171dc43e450c",
+    "decision": "CONTINUE",
+    "packet_digest": "b395579089f02e84e8ca849fdf80d2870129d096530614843f02361318a45e22",
+    "receipt_path": "D:\\work\\research_tools\\v2_real_selfhost_validation-20260912-191659\\.consultations\\CONSULT-20260912-111701-36c59c8e\\receipt.json",
+    "request_count": 1
+  },
+  "project_package_used": false,
+  "provider": {
+    "actual_model": "gpt-5.6-luna",
+    "auth_mode": "chatgpt",
+    "changed_files": [
+      "src/add.py"
+    ],
+    "execution_profile": "STANDARD",
+    "executor_request_id": "request-command-real-request-20260912",
+    "provider_id": "openai-codex",
+    "provider_receipt": {
+      "directory": "D:\\work\\research_tools\\research_supervisor_v2_lifecycle_candidate\\implementation_evidence\\phase-7\\real-provider-artifacts-v2_real_selfhost_validation-20260912-191659",
+      "files": {
+        "events": "events.jsonl",
+        "request": "request.json",
+        "run": "run.json",
+        "workspace_diff": "workspace.diff"
+      },
+      "format": "metadata_only",
+      "raw_jsonl_stored": false,
+      "raw_prompt_stored": false,
+      "saved": true
+    },
+    "provider_result_digest": "b93596249da99a2ab77a03ae0a7e04c9cd7e5b2fb3bfebbb9670f0891b27278d",
+    "provider_terminal_status": "SUCCEEDED",
+    "reasoning_effort": "max",
+    "selection": {
+      "candidates": [
+        {
+          "available": true,
+          "capabilities": [
+            "coding",
+            "execution_evidence",
+            "native_codex",
+            "model_discovery",
+            "chatgpt_auth"
+          ],
+          "cost": 0.0,
+          "execution_modes": [
+            "PRIMARY",
+            "MAJOR_CHALLENGER"
+          ],
+          "metadata": {
+            "auth_mode": "chatgpt",
+            "mutates_stage": false,
+            "preferred_model": "gpt-5.6-luna",
+            "runtime_reason": "ready",
+            "sdk_available": false,
+            "transport": "codex_cli"
+          },
+          "priority": 10,
+          "provider_id": "openai-codex",
+          "reliability": 0.85
+        }
+      ],
+      "reason": "explicit user preference matched an eligible executor",
+      "review_recommended": false,
+      "selected_provider": "openai-codex"
+    },
+    "tests": [
+      {
+        "name": "python -m pytest -q tests/test_add.py",
+        "status": "PASS"
+      }
+    ]
+  },
+  "stage_id": "stage-real-v2-add-lidation-20260912-191659",
+  "stage_result_binding": {
+    "assessment_id": "assessment-7b0c9c7e7d14d27781c43e44339ccb0751bff106ccfafd0848b1ade4eefc3c0e",
+    "decision_subject_id": "assessment-7b0c9c7e7d14d27781c43e44339ccb0751bff106ccfafd0848b1ade4eefc3c0e"
+  },
+  "status": "PASS",
+  "verification": {
+    "command": "python -m pytest -q tests/test_add.py",
+    "pre_integration": {
+      "command": "python -m pytest -q tests/test_add.py",
+      "pytest_plugin_autoload": "disabled",
+      "returncode": 0,
+      "status": "PASS"
+    },
+    "pytest_plugin_autoload": "disabled",
+    "returncode": 0,
+    "status": "PASS",
+    "verification_digest": "120d37681b9f2f2c84dd34a6ae167d393834d08009e6c90bc512d13deb5dff50"
+  },
+  "workspace": "D:\\work\\research_tools\\v2_real_selfhost_validation-20260912-191659",
+  "workspace_id": "workspace-real-v2-add-lidation-20260912-191659"
+}

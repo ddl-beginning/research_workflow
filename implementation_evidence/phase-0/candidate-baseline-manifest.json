@@ -796,7 +796,7 @@
       "normalized_bytes": 3220
     }
   ],
-  "git_head": "4227fe64f622c4472421f5c36ced5e53c3cac176",
+  "git_head": "2d5e416c54256511ee6791c658ca1db7430e5d7b",
   "baseline_ref": "15fdb58cfbe91987e3a5112a9937e716bf265f59",
   "git_branch": "workflow-v2-lifecycle-candidate",
   "host_normalized_digest": "2796596c77e1ac7b49dde36fa178841cb60461199743156a4d4d933853d85971",
