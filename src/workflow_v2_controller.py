@@ -1,0 +1,1150 @@
+"""Canonical Workflow V2 StageController journal and reducer.
+
+The controller is intentionally small and explicit: every lifecycle mutation
+is a command applied to one durable journal.  Providers, GPT, Human input and
+integration adapters are event sources only; none of them can write Stage
+state directly.
+"""
+
+from __future__ import annotations
+
+import copy
+import json
+import os
+import threading
+import uuid
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Any, Mapping
+
+from .contracts import ContractValidationError, canonical_json, sha256_json
+from .workflow_v2_contracts import (
+    PUBLIC_COMMANDS,
+    STAGE_STATES,
+    assess_observation,
+    dependency_authorization_digest,
+    validate_command_envelope,
+    validate_correction_receipt,
+    validate_decision,
+    validate_decision_subject,
+    validate_dependency,
+    validate_dependency_graph,
+    validate_evidence_manifest,
+    validate_execution_attempt,
+    validate_operation_envelope,
+    validate_provider_observation,
+    validate_semantic_iteration,
+    validate_stage,
+    validate_stage_assessment,
+    validate_typed_replan,
+)
+
+
+class WorkflowV2ControllerError(RuntimeError):
+    """Raised when a canonical V2 command cannot be committed."""
+
+
+def _copy(value: Any) -> Any:
+    return copy.deepcopy(value)
+
+
+def _decision_envelope(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Strip journal-only resolution metadata before contract validation."""
+
+    return {key: _copy(item) for key, item in value.items() if key != "resolution"}
+
+
+def _text(value: Any, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise WorkflowV2ControllerError(f"{field} must be a non-empty string")
+    return value.strip()
+
+
+def _id(prefix: str, value: Any) -> str:
+    return f"{prefix}-{value}" if not str(value).startswith(prefix + "-") else str(value)
+
+
+def _new_command_id() -> str:
+    return "command-" + uuid.uuid4().hex
+
+
+TERMINAL_EFFECTS = {"NOT_SENT_PROVEN", "SETTLED"}
+UNSETTLED_EFFECTS = {"INTENT_COMMITTED", "SENT_UNSETTLED", "UNKNOWN", "CONFLICT"}
+
+
+class StageController:
+    """Single transition authority for the Workflow V2 lifecycle schema."""
+
+    JOURNAL_SCHEMA = "workflow_v2.journal.v1"
+
+    def __init__(self, *, workspace_id: str, state_path: str | Path | None = None) -> None:
+        self.workspace_id = _text(workspace_id, "workspace_id")
+        self.state_path = Path(state_path).resolve() if state_path is not None else None
+        self._lock = threading.RLock()
+        self._journal = self._empty_journal()
+        if self.state_path is not None and self.state_path.is_file():
+            self._journal = self._read_journal(self.state_path)
+            if self._journal["workspace_id"] != self.workspace_id:
+                raise WorkflowV2ControllerError("state workspace identity does not match controller")
+
+    @classmethod
+    def from_state(cls, state_path: str | Path) -> "StageController":
+        path = Path(state_path).resolve()
+        if not path.is_file():
+            raise WorkflowV2ControllerError(f"journal not found: {path}")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        workspace_id = payload.get("workspace_id")
+        if not isinstance(workspace_id, str):
+            raise WorkflowV2ControllerError("journal has no workspace identity")
+        return cls(workspace_id=workspace_id, state_path=path)
+
+    def initialize(self) -> dict[str, Any]:
+        """Persist an empty, identity-bound journal for a fresh runtime.
+
+        Initialization is deliberately not a lifecycle command: it creates no
+        Stage, iteration, attempt, or decision and therefore cannot consume a
+        budget or bypass a gate.
+        """
+
+        with self._lock:
+            with self._process_lock():
+                self._reload_persisted_journal()
+                if self._journal["workspace_id"] not in (None, self.workspace_id):
+                    raise WorkflowV2ControllerError("journal workspace identity does not match controller")
+                if self._journal["workspace_id"] == self.workspace_id:
+                    return self.state
+                draft = _copy(self._journal)
+                draft["workspace_id"] = self.workspace_id
+                self._validate_journal(draft)
+                self._persist(draft)
+                self._journal = draft
+                return self.state
+
+    @staticmethod
+    def _empty_journal() -> dict[str, Any]:
+        return {
+            "schema_version": StageController.JOURNAL_SCHEMA,
+            "workspace_id": None,
+            "revision": 0,
+            "events": [],
+            "commands": {},
+            "stages": {},
+            "stage_runtime": {},
+            "iterations": {},
+            "attempts": {},
+            "observations": {},
+            "assessments": {},
+            "decisions": {},
+            "dependencies": {},
+            "operations": {},
+            "correction_decisions": {},
+            "blockers": {},
+        }
+
+    def _read_journal(self, path: Path) -> dict[str, Any]:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise WorkflowV2ControllerError(f"cannot read lifecycle journal: {path}") from exc
+        self._validate_journal(payload)
+        return payload
+
+    @contextmanager
+    def _process_lock(self):
+        """Serialize writers across controller processes for one journal path."""
+
+        if self.state_path is None:
+            yield
+            return
+        lock_path = self.state_path.with_name(self.state_path.name + ".lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a+b") as handle:
+            handle.seek(0)
+            handle.write(b"0")
+            handle.flush()
+            if os.name == "nt":
+                import msvcrt
+
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+                try:
+                    yield
+                finally:
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+    def _reload_persisted_journal(self) -> None:
+        if self.state_path is None or not self.state_path.is_file():
+            return
+        latest = self._read_journal(self.state_path)
+        if latest["workspace_id"] != self.workspace_id:
+            raise WorkflowV2ControllerError("state workspace identity does not match controller")
+        self._journal = latest
+
+    @staticmethod
+    def _validate_journal(payload: Mapping[str, Any]) -> None:
+        if payload.get("schema_version") != StageController.JOURNAL_SCHEMA:
+            raise WorkflowV2ControllerError("unsupported V2 journal schema")
+        if not isinstance(payload.get("workspace_id"), str) or not payload["workspace_id"]:
+            raise WorkflowV2ControllerError("journal workspace identity is invalid")
+        revision = payload.get("revision")
+        if not isinstance(revision, int) or revision < 0:
+            raise WorkflowV2ControllerError("journal revision is invalid")
+        events = payload.get("events")
+        if not isinstance(events, list) or len(events) != revision:
+            raise WorkflowV2ControllerError("journal revision/event count mismatch")
+        expected_revision = 1
+        for event in events:
+            if not isinstance(event, Mapping) or event.get("revision") != expected_revision:
+                raise WorkflowV2ControllerError("journal event sequence is invalid")
+            validate_command_envelope(event.get("command", {}))
+            body = {key: event.get(key) for key in ("revision", "command", "payload_digest", "result")}
+            if "projection_digest" in event:
+                if not isinstance(event["projection_digest"], str) or len(event["projection_digest"]) < 8:
+                    raise WorkflowV2ControllerError("journal event projection identity is invalid")
+                body["projection_digest"] = event["projection_digest"]
+            if event.get("event_id") != "event-" + sha256_json(body):
+                raise WorkflowV2ControllerError("journal event identity is invalid")
+            expected_revision += 1
+        for key in ("commands", "stages", "stage_runtime", "iterations", "attempts", "observations", "assessments", "decisions", "dependencies", "operations", "correction_decisions", "blockers"):
+            if not isinstance(payload.get(key), dict):
+                raise WorkflowV2ControllerError(f"journal collection is invalid: {key}")
+        for stage in payload["stages"].values():
+            checked_stage = validate_stage(stage)
+            if checked_stage["workspace_id"] != payload["workspace_id"]:
+                raise WorkflowV2ControllerError("persisted Stage workspace identity is invalid")
+        for iteration in payload["iterations"].values():
+            validate_semantic_iteration(iteration)
+        for attempt in payload["attempts"].values():
+            validate_execution_attempt(attempt)
+        for observation in payload["observations"].values():
+            validate_provider_observation(observation)
+        for assessment in payload["assessments"].values():
+            validate_stage_assessment(assessment)
+        for decision in payload["decisions"].values():
+            validate_decision(_decision_envelope(decision))
+        dependency_fields = (
+            "schema_version", "parent_id", "child_id", "predicate", "input_binding",
+            "output_contract_digest", "authorization_decision_id", "child_status",
+        )
+        dependencies = [
+            {key: edge[key] for key in dependency_fields}
+            for edge in payload["dependencies"].values()
+        ]
+        for edge in dependencies:
+            validate_dependency(edge)
+        if dependencies:
+            validate_dependency_graph(dependencies, max_nodes=10_000, max_depth=10_000)
+        for operation in payload["operations"].values():
+            validate_operation_envelope(operation)
+        command_event_ids: set[str] = set()
+        for command_id, command_record in payload["commands"].items():
+            if not isinstance(command_record, Mapping):
+                raise WorkflowV2ControllerError("journal command index entry is invalid")
+            if command_record.get("subject_id") is not None and not isinstance(command_record["subject_id"], str):
+                raise WorkflowV2ControllerError("journal command subject identity is invalid")
+            receipt = command_record.get("receipt")
+            if not isinstance(receipt, Mapping):
+                raise WorkflowV2ControllerError("journal command receipt is invalid")
+            command = receipt.get("command")
+            if not isinstance(command, Mapping):
+                raise WorkflowV2ControllerError("journal command envelope is missing")
+            checked_command = validate_command_envelope(command)
+            if checked_command["command_id"] != command_id:
+                raise WorkflowV2ControllerError("journal command index identity is invalid")
+            if command_record.get("command_type") != checked_command["command_type"] or command_record.get("payload_digest") != checked_command["payload_digest"]:
+                raise WorkflowV2ControllerError("journal command index envelope is invalid")
+            if command_record.get("subject_id") is not None and command_record["subject_id"] != checked_command["subject_id"]:
+                raise WorkflowV2ControllerError("journal command subject index is invalid")
+            event = receipt.get("event")
+            if not isinstance(event, Mapping) or event.get("revision") != receipt.get("revision"):
+                raise WorkflowV2ControllerError("journal command receipt event binding is invalid")
+            revision_index = event.get("revision", 0) - 1
+            if not isinstance(revision_index, int) or revision_index < 0 or revision_index >= len(events):
+                raise WorkflowV2ControllerError("journal command receipt revision is invalid")
+            authoritative_event = events[revision_index]
+            if canonical_json(authoritative_event) != canonical_json(event):
+                raise WorkflowV2ControllerError("journal command receipt is not bound to its event")
+            expected_receipt = {"command": authoritative_event["command"], "revision": authoritative_event["revision"], "event": authoritative_event, **_copy(authoritative_event["result"])}
+            if canonical_json(receipt) != canonical_json(expected_receipt):
+                raise WorkflowV2ControllerError("journal command receipt result is tampered")
+            command_event_ids.add(authoritative_event["event_id"])
+        if command_event_ids != {event["event_id"] for event in events}:
+            raise WorkflowV2ControllerError("journal event/command index coverage is incomplete")
+        projection_digests = [event.get("projection_digest") for event in events]
+        if any(item is not None for item in projection_digests):
+            if not all(item is not None for item in projection_digests):
+                raise WorkflowV2ControllerError("journal projection identities are incomplete")
+            if projection_digests[-1] != StageController._projection_digest(payload):
+                raise WorkflowV2ControllerError("journal projection digest does not match persisted state")
+
+    @staticmethod
+    def _projection_digest(journal: Mapping[str, Any]) -> str:
+        keys = (
+            "schema_version", "workspace_id", "stages", "stage_runtime", "iterations",
+            "attempts", "observations", "assessments", "decisions", "dependencies",
+            "operations", "correction_decisions", "blockers", "executable_owner_stage_id",
+        )
+        return sha256_json({key: _copy(journal.get(key)) for key in keys})
+
+    def _persist(self, payload: Mapping[str, Any]) -> None:
+        if self.state_path is None:
+            return
+        self.state_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.state_path.with_name(self.state_path.name + ".tmp")
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+        with temporary.open("w", encoding="utf-8", newline="\n") as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, self.state_path)
+
+    @property
+    def revision(self) -> int:
+        return int(self._journal["revision"])
+
+    @property
+    def state(self) -> dict[str, Any]:
+        """Return a detached authoritative journal view."""
+
+        return _copy(self._journal)
+
+    def snapshot(self) -> dict[str, Any]:
+        return self.state
+
+    def _record_event(self, journal: dict[str, Any], command: Mapping[str, Any], payload_digest: str, result: Mapping[str, Any]) -> dict[str, Any]:
+        revision = int(journal["revision"]) + 1
+        body = {
+            "revision": revision,
+            "command": _copy(command),
+            "payload_digest": payload_digest,
+            "result": _copy(result),
+            "projection_digest": self._projection_digest(journal),
+        }
+        event = {**body, "event_id": "event-" + sha256_json(body)}
+        journal["events"].append(event)
+        journal["revision"] = revision
+        return event
+
+    def dispatch(
+        self,
+        command_type: str,
+        *,
+        subject_id: str,
+        payload: Mapping[str, Any],
+        command_id: str | None = None,
+        expected_revision: int | None = None,
+    ) -> dict[str, Any]:
+        command_type = _text(command_type, "command_type").upper()
+        if command_type not in PUBLIC_COMMANDS:
+            raise WorkflowV2ControllerError(f"unsupported canonical command: {command_type}")
+        command_id = command_id or _new_command_id()
+        payload_digest = sha256_json(payload)
+        requested_subject_id = _text(subject_id, "subject_id")
+        with self._lock:
+            with self._process_lock():
+                self._reload_persisted_journal()
+                effective_revision = self.revision if expected_revision is None else expected_revision
+                envelope = {
+                    "schema_version": "command_envelope.v2",
+                    "workspace_id": self.workspace_id,
+                    "command_id": command_id,
+                    "expected_revision": effective_revision,
+                    "command_type": command_type,
+                    "subject_id": requested_subject_id,
+                    "payload_digest": payload_digest,
+                }
+                validate_command_envelope(envelope)
+                existing = self._journal["commands"].get(command_id)
+                if existing is not None:
+                    if (
+                        existing.get("payload_digest") != envelope["payload_digest"]
+                        or existing.get("command_type") != command_type
+                        or existing.get("subject_id") != envelope["subject_id"]
+                    ):
+                        raise WorkflowV2ControllerError("command id collision with a different payload, type, or subject")
+                    return _copy(existing["receipt"])
+                if effective_revision != self.revision:
+                    raise WorkflowV2ControllerError(
+                        f"stale revision: expected {effective_revision}, current {self.revision}"
+                    )
+                draft = _copy(self._journal)
+                draft["workspace_id"] = self.workspace_id
+                result = self._apply(draft, command_type, envelope, _copy(dict(payload)))
+                event = self._record_event(draft, envelope, envelope["payload_digest"], result)
+                receipt = {"command": envelope, "revision": draft["revision"], "event": event, **_copy(result)}
+                draft["commands"][command_id] = {
+                    "command_type": command_type,
+                    "subject_id": envelope["subject_id"],
+                    "payload_digest": envelope["payload_digest"],
+                    "receipt": _copy(receipt),
+                }
+                self._validate_journal(draft)
+                self._persist(draft)
+                self._journal = draft
+                return _copy(receipt)
+
+    def _stage(self, journal: Mapping[str, Any], stage_id: str) -> dict[str, Any]:
+        try:
+            return journal["stages"][stage_id]
+        except KeyError as exc:
+            raise WorkflowV2ControllerError(f"unknown Stage: {stage_id}") from exc
+
+    def _runtime(self, journal: dict[str, Any], stage_id: str) -> dict[str, Any]:
+        return journal["stage_runtime"].setdefault(
+            stage_id,
+            {"current_attempt_id": None, "in_flight_operation_id": None, "execution_authorized": False, "integration_operation_id": None, "closeout": None},
+        )
+
+    def _require_status(self, stage: Mapping[str, Any], allowed: set[str]) -> None:
+        if stage.get("status") not in allowed:
+            raise WorkflowV2ControllerError(f"Stage {stage.get('stage_id')} is {stage.get('status')}, expected {sorted(allowed)}")
+
+    def _pending_decisions(self, journal: Mapping[str, Any], subject_id: str) -> list[dict[str, Any]]:
+        return [
+            decision
+            for decision in journal["decisions"].values()
+            if decision.get("subject_id") == subject_id and decision.get("resolution") is None
+        ]
+
+    def _open_dependencies(self, journal: Mapping[str, Any], parent_id: str) -> list[dict[str, Any]]:
+        return [
+            edge
+            for edge in journal["dependencies"].values()
+            if edge.get("parent_id") == parent_id and edge.get("status") == "OPEN"
+        ]
+
+    def _attempts_for(self, journal: Mapping[str, Any], stage_id: str, iteration_id: str | None = None) -> list[dict[str, Any]]:
+        return [
+            attempt
+            for attempt in journal["attempts"].values()
+            if attempt.get("stage_id") == stage_id and (iteration_id is None or attempt.get("iteration_id") == iteration_id)
+        ]
+
+    def _descendant_ids(self, journal: Mapping[str, Any], stage_id: str) -> set[str]:
+        children: dict[str, set[str]] = {}
+        for edge in journal["dependencies"].values():
+            children.setdefault(edge["parent_id"], set()).add(edge["child_id"])
+        found: set[str] = set()
+        pending = list(children.get(stage_id, set()))
+        while pending:
+            child_id = pending.pop()
+            if child_id in found:
+                continue
+            found.add(child_id)
+            pending.extend(children.get(child_id, set()))
+        return found
+
+    def _ancestor_ids(self, journal: Mapping[str, Any], stage_id: str) -> set[str]:
+        parents = {edge["child_id"]: edge["parent_id"] for edge in journal["dependencies"].values()}
+        found: set[str] = set()
+        current = stage_id
+        while current in parents:
+            current = parents[current]
+            if current in found:
+                break
+            found.add(current)
+        return found
+
+    def _apply(self, journal: dict[str, Any], command_type: str, command: Mapping[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+        handlers = {
+            "REGISTER_STAGE": self._register_stage,
+            "START": self._start,
+            "REQUEST_EXECUTION": self._request_execution,
+            "RECORD_OBSERVATION": self._record_observation,
+            "ASSESS_RESULT": self._assess_result,
+            "APPLY_GPT_DECISION": self._apply_gpt_decision,
+            "ADVANCE_ITERATION": self._advance_iteration,
+            "REQUEST_DECISION": self._request_decision,
+            "APPLY_DECISION": self._apply_decision,
+            "ADD_DEPENDENCY": self._add_dependency,
+            "SATISFY_DEPENDENCY": self._satisfy_dependency,
+            "RESOLVE_BLOCKER": self._resolve_blocker,
+            "APPLY_RECEIPT": self._apply_receipt,
+            "COMMIT_INTEGRATION": self._commit_integration,
+            "CLOSEOUT": self._closeout,
+            "STOP": self._stop,
+        }
+        return handlers[command_type](journal, command, payload)
+
+    def _register_stage(self, journal: dict[str, Any], command: Mapping[str, Any], payload: Mapping[str, Any]) -> dict[str, Any]:
+        stage = validate_stage(payload.get("stage", {}))
+        if stage["workspace_id"] != self.workspace_id:
+            raise WorkflowV2ControllerError("Stage workspace identity does not match journal")
+        if stage["stage_id"] in journal["stages"]:
+            existing = journal["stages"][stage["stage_id"]]
+            if canonical_json(existing) != canonical_json(stage):
+                raise WorkflowV2ControllerError("Stage identity collision with a different baseline")
+            return {"stage": self.show_stage(stage["stage_id"], journal=journal)}
+        if stage["status"] != "PLANNED":
+            raise WorkflowV2ControllerError("REGISTER_STAGE requires PLANNED")
+        journal["stages"][stage["stage_id"]] = _copy(stage)
+        journal["stage_runtime"][stage["stage_id"]] = {
+            "current_attempt_id": None,
+            "in_flight_operation_id": None,
+            "execution_authorized": False,
+            "integration_operation_id": None,
+            "closeout": None,
+        }
+        return {"stage": self.show_stage(stage["stage_id"], journal=journal)}
+
+    def _start(self, journal: dict[str, Any], command: Mapping[str, Any], payload: Mapping[str, Any]) -> dict[str, Any]:
+        stage_id = command["subject_id"]
+        stage = self._stage(journal, stage_id)
+        self._require_status(stage, {"PLANNED"})
+        if self._pending_decisions(journal, stage_id):
+            raise WorkflowV2ControllerError("unresolved Decision blocks START")
+        if self._open_dependencies(journal, stage_id):
+            raise WorkflowV2ControllerError("unresolved Dependency blocks START")
+        owner = journal.get("executable_owner_stage_id")
+        if owner not in (None, stage_id):
+            raise WorkflowV2ControllerError("executable owner is reserved by another Stage")
+        if stage["budgets"]["max_iterations"] < 1:
+            raise WorkflowV2ControllerError("iteration budget is exhausted")
+        iteration_id = _id("iteration", command["command_id"])
+        iteration = {
+            "schema_version": "semantic_iteration.v2",
+            "iteration_id": iteration_id,
+            "stage_id": stage_id,
+            "index": 1,
+            "solution_fingerprint": payload.get("solution_fingerprint", stage["objective_fingerprint"]),
+            "opened_by": "START",
+            "requires_next_iteration": False,
+            "review_identity": None,
+            "technical_change_digest": None,
+        }
+        validate_semantic_iteration(iteration)
+        journal["iterations"][iteration_id] = iteration
+        stage["status"] = "ACTIVE"
+        stage["current_iteration_id"] = iteration_id
+        stage["owner_stage_id"] = stage_id
+        journal["executable_owner_stage_id"] = stage_id
+        return {"stage": self.show_stage(stage_id, journal=journal), "iteration": _copy(iteration)}
+
+    def _request_execution(self, journal: dict[str, Any], command: Mapping[str, Any], payload: Mapping[str, Any]) -> dict[str, Any]:
+        stage_id = command["subject_id"]
+        stage = self._stage(journal, stage_id)
+        self._require_status(stage, {"ACTIVE"})
+        runtime = self._runtime(journal, stage_id)
+        if journal.get("executable_owner_stage_id") != stage_id:
+            raise WorkflowV2ControllerError("Stage does not own the executable token")
+        if self._pending_decisions(journal, stage_id) or self._open_dependencies(journal, stage_id):
+            raise WorkflowV2ControllerError("unresolved gate/dependency blocks execution")
+        if runtime["in_flight_operation_id"] is not None:
+            raise WorkflowV2ControllerError("an execution operation is already in flight")
+        iteration_id = stage.get("current_iteration_id")
+        if not iteration_id or iteration_id not in journal["iterations"]:
+            raise WorkflowV2ControllerError("execution requires an opened semantic iteration")
+        iteration_attempts = self._attempts_for(journal, stage_id, iteration_id)
+        if len(iteration_attempts) >= stage["budgets"]["max_attempts_per_iteration"]:
+            raise WorkflowV2ControllerError("per-iteration attempt budget exhausted")
+        if len(self._attempts_for(journal, stage_id)) >= stage["budgets"]["max_attempts_total"]:
+            raise WorkflowV2ControllerError("total attempt budget exhausted")
+        for ancestor_id in self._ancestor_ids(journal, stage_id):
+            ancestor = self._stage(journal, ancestor_id)
+            descendant_attempts = sum(
+                len(self._attempts_for(journal, descendant_id))
+                for descendant_id in self._descendant_ids(journal, ancestor_id)
+            )
+            if descendant_attempts >= ancestor["budgets"]["max_descendant_attempts"]:
+                raise WorkflowV2ControllerError("descendant attempt budget exhausted")
+        reason = str(payload.get("reason", "INITIAL")).upper()
+        if iteration_attempts and reason not in {"RETRY", "ENGINEERING_FIX", "CONTINUE"}:
+            raise WorkflowV2ControllerError("a later attempt needs an explicit typed retry/review reason")
+        if reason == "RETRY" and iteration_attempts:
+            latest_attempt = max(iteration_attempts, key=lambda item: item["attempt_index"])
+            latest_observation = next(
+                (
+                    observation
+                    for observation in journal["observations"].values()
+                    if observation.get("attempt_id") == latest_attempt["attempt_id"]
+                ),
+                None,
+            )
+            if latest_observation is None or latest_observation.get("failure", {}).get("retryability") != "RETRYABLE":
+                raise WorkflowV2ControllerError("RETRY requires a controller-typed RETRYABLE failure")
+        if reason in {"ENGINEERING_FIX", "CONTINUE"} and not runtime["execution_authorized"]:
+            raise WorkflowV2ControllerError(f"{reason} requires a typed GPT decision")
+        request = _copy(payload.get("request", {}))
+        request_id = payload.get("request_id") or _id("request", command["command_id"])
+        attempt_id = payload.get("attempt_id") or _id("attempt", command["command_id"])
+        request_digest = payload.get("request_digest") or sha256_json(request)
+        provenance = _copy(payload.get("provenance", {"provider": "fixture-provider", "engine_digest": "engine-fixed-v2"}))
+        attempt = {
+            "schema_version": "execution_attempt.v2",
+            "attempt_id": attempt_id,
+            "stage_id": stage_id,
+            "iteration_id": iteration_id,
+            "request_id": request_id,
+            "request_digest": request_digest,
+            "provenance": provenance,
+            "purpose": payload.get("purpose", stage["purpose"]),
+            "effect_state": "INTENT_COMMITTED",
+            "attempt_index": len(self._attempts_for(journal, stage_id)) + 1,
+            "committed": True,
+            "status": "REQUESTED",
+        }
+        validate_execution_attempt(attempt)
+        operation_id = payload.get("operation_id") or _id("operation", command["command_id"])
+        operation = {
+            "schema_version": "operation_envelope.v2",
+            "operation_id": operation_id,
+            "workspace_id": self.workspace_id,
+            "subject_id": attempt_id,
+            "intent_digest": request_digest,
+            "effect_state": "INTENT_COMMITTED",
+            "capability_manifest": _copy(payload.get("capability_manifest", {"query_by_operation_id": False, "idempotent_submit": False, "fence": False, "prove_not_sent": False})),
+            "status": "INTENT",
+        }
+        validate_operation_envelope(operation)
+        journal["attempts"][attempt_id] = attempt
+        journal["operations"][operation_id] = operation
+        runtime["current_attempt_id"] = attempt_id
+        runtime["in_flight_operation_id"] = operation_id
+        runtime["execution_authorized"] = False
+        stage["current_assessment_id"] = None
+        return {"stage": self.show_stage(stage_id, journal=journal), "attempt": _copy(attempt), "operation": _copy(operation)}
+
+    def _record_observation(self, journal: dict[str, Any], command: Mapping[str, Any], payload: Mapping[str, Any]) -> dict[str, Any]:
+        observation = validate_provider_observation(payload.get("observation", {}))
+        if command["subject_id"] != observation["stage_id"]:
+            raise WorkflowV2ControllerError("observation command subject does not match Stage")
+        stage = self._stage(journal, observation["stage_id"])
+        attempt = journal["attempts"].get(observation["attempt_id"])
+        if attempt is None or attempt["stage_id"] != observation["stage_id"] or attempt["iteration_id"] != observation["iteration_id"]:
+            raise WorkflowV2ControllerError("observation is not linked to the committed attempt")
+        if observation["observation_id"] in journal["observations"]:
+            existing = journal["observations"][observation["observation_id"]]
+            if canonical_json(existing) != canonical_json(observation):
+                raise WorkflowV2ControllerError("observation identity collision")
+            return {"stage": self.show_stage(stage["stage_id"], journal=journal), "observation": _copy(existing)}
+        operation_id = self._runtime(journal, stage["stage_id"])["in_flight_operation_id"]
+        if operation_id is None or operation_id not in journal["operations"]:
+            raise WorkflowV2ControllerError("observation requires the attempt operation intent")
+        operation = journal["operations"][operation_id]
+        effect_state = payload.get("effect_state")
+        if effect_state is None:
+            effect_state = observation.get("failure", {}).get("effect_state") if observation.get("failure") else "UNKNOWN"
+        effect_state = _text(effect_state, "effect_state").upper()
+        operation["effect_state"] = effect_state
+        operation["status"] = "BLOCKED" if effect_state in {"UNKNOWN", "CONFLICT"} else "RECEIPT_OBSERVED"
+        validate_operation_envelope(operation)
+        attempt["effect_state"] = effect_state
+        attempt["status"] = "OBSERVED" if observation["provider_terminal_status"] == "SUCCEEDED" else "FAILED"
+        journal["observations"][observation["observation_id"]] = _copy(observation)
+        self._runtime(journal, stage["stage_id"])["in_flight_operation_id"] = None
+        return {"stage": self.show_stage(stage["stage_id"], journal=journal), "observation": _copy(observation), "operation": _copy(operation)}
+
+    def _assess_result(self, journal: dict[str, Any], command: Mapping[str, Any], payload: Mapping[str, Any]) -> dict[str, Any]:
+        stage_id = command["subject_id"]
+        stage = self._stage(journal, stage_id)
+        self._require_status(stage, {"ACTIVE"})
+        assessment = validate_stage_assessment(payload.get("assessment", {}))
+        if assessment["stage_id"] != stage_id:
+            raise WorkflowV2ControllerError("assessment Stage subject mismatch")
+        if assessment["iteration_id"] != stage.get("current_iteration_id"):
+            raise WorkflowV2ControllerError("assessment is not bound to the current semantic iteration")
+        if assessment["correction_receipt_digest"] is not None:
+            if assessment["revalidation"] is not True:
+                raise WorkflowV2ControllerError("a correction receipt is only valid for revalidation")
+            correction = validate_correction_receipt(payload.get("correction_receipt", {}))
+            if sha256_json(correction) != assessment["correction_receipt_digest"]:
+                raise WorkflowV2ControllerError("assessment correction receipt identity does not match")
+            decision = journal["decisions"].get(correction["human_decision_id"])
+            if (
+                decision is None
+                or decision.get("actor_kind") != "HUMAN"
+                or decision.get("boundary") != "TECHNICAL_REVIEW"
+                or decision.get("subject_type") != "VALIDATOR_CORRECTION"
+                or decision.get("resolution") != "ACCEPT_CORRECTION"
+            ):
+                raise WorkflowV2ControllerError("validator correction lacks the exact accepted Human Decision")
+        runtime = self._runtime(journal, stage_id)
+        attempt = journal["attempts"].get(assessment["attempt_id"])
+        observation = next(
+            (
+                item
+                for item in journal["observations"].values()
+                if item.get("provider_result_digest") == assessment["provider_result_digest"]
+                and item.get("attempt_id") == assessment["attempt_id"]
+                and item.get("stage_id") == assessment["stage_id"]
+            ),
+            None,
+        )
+        if attempt is None or observation is None:
+            raise WorkflowV2ControllerError("assessment references an unknown attempt")
+        if runtime["current_attempt_id"] != assessment["attempt_id"]:
+            raise WorkflowV2ControllerError("only the latest committed attempt is the live candidate")
+        stage_assessments = [
+            item for item in journal["assessments"].values()
+            if item.get("stage_id") == stage_id
+        ]
+        validator_versions = {item["validator_code_digest"] for item in stage_assessments}
+        if assessment["validator_code_digest"] not in validator_versions and len(validator_versions) >= stage["budgets"]["max_validator_revisions"]:
+            raise WorkflowV2ControllerError("validator revision budget exhausted")
+        if assessment["revalidation"]:
+            revalidation_count = sum(1 for item in stage_assessments if item.get("revalidation") is True)
+            if revalidation_count >= stage["budgets"]["max_revalidation_ops"]:
+                raise WorkflowV2ControllerError("revalidation budget exhausted")
+            if assessment["supersedes_assessment_id"] is not None:
+                superseded = journal["assessments"].get(assessment["supersedes_assessment_id"])
+                if superseded is None or superseded["stage_id"] != stage_id or superseded["attempt_id"] != assessment["attempt_id"]:
+                    raise WorkflowV2ControllerError("revalidation supersedes an unrelated assessment")
+            elif any(item.get("attempt_id") == assessment["attempt_id"] for item in stage_assessments):
+                raise WorkflowV2ControllerError("revalidation must identify the assessment it supersedes")
+        operation_id = next((key for key, item in journal["operations"].items() if item["subject_id"] == assessment["attempt_id"]), None)
+        if operation_id is not None and journal["operations"][operation_id]["effect_state"] in {"UNKNOWN", "CONFLICT"}:
+            raise WorkflowV2ControllerError("unknown/conflicting external effect blocks assessment")
+        if assessment["assessment_id"] in journal["assessments"]:
+            existing = journal["assessments"][assessment["assessment_id"]]
+            if canonical_json(existing) != canonical_json(assessment):
+                raise WorkflowV2ControllerError("assessment identity collision")
+            return {"stage": self.show_stage(stage_id, journal=journal), "assessment": _copy(existing)}
+        journal["assessments"][assessment["assessment_id"]] = _copy(assessment)
+        stage["current_assessment_id"] = assessment["assessment_id"]
+        return {"stage": self.show_stage(stage_id, journal=journal), "assessment": _copy(assessment), "observation_present": observation is not None}
+
+    def _apply_gpt_decision(self, journal: dict[str, Any], command: Mapping[str, Any], payload: Mapping[str, Any]) -> dict[str, Any]:
+        stage_id = command["subject_id"]
+        stage = self._stage(journal, stage_id)
+        self._require_status(stage, {"ACTIVE"})
+        decision = validate_decision(payload.get("decision", {}))
+        if decision["actor_kind"] != "GPT" or decision["boundary"] != "TECHNICAL_REVIEW":
+            raise WorkflowV2ControllerError("APPLY_GPT_DECISION requires a Technical Review decision")
+        assessment_id = stage.get("current_assessment_id")
+        if assessment_id is None or decision["subject_id"] != assessment_id:
+            raise WorkflowV2ControllerError("GPT decision is not bound to the current assessment")
+        choice = _text(payload.get("choice"), "choice").upper()
+        typed = None
+        if choice == "REPLAN":
+            subtype = _text(payload.get("replan_subtype"), "replan_subtype").upper()
+            if f"REPLAN:{subtype}" not in decision["allowed_choices"]:
+                raise WorkflowV2ControllerError("GPT decision does not authorize this exact typed REPLAN")
+            typed = validate_typed_replan(decision, subtype)
+        elif choice not in decision["allowed_choices"]:
+            raise WorkflowV2ControllerError("GPT choice is outside the decision envelope")
+        decision_record = {**_copy(decision), "resolution": choice}
+        existing_decision = journal["decisions"].get(decision["decision_id"])
+        if existing_decision is not None:
+            if canonical_json(existing_decision) != canonical_json(decision_record):
+                raise WorkflowV2ControllerError("Decision identity collision or conflicting resolution")
+            return {"stage": self.show_stage(stage_id, journal=journal), "decision": _copy(existing_decision), "choice": choice}
+        journal["decisions"][decision["decision_id"]] = decision_record
+        if choice == "STAGE_READY":
+            assessment = journal["assessments"].get(assessment_id)
+            if assessment is None or assessment.get("verdict") != "ADMISSIBLE":
+                raise WorkflowV2ControllerError("STAGE_READY requires an ADMISSIBLE assessment")
+            if self._pending_decisions(journal, stage_id) or self._open_dependencies(journal, stage_id):
+                raise WorkflowV2ControllerError("pending Decision/Dependency blocks READY")
+            stage["status"] = "READY"
+            journal["executable_owner_stage_id"] = stage_id
+        elif choice == "REPLAN":
+            assert typed is not None
+            subtype = typed["replan_subtype"]
+            if subtype == "ENGINEERING_FIX":
+                self._runtime(journal, stage_id)["execution_authorized"] = True
+                stage["current_assessment_id"] = None
+            elif subtype == "NEXT_ITERATION":
+                self._advance_iteration(journal, command, {
+                    "review_identity": decision["decision_id"],
+                    "technical_change_digest": payload.get("technical_change_digest"),
+                    "solution_fingerprint": payload.get("solution_fingerprint", stage["objective_fingerprint"]),
+                    "requires_next_iteration": True,
+                })
+            else:
+                self._runtime(journal, stage_id)["baseline_change_requested"] = True
+                stage["current_assessment_id"] = None
+            return {"stage": self.show_stage(stage_id, journal=journal), "decision": typed}
+        elif choice == "CONTINUE":
+            stage["current_assessment_id"] = None
+            self._runtime(journal, stage_id)["execution_authorized"] = True
+        return {"stage": self.show_stage(stage_id, journal=journal), "decision": _copy(decision), "choice": choice}
+
+    def _advance_iteration(self, journal: dict[str, Any], command: Mapping[str, Any], payload: Mapping[str, Any]) -> dict[str, Any]:
+        stage_id = command["subject_id"]
+        stage = self._stage(journal, stage_id)
+        self._require_status(stage, {"ACTIVE"})
+        runtime = self._runtime(journal, stage_id)
+        if runtime["in_flight_operation_id"] is not None:
+            raise WorkflowV2ControllerError("in-flight operation blocks iteration advance")
+        current = journal["iterations"].get(stage.get("current_iteration_id"))
+        if current is None:
+            raise WorkflowV2ControllerError("no current iteration")
+        if current["index"] >= stage["budgets"]["max_iterations"]:
+            raise WorkflowV2ControllerError("iteration budget exhausted")
+        if payload.get("requires_next_iteration") is not True:
+            raise WorkflowV2ControllerError("ADVANCE_ITERATION requires explicit semantic change")
+        review_identity = payload.get("review_identity")
+        technical_change_digest = payload.get("technical_change_digest")
+        if not review_identity or not technical_change_digest:
+            raise WorkflowV2ControllerError("iteration advance requires review and technical-change identities")
+        review = journal["decisions"].get(review_identity)
+        if review is None or review.get("actor_kind") != "GPT" or review.get("boundary") != "TECHNICAL_REVIEW" or review.get("resolution") != "REPLAN":
+            raise WorkflowV2ControllerError("iteration advance requires a resolved GPT REPLAN review")
+        iteration_id = _id("iteration", command["command_id"] + "-" + str(current["index"] + 1))
+        iteration = {
+            "schema_version": "semantic_iteration.v2",
+            "iteration_id": iteration_id,
+            "stage_id": stage_id,
+            "index": current["index"] + 1,
+            "solution_fingerprint": payload.get("solution_fingerprint", stage["objective_fingerprint"]),
+            "opened_by": "ADVANCE_ITERATION",
+            "requires_next_iteration": True,
+            "review_identity": review_identity,
+            "technical_change_digest": technical_change_digest,
+        }
+        validate_semantic_iteration(iteration)
+        journal["iterations"][iteration_id] = iteration
+        stage["current_iteration_id"] = iteration_id
+        stage["current_assessment_id"] = None
+        return {"stage": self.show_stage(stage_id, journal=journal), "iteration": _copy(iteration)}
+
+    def _request_decision(self, journal: dict[str, Any], command: Mapping[str, Any], payload: Mapping[str, Any]) -> dict[str, Any]:
+        decision = validate_decision(payload.get("decision", {}))
+        if decision["actor_kind"] != "HUMAN":
+            raise WorkflowV2ControllerError("REQUEST_DECISION is reserved for Human decisions")
+        if command["subject_id"] != decision["subject_id"]:
+            raise WorkflowV2ControllerError("Decision command subject does not match the decision subject")
+        if decision["decision_id"] in journal["decisions"]:
+            existing = journal["decisions"][decision["decision_id"]]
+            if canonical_json(_decision_envelope(existing)) != canonical_json(decision):
+                raise WorkflowV2ControllerError("Decision identity collision")
+            return {"decision": _copy(existing)}
+        journal["decisions"][decision["decision_id"]] = {**_copy(decision), "resolution": None}
+        return {"decision": _copy(journal["decisions"][decision["decision_id"]])}
+
+    def _apply_decision(self, journal: dict[str, Any], command: Mapping[str, Any], payload: Mapping[str, Any]) -> dict[str, Any]:
+        decision_id = _text(payload.get("decision_id"), "decision_id")
+        decision = journal["decisions"].get(decision_id)
+        if decision is None:
+            raise WorkflowV2ControllerError("Decision is not pending in the journal")
+        if command["subject_id"] != decision["subject_id"]:
+            raise WorkflowV2ControllerError("Decision apply subject does not match the decision subject")
+        if decision.get("resolution") is not None:
+            if decision["resolution"] == payload.get("choice"):
+                return {"decision": _copy(decision)}
+            raise WorkflowV2ControllerError("conflicting Decision resolution")
+        subject_digest = _text(payload.get("subject_digest"), "subject_digest")
+        subject_version = payload.get("subject_version")
+        validate_decision_subject(_decision_envelope(decision), subject_id=decision["subject_id"], subject_digest=subject_digest, subject_version=subject_version)
+        choice = _text(payload.get("choice"), "choice").upper()
+        if choice not in decision["allowed_choices"]:
+            raise WorkflowV2ControllerError("Human choice is outside the decision envelope")
+        decision["resolution"] = choice
+        if decision["boundary"] == "TECHNICAL_REVIEW" and decision.get("subject_type") == "VALIDATOR_CORRECTION":
+            if choice == "ACCEPT_CORRECTION":
+                journal["correction_decisions"][decision["subject_id"]] = _copy(decision)
+        return {"decision": _copy(decision)}
+
+    def _add_dependency(self, journal: dict[str, Any], command: Mapping[str, Any], payload: Mapping[str, Any]) -> dict[str, Any]:
+        edge = validate_dependency(payload.get("dependency", {}))
+        if command["subject_id"] != edge["parent_id"]:
+            raise WorkflowV2ControllerError("dependency command subject does not match the parent Stage")
+        parent = self._stage(journal, edge["parent_id"])
+        child = validate_stage(payload.get("child_stage", {}))
+        if child["stage_id"] != edge["child_id"] or child["status"] != "PLANNED":
+            raise WorkflowV2ControllerError("dependency child must be a new PLANNED Stage")
+        if child["workspace_id"] != self.workspace_id:
+            raise WorkflowV2ControllerError("dependency child workspace identity does not match the journal")
+        if child.get("owner_stage_id") is not None or child.get("current_iteration_id") is not None or child.get("current_assessment_id") is not None:
+            raise WorkflowV2ControllerError("dependency child must have no pre-existing lifecycle ownership")
+        self._require_status(parent, {"PLANNED", "ACTIVE"})
+        if edge["child_id"] in journal["stages"]:
+            raise WorkflowV2ControllerError("dependency child identity already exists")
+        authorization = journal["decisions"].get(edge["authorization_decision_id"])
+        if authorization is None:
+            raise WorkflowV2ControllerError("dependency requires a Human planning Decision")
+        try:
+            validate_decision_subject(
+                _decision_envelope(authorization),
+                subject_id=edge["child_id"],
+                subject_digest=dependency_authorization_digest(edge),
+                subject_version=1,
+            )
+        except ContractValidationError as exc:
+            raise WorkflowV2ControllerError("dependency authorization Decision is not bound to this edge") from exc
+        if (
+            authorization.get("actor_kind") != "HUMAN"
+            or authorization.get("boundary") != "STAGE_PLANNING"
+            or authorization.get("subject_type") != "DEPENDENCY"
+            or authorization.get("resolution") != "ACCEPT_DEPENDENCY"
+        ):
+            raise WorkflowV2ControllerError("dependency requires an accepted Human DEPENDENCY Decision")
+        if self._runtime(journal, edge["parent_id"])["in_flight_operation_id"] is not None:
+            raise WorkflowV2ControllerError("in-flight parent operation blocks dependency insertion")
+        if journal.get("executable_owner_stage_id") not in (None, edge["parent_id"]):
+            raise WorkflowV2ControllerError("another Stage owns the executable token")
+        if self._open_dependencies(journal, edge["parent_id"]):
+            raise WorkflowV2ControllerError("parent already has an open dependency child")
+        dependency_fields = ("schema_version", "parent_id", "child_id", "predicate", "input_binding", "output_contract_digest", "authorization_decision_id", "child_status")
+        existing = [
+            {key: item[key] for key in dependency_fields}
+            for item in journal["dependencies"].values()
+        ] + [edge]
+        parent_budget = parent["budgets"]
+        validate_dependency_graph(existing, max_nodes=parent_budget["max_dependency_nodes"], max_depth=parent_budget["max_dependency_depth"])
+        if parent["status"] == "ACTIVE" and journal.get("executable_owner_stage_id") != edge["parent_id"]:
+            raise WorkflowV2ControllerError("ACTIVE parent must own token before transferring to child")
+        journal["stages"][child["stage_id"]] = _copy(child)
+        journal["stage_runtime"][child["stage_id"]] = {"current_attempt_id": None, "in_flight_operation_id": None, "execution_authorized": False, "integration_operation_id": None, "closeout": None}
+        journal["dependencies"][edge["child_id"]] = {**_copy(edge), "status": "OPEN"}
+        journal["executable_owner_stage_id"] = edge["child_id"]
+        return {"stage": self.show_stage(edge["parent_id"], journal=journal), "child": self.show_stage(edge["child_id"], journal=journal), "dependency": _copy(journal["dependencies"][edge["child_id"]])}
+
+    def _satisfy_dependency(self, journal: dict[str, Any], command: Mapping[str, Any], payload: Mapping[str, Any]) -> dict[str, Any]:
+        child_id = _text(payload.get("child_id", command["subject_id"]), "child_id")
+        edge = journal["dependencies"].get(child_id)
+        if edge is None or edge["status"] != "OPEN":
+            raise WorkflowV2ControllerError("dependency is not open")
+        if command["subject_id"] != edge["parent_id"]:
+            raise WorkflowV2ControllerError("dependency satisfaction subject does not match the parent Stage")
+        child = self._stage(journal, child_id)
+        parent = self._stage(journal, edge["parent_id"])
+        self._require_status(parent, {"PLANNED", "ACTIVE"})
+        if child["status"] != "CLOSED":
+            raise WorkflowV2ControllerError("only a CLOSED child can satisfy a dependency")
+        output_digest = _text(payload.get("output_contract_digest"), "output_contract_digest")
+        if output_digest != edge["output_contract_digest"]:
+            raise WorkflowV2ControllerError("child closeout does not match dependency output contract")
+        closeout_identity = _text(payload.get("closeout_identity"), "closeout_identity")
+        closeout = self._runtime(journal, child_id).get("closeout")
+        if not isinstance(closeout, Mapping) or closeout.get("closeout_id") != closeout_identity:
+            raise WorkflowV2ControllerError("dependency satisfaction must bind the child's committed closeout")
+        edge["status"] = "SATISFIED"
+        edge["satisfied_by"] = closeout_identity
+        journal["executable_owner_stage_id"] = edge["parent_id"]
+        return {"parent": self.show_stage(parent["stage_id"], journal=journal), "child": self.show_stage(child_id, journal=journal), "dependency": _copy(edge)}
+
+    def _resolve_blocker(self, journal: dict[str, Any], command: Mapping[str, Any], payload: Mapping[str, Any]) -> dict[str, Any]:
+        blocker_id = _text(payload.get("blocker_id"), "blocker_id")
+        if blocker_id not in journal["blockers"]:
+            raise WorkflowV2ControllerError("unknown blocker")
+        blocker = journal["blockers"][blocker_id]
+        if blocker.get("stage_id") != command["subject_id"]:
+            raise WorkflowV2ControllerError("blocker belongs to a different Stage")
+        if blocker.get("type") == "UNKNOWN_EXTERNAL_EFFECT":
+            raise WorkflowV2ControllerError("external-effect blockers require APPLY_RECEIPT proof")
+        if payload.get("predicate_satisfied") is not True:
+            raise WorkflowV2ControllerError("typed blocker predicate is not satisfied")
+        blocker = journal["blockers"].pop(blocker_id)
+        return {"blocker": _copy(blocker), "stage": self.show_stage(command["subject_id"], journal=journal)}
+
+    def _apply_receipt(self, journal: dict[str, Any], command: Mapping[str, Any], payload: Mapping[str, Any]) -> dict[str, Any]:
+        operation_id = _text(payload.get("operation_id"), "operation_id")
+        operation = journal["operations"].get(operation_id)
+        if operation is None:
+            raise WorkflowV2ControllerError("receipt has no committed operation intent")
+        operation_stage_id = operation["subject_id"]
+        if operation_stage_id in journal["attempts"]:
+            operation_stage_id = journal["attempts"][operation_stage_id]["stage_id"]
+        if operation_stage_id != command["subject_id"]:
+            raise WorkflowV2ControllerError("receipt command subject does not match the operation Stage")
+        effect_state = _text(payload.get("effect_state"), "effect_state").upper()
+        if effect_state not in {"NOT_SENT_PROVEN", "SETTLED", "UNKNOWN", "CONFLICT", "SENT_UNSETTLED"}:
+            raise WorkflowV2ControllerError("receipt contains an unsupported external effect state")
+        receipt = payload.get("receipt", {})
+        if not isinstance(receipt, Mapping):
+            raise WorkflowV2ControllerError("receipt must be an object")
+        receipt_digest = sha256_json(receipt)
+        if payload.get("receipt_digest") is not None and payload["receipt_digest"] != receipt_digest:
+            raise WorkflowV2ControllerError("receipt_digest does not match receipt bytes")
+        if effect_state in TERMINAL_EFFECTS and not payload.get("settlement_proof"):
+            raise WorkflowV2ControllerError("terminal external effects require explicit settlement proof")
+        if effect_state == "NOT_SENT_PROVEN" and operation["capability_manifest"].get("prove_not_sent") is not True:
+            raise WorkflowV2ControllerError("NOT_SENT_PROVEN requires a capability-backed proof")
+        if operation.get("effect_state") in {"UNKNOWN", "CONFLICT"} and effect_state in {"NOT_SENT_PROVEN", "SETTLED"}:
+            if not payload.get("settlement_proof"):
+                raise WorkflowV2ControllerError("UNKNOWN/CONFLICT effects require explicit settlement proof")
+        if operation.get("effect_state") in {"NOT_SENT_PROVEN", "SETTLED"} and effect_state != operation["effect_state"]:
+            raise WorkflowV2ControllerError("terminal external effect cannot regress or change settlement")
+        operation["effect_state"] = effect_state
+        operation["status"] = "BLOCKED" if effect_state in {"UNKNOWN", "CONFLICT"} else ("SETTLED" if effect_state == "SETTLED" else "RECEIPT_OBSERVED")
+        operation["receipt_digest"] = receipt_digest
+        operation["receipt"] = _copy(receipt)
+        if effect_state in {"UNKNOWN", "CONFLICT"}:
+            journal["blockers"][operation_id] = {"blocker_id": operation_id, "stage_id": command["subject_id"], "type": "UNKNOWN_EXTERNAL_EFFECT", "operation_id": operation_id}
+        else:
+            journal["blockers"].pop(operation_id, None)
+        return {"operation": _copy(operation), "stage": self.show_stage(command["subject_id"], journal=journal)}
+
+    def _commit_integration(self, journal: dict[str, Any], command: Mapping[str, Any], payload: Mapping[str, Any]) -> dict[str, Any]:
+        stage_id = command["subject_id"]
+        stage = self._stage(journal, stage_id)
+        self._require_status(stage, {"READY"})
+        if self._pending_decisions(journal, stage_id):
+            raise WorkflowV2ControllerError("pending Decision blocks integration")
+        runtime = self._runtime(journal, stage_id)
+        if runtime["integration_operation_id"] is not None:
+            operation = journal["operations"][runtime["integration_operation_id"]]
+            return {"stage": self.show_stage(stage_id, journal=journal), "operation": _copy(operation)}
+        operation_id = payload.get("operation_id") or _id("operation", command["command_id"])
+        operation = {
+            "schema_version": "operation_envelope.v2",
+            "operation_id": operation_id,
+            "workspace_id": self.workspace_id,
+            "subject_id": stage_id,
+            "intent_digest": payload.get("target_manifest_digest") or sha256_json(payload.get("target_manifest", {})),
+            "effect_state": "INTENT_COMMITTED",
+            "capability_manifest": _copy(payload.get("capability_manifest", {"query_by_operation_id": True, "idempotent_submit": True, "fence": True, "prove_not_sent": True})),
+            "status": "INTENT",
+        }
+        validate_operation_envelope(operation)
+        journal["operations"][operation_id] = operation
+        runtime["integration_operation_id"] = operation_id
+        return {"stage": self.show_stage(stage_id, journal=journal), "operation": _copy(operation)}
+
+    def _closeout(self, journal: dict[str, Any], command: Mapping[str, Any], payload: Mapping[str, Any]) -> dict[str, Any]:
+        stage_id = command["subject_id"]
+        stage = self._stage(journal, stage_id)
+        self._require_status(stage, {"READY"})
+        runtime = self._runtime(journal, stage_id)
+        operation_id = runtime["integration_operation_id"]
+        if operation_id is None:
+            if payload.get("no_integration_required") is not True:
+                raise WorkflowV2ControllerError("CLOSEOUT requires integration receipt or explicit N/A")
+        elif journal["operations"][operation_id]["effect_state"] != "SETTLED":
+            raise WorkflowV2ControllerError("integration effect is not settled")
+        closeout_id = payload.get("closeout_id") or _id("closeout", command["command_id"])
+        runtime["closeout"] = {"closeout_id": closeout_id, "verification_digest": payload.get("verification_digest") or sha256_json(payload.get("verification", {})), "integration_operation_id": operation_id}
+        stage["status"] = "CLOSED"
+        stage["owner_stage_id"] = None
+        if journal.get("executable_owner_stage_id") == stage_id:
+            journal["executable_owner_stage_id"] = None
+        return {"stage": self.show_stage(stage_id, journal=journal), "closeout": _copy(runtime["closeout"])}
+
+    def _stop(self, journal: dict[str, Any], command: Mapping[str, Any], payload: Mapping[str, Any]) -> dict[str, Any]:
+        stage_id = command["subject_id"]
+        stage = self._stage(journal, stage_id)
+        self._require_status(stage, {"PLANNED", "ACTIVE", "READY"})
+        for operation in journal["operations"].values():
+            operation_stage = operation.get("subject_id") == stage_id or any(
+                attempt.get("attempt_id") == operation.get("subject_id") and attempt.get("stage_id") == stage_id
+                for attempt in journal["attempts"].values()
+            )
+            if operation_stage and operation.get("effect_state") in UNSETTLED_EFFECTS:
+                raise WorkflowV2ControllerError("STOP requires all external effects settled or proven not sent")
+        stage["status"] = "STOPPED"
+        stage["owner_stage_id"] = None
+        if journal.get("executable_owner_stage_id") == stage_id:
+            journal["executable_owner_stage_id"] = None
+        for edge in journal["dependencies"].values():
+            if edge.get("parent_id") == stage_id and edge.get("status") == "OPEN":
+                edge["status"] = "TERMINATED"
+        for decision in journal["decisions"].values():
+            if decision.get("subject_id") == stage_id and decision.get("resolution") is None:
+                decision["resolution"] = "STOP_SUPERSEDED"
+        return {"stage": self.show_stage(stage_id, journal=journal)}
+
+    def show_stage(self, stage_id: str | None = None, *, journal: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        source = self._journal if journal is None else journal
+        if stage_id is None:
+            stage_id = source.get("executable_owner_stage_id")
+        if stage_id is None:
+            open_stages = [
+                stage
+                for stage in source.get("stages", {}).values()
+                if stage.get("status") not in {"CLOSED", "STOPPED"}
+            ]
+            if open_stages:
+                open_stages.sort(key=lambda item: (0 if item.get("status") in {"ACTIVE", "READY"} else 1, item["stage_id"]))
+                stage_id = open_stages[0]["stage_id"]
+        if stage_id is None:
+            return {"status": None, "stage_id": None, "next_action": "REGISTER_STAGE"}
+        stage = _copy(self._stage(source, stage_id))
+        runtime = source["stage_runtime"].get(stage_id, {})
+        attempts = self._attempts_for(source, stage_id)
+        stage["attempt_count"] = len(attempts)
+        stage["iteration_count"] = sum(1 for item in source["iterations"].values() if item.get("stage_id") == stage_id)
+        stage["pending_decisions"] = [decision["decision_id"] for decision in self._pending_decisions(source, stage_id)]
+        stage["open_dependencies"] = [edge["child_id"] for edge in self._open_dependencies(source, stage_id)]
+        stage["in_flight_operation_id"] = runtime.get("in_flight_operation_id")
+        stage["owner_token"] = source.get("executable_owner_stage_id") == stage_id
+        if stage["status"] == "PLANNED":
+            stage["next_action"] = "START" if not stage["open_dependencies"] and not stage["pending_decisions"] else "WAIT"
+        elif stage["status"] == "ACTIVE":
+            if stage["pending_decisions"]:
+                stage["next_action"] = "APPLY_DECISION"
+            elif runtime.get("in_flight_operation_id"):
+                stage["next_action"] = "RECORD_OBSERVATION"
+            elif stage.get("current_assessment_id"):
+                stage["next_action"] = "APPLY_GPT_DECISION"
+            elif len(attempts) >= stage["budgets"]["max_attempts_total"]:
+                stage["next_action"] = "ASSESS_RESULT"
+            else:
+                stage["next_action"] = "REQUEST_EXECUTION"
+        elif stage["status"] == "READY":
+            stage["next_action"] = "CLOSEOUT" if runtime.get("integration_operation_id") else "COMMIT_INTEGRATION"
+        else:
+            stage["next_action"] = None
+        return stage
+
+    def resume_projection(self) -> dict[str, Any]:
+        stage = self.show_stage()
+        next_action = stage.get("next_action")
+        actor = "Human" if next_action in {"APPLY_DECISION"} else ("Provider" if next_action == "RECORD_OBSERVATION" else "Controller")
+        return {"workspace_id": self.workspace_id, "revision": self.revision, "stage": stage, "phase": "WAITING" if next_action == "WAIT" else "RUNNING", "next_action": next_action, "next_actor": actor}
+
+    def register_stage(self, stage: Mapping[str, Any], **kwargs: Any) -> dict[str, Any]:
+        return self.dispatch("REGISTER_STAGE", subject_id=stage["stage_id"], payload={"stage": stage}, **kwargs)
+
+    def start(self, stage_id: str, **kwargs: Any) -> dict[str, Any]:
+        return self.dispatch("START", subject_id=stage_id, payload=kwargs.pop("payload", {}), **kwargs)
+
+    def request_execution(self, stage_id: str, **kwargs: Any) -> dict[str, Any]:
+        payload = kwargs.pop("payload", {})
+        payload.update({key: kwargs.pop(key) for key in tuple(kwargs) if key in {"request", "request_id", "attempt_id", "request_digest", "provenance", "purpose", "reason", "operation_id", "capability_manifest"}})
+        return self.dispatch("REQUEST_EXECUTION", subject_id=stage_id, payload=payload, **kwargs)
+
+    def record_observation(self, stage_id: str, observation: Mapping[str, Any], **kwargs: Any) -> dict[str, Any]:
+        return self.dispatch("RECORD_OBSERVATION", subject_id=stage_id, payload={"observation": observation, **{key: kwargs.pop(key) for key in tuple(kwargs) if key in {"effect_state"}}}, **kwargs)
+
+    def assess_result(self, stage_id: str, assessment: Mapping[str, Any], **kwargs: Any) -> dict[str, Any]:
+        payload = {"assessment": assessment}
+        if "correction_receipt" in kwargs:
+            payload["correction_receipt"] = kwargs.pop("correction_receipt")
+        return self.dispatch("ASSESS_RESULT", subject_id=stage_id, payload=payload, **kwargs)
+
+    def apply_gpt_decision(self, stage_id: str, decision: Mapping[str, Any], *, choice: str, **kwargs: Any) -> dict[str, Any]:
+        payload = {"decision": decision, "choice": choice, **{key: kwargs.pop(key) for key in tuple(kwargs) if key in {"replan_subtype", "technical_change_digest", "solution_fingerprint"}}}
+        return self.dispatch("APPLY_GPT_DECISION", subject_id=stage_id, payload=payload, **kwargs)
+
+    def advance_iteration(self, stage_id: str, **kwargs: Any) -> dict[str, Any]:
+        return self.dispatch("ADVANCE_ITERATION", subject_id=stage_id, payload=kwargs.pop("payload", kwargs.pop("iteration", {})), **kwargs)
+
+    def request_decision(self, decision: Mapping[str, Any], **kwargs: Any) -> dict[str, Any]:
+        return self.dispatch("REQUEST_DECISION", subject_id=decision["subject_id"], payload={"decision": decision}, **kwargs)
+
+    def apply_decision(self, stage_id: str, *, payload: Mapping[str, Any] | None = None, command_id: str | None = None, expected_revision: int | None = None, **kwargs: Any) -> dict[str, Any]:
+        return self.dispatch("APPLY_DECISION", subject_id=stage_id, payload=_copy(payload if payload is not None else kwargs), command_id=command_id, expected_revision=expected_revision)
+
+    def add_dependency(self, parent_id: str, dependency: Mapping[str, Any], child_stage: Mapping[str, Any], **kwargs: Any) -> dict[str, Any]:
+        return self.dispatch("ADD_DEPENDENCY", subject_id=parent_id, payload={"dependency": dependency, "child_stage": child_stage}, **kwargs)
+
+    def satisfy_dependency(self, parent_id: str, *, payload: Mapping[str, Any] | None = None, command_id: str | None = None, expected_revision: int | None = None, **kwargs: Any) -> dict[str, Any]:
+        return self.dispatch("SATISFY_DEPENDENCY", subject_id=parent_id, payload=_copy(payload if payload is not None else kwargs), command_id=command_id, expected_revision=expected_revision)
+
+    def resolve_blocker(self, stage_id: str, *, payload: Mapping[str, Any] | None = None, command_id: str | None = None, expected_revision: int | None = None, **kwargs: Any) -> dict[str, Any]:
+        return self.dispatch("RESOLVE_BLOCKER", subject_id=stage_id, payload=_copy(payload if payload is not None else kwargs), command_id=command_id, expected_revision=expected_revision)
+
+    def apply_receipt(self, stage_id: str, *, payload: Mapping[str, Any] | None = None, command_id: str | None = None, expected_revision: int | None = None, **kwargs: Any) -> dict[str, Any]:
+        return self.dispatch("APPLY_RECEIPT", subject_id=stage_id, payload=_copy(payload if payload is not None else kwargs), command_id=command_id, expected_revision=expected_revision)
+
+    def commit_integration(self, stage_id: str, *, payload: Mapping[str, Any] | None = None, command_id: str | None = None, expected_revision: int | None = None, **kwargs: Any) -> dict[str, Any]:
+        return self.dispatch("COMMIT_INTEGRATION", subject_id=stage_id, payload=_copy(payload if payload is not None else kwargs), command_id=command_id, expected_revision=expected_revision)
+
+    def closeout(self, stage_id: str, *, payload: Mapping[str, Any] | None = None, command_id: str | None = None, expected_revision: int | None = None, **kwargs: Any) -> dict[str, Any]:
+        return self.dispatch("CLOSEOUT", subject_id=stage_id, payload=_copy(payload if payload is not None else kwargs), command_id=command_id, expected_revision=expected_revision)
+
+    def stop(self, stage_id: str, *, payload: Mapping[str, Any] | None = None, command_id: str | None = None, expected_revision: int | None = None, **kwargs: Any) -> dict[str, Any]:
+        return self.dispatch("STOP", subject_id=stage_id, payload=_copy(payload if payload is not None else kwargs), command_id=command_id, expected_revision=expected_revision)
+
+
+__all__ = ["StageController", "WorkflowV2ControllerError"]

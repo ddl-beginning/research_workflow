@@ -2878,6 +2878,9 @@ class WorkflowRuntime:
         return self._result("workflow_run", brief=document, checkpoint=checkpoint, result=bounded)
 
 
+from .workflow_v2_runtime import WorkflowRuntimeV2
+
+
 __all__ = [
     "DEFAULT_CHECKPOINT_RELATIVE",
     "RUNNER_OUTCOMES",
@@ -2888,6 +2891,7 @@ __all__ = [
     "WORKFLOW_RUNTIME_RESULT_SCHEMA_VERSION",
     "WorkflowRuntime",
     "WorkflowRuntimeError",
+    "WorkflowRuntimeV2",
 ]
 
 

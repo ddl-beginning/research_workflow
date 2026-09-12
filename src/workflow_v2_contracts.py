@@ -320,16 +320,24 @@ def validate_provider_observation(value: Mapping[str, Any]) -> dict[str, Any]:
         validate_typed_failure(observation["failure"])
     if observation["immutable"] is not True:
         _fail("immutable", "provider observations are append-only historical facts")
+    if observation["observation_id"] != observation_identity(observation):
+        _fail("observation_id", "must bind the complete immutable observation identity")
     return observation
 
 
+def _observation_identity_body(observation: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        key: copy.deepcopy(observation[key])
+        for key in (
+            "stage_id", "iteration_id", "attempt_id", "provider_result_digest",
+            "evidence_manifest_digest", "provider_terminal_status", "raw_provider_claim",
+            "provenance", "failure", "outputs",
+        )
+    }
+
+
 def observation_identity(observation: Mapping[str, Any]) -> str:
-    validate_provider_observation(observation)
-    body = {key: observation[key] for key in (
-        "stage_id", "iteration_id", "attempt_id", "provider_result_digest",
-        "evidence_manifest_digest", "provider_terminal_status", "provenance",
-    )}
-    return "observation-" + sha256_json(body)
+    return "observation-" + sha256_json(_observation_identity_body(observation))
 
 
 def assessment_identity(
@@ -411,6 +419,7 @@ def assess_observation(
     validation_contract_revision: str,
     correction_receipt: Mapping[str, Any] | None = None,
     revalidation: bool = False,
+    supersedes_assessment_id: str | None = None,
     checks: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Assess preserved evidence without executing or rewriting its provider result."""
@@ -424,10 +433,21 @@ def assess_observation(
         correction = validate_correction_receipt(correction_receipt)
         if correction["new_validator_code_digest"] != validator_code_digest:
             _fail("validator_code_digest", "does not match the approved correction receipt")
-        correction_digest = correction["correction_id"]
+        correction_digest = sha256_json(correction)
     if revalidation and correction_digest is None:
         _fail("correction_receipt", "revalidation requires an approved correction receipt")
-    verdict = "ADMISSIBLE" if manifest["complete"] else "INSUFFICIENT"
+    if supersedes_assessment_id is not None:
+        _digest(supersedes_assessment_id, "supersedes_assessment_id")
+        if not revalidation:
+            _fail("supersedes_assessment_id", "only a revalidation may supersede an assessment")
+    if not manifest["complete"]:
+        verdict = "INSUFFICIENT"
+    elif observed["provider_terminal_status"] == "SUCCEEDED":
+        verdict = "ADMISSIBLE"
+    elif revalidation and correction_digest is not None:
+        verdict = "ADMISSIBLE"
+    else:
+        verdict = "REJECTED"
     assessment = {
         "schema_version": "stage_assessment.v2",
         "assessment_id": assessment_identity(
@@ -453,7 +473,7 @@ def assess_observation(
         "verdict": verdict,
         "checks": copy.deepcopy(dict(checks or {"scope": "PASS", "evidence": "PASS" if manifest["complete"] else "MISSING"})),
         "limitations": [] if manifest["complete"] else ["immutable evidence manifest is incomplete"],
-        "supersedes_assessment_id": None,
+        "supersedes_assessment_id": supersedes_assessment_id,
         "revalidation": revalidation,
     }
     return validate_stage_assessment(assessment)
@@ -479,6 +499,10 @@ def validate_decision(value: Mapping[str, Any]) -> dict[str, Any]:
         if provenance.get("source") not in ("human_receipt", "human_instruction"):
             _fail("provenance.source", "Human decisions require a sourced receipt/instruction")
         _digest(provenance.get("receipt_digest"), "provenance.receipt_digest")
+    if decision.get("subject_type") == "VALIDATOR_CORRECTION" and (
+        decision["actor_kind"] != "HUMAN" or decision["boundary"] != "TECHNICAL_REVIEW"
+    ):
+        _fail("subject_type", "VALIDATOR_CORRECTION requires a Human Technical Review decision")
     _int(decision["subject_version"], "subject_version", minimum=0)
     return decision
 
@@ -499,8 +523,8 @@ def validate_typed_replan(decision: Mapping[str, Any], subtype: str) -> dict[str
     if checked["actor_kind"] != "GPT" or checked["boundary"] != "TECHNICAL_REVIEW":
         _fail("decision", "REPLAN requires a subject-bound GPT technical review")
     subtype = _one_of(subtype, "replan_subtype", REPLAN_SUBTYPES)
-    if subtype not in checked["allowed_choices"] and "REPLAN" not in checked["allowed_choices"]:
-        _fail("replan_subtype", "review does not authorize this typed REPLAN")
+    if f"REPLAN:{subtype}" not in checked["allowed_choices"]:
+        _fail("replan_subtype", "review does not authorize this exact typed REPLAN")
     return {**checked, "replan_subtype": subtype}
 
 
@@ -515,6 +539,20 @@ def validate_dependency(value: Mapping[str, Any]) -> dict[str, Any]:
     _text(edge["predicate"], "predicate")
     _mapping(edge["input_binding"], "input_binding")
     return edge
+
+
+def dependency_authorization_digest(value: Mapping[str, Any]) -> str:
+    """Bind a planning approval to the exact dependency edge being added."""
+
+    edge = validate_dependency(value)
+    body = {
+        key: copy.deepcopy(edge[key])
+        for key in (
+            "parent_id", "child_id", "predicate", "input_binding",
+            "output_contract_digest", "child_status",
+        )
+    }
+    return "dependency-" + sha256_json(body)
 
 
 def validate_dependency_graph(
@@ -612,7 +650,7 @@ __all__ = [
     "SHARED_SUPPORT_SCHEMA_ROOTS", "STAGE_STATES", "V2_SCHEMA_DIR", "assessment_identity",
     "assess_observation", "derive_objective_fingerprint", "load_v2_schema", "observation_identity", "validate_budget",
     "validate_command_envelope", "validate_correction_receipt", "validate_decision",
-    "validate_decision_subject", "validate_dependency", "validate_dependency_graph",
+    "validate_decision_subject", "validate_dependency", "dependency_authorization_digest", "validate_dependency_graph",
     "validate_evidence_manifest", "validate_execution_attempt", "validate_operation_envelope",
     "validate_provider_observation", "validate_semantic_iteration", "validate_stage",
     "validate_stage_assessment", "validate_typed_failure", "validate_typed_replan",

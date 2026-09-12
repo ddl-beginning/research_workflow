@@ -33,7 +33,7 @@
       "capability": "subject-bound Human decision",
       "source": "V2 evidence: src/gpt_stage_planning.py, src/stage_planning.py; tests/test_stage_planning_human_decision.py",
       "reason": "Prevents stale choices from applying to a changed requirement/design/plan/assessment.",
-      "evidence": "V2_ARCHITECTURE_DECISION.md §J; V2_ARCHITECTURE_HANDOFF.md lines 141-152",
+      "evidence": "V2_LIFECYCLE_ARCHITECTURE_DECISION.md §J; V2_ARCHITECTURE_HANDOFF.md lines 141-152",
       "target_replacement": "single REQUEST_DECISION/APPLY_DECISION resolver across four boundaries"
     },
     {

@@ -22,6 +22,8 @@
         "prove_not_sent": {"type": "boolean"}
       }
     },
-    "status": {"type": "string", "enum": ["INTENT", "RECEIPT_OBSERVED", "SETTLED", "BLOCKED"]}
+    "status": {"type": "string", "enum": ["INTENT", "RECEIPT_OBSERVED", "SETTLED", "BLOCKED"]},
+    "receipt_digest": {"type": "string", "minLength": 8},
+    "receipt": {"type": "object"}
   }
 }

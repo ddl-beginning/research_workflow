@@ -1,0 +1,228 @@
+{
+  "inventory_version": "phase-0.v1",
+  "status": "complete for all 16 canonical commands: handler, guard family, and named invariant test are present",
+  "transitions": [
+    {
+      "command": "REGISTER_STAGE",
+      "target_symbol": "workflow_v2_controller.StageController._register_stage",
+      "guard_families": [
+        "identity/provenance",
+        "baseline/scope"
+      ],
+      "tests": [
+        "tests/test_workflow_v2_controller.py::test_register_stage",
+        "tests/test_workflow_v2_invariants.py::test_register_stage_invariants"
+      ],
+      "replacement": "single workflow_v2_controller journal reducer"
+    },
+    {
+      "command": "START",
+      "target_symbol": "workflow_v2_controller.StageController._start",
+      "guard_families": [
+        "baseline/scope",
+        "owner/dependency",
+        "pending Decision",
+        "budget"
+      ],
+      "tests": [
+        "tests/test_workflow_v2_controller.py::test_start",
+        "tests/test_workflow_v2_invariants.py::test_start_invariants"
+      ],
+      "replacement": "single workflow_v2_controller journal reducer"
+    },
+    {
+      "command": "REQUEST_EXECUTION",
+      "target_symbol": "workflow_v2_controller.StageController._request_execution",
+      "guard_families": [
+        "owner/dependency",
+        "budget",
+        "effect settlement",
+        "pending Decision"
+      ],
+      "tests": [
+        "tests/test_workflow_v2_controller.py::test_request_execution",
+        "tests/test_workflow_v2_invariants.py::test_request_execution_invariants"
+      ],
+      "replacement": "single workflow_v2_controller journal reducer"
+    },
+    {
+      "command": "RECORD_OBSERVATION",
+      "target_symbol": "workflow_v2_controller.StageController._record_observation",
+      "guard_families": [
+        "identity/provenance",
+        "effect settlement"
+      ],
+      "tests": [
+        "tests/test_workflow_v2_controller.py::test_record_observation",
+        "tests/test_workflow_v2_invariants.py::test_record_observation_invariants"
+      ],
+      "replacement": "single workflow_v2_controller journal reducer"
+    },
+    {
+      "command": "ASSESS_RESULT",
+      "target_symbol": "workflow_v2_controller.StageController._assess_result",
+      "guard_families": [
+        "assessment eligibility",
+        "identity/provenance",
+        "effect settlement",
+        "budget"
+      ],
+      "tests": [
+        "tests/test_workflow_v2_controller.py::test_assess_result",
+        "tests/test_workflow_v2_invariants.py::test_assess_result_invariants"
+      ],
+      "replacement": "single workflow_v2_controller journal reducer"
+    },
+    {
+      "command": "APPLY_GPT_DECISION",
+      "target_symbol": "workflow_v2_controller.StageController._apply_gpt_decision",
+      "guard_families": [
+        "review/readiness",
+        "assessment eligibility",
+        "pending Decision"
+      ],
+      "tests": [
+        "tests/test_workflow_v2_controller.py::test_apply_gpt_decision",
+        "tests/test_workflow_v2_invariants.py::test_apply_gpt_decision_invariants"
+      ],
+      "replacement": "single workflow_v2_controller journal reducer"
+    },
+    {
+      "command": "ADVANCE_ITERATION",
+      "target_symbol": "workflow_v2_controller.StageController._advance_iteration",
+      "guard_families": [
+        "review/readiness",
+        "budget",
+        "baseline/scope"
+      ],
+      "tests": [
+        "tests/test_workflow_v2_controller.py::test_advance_iteration",
+        "tests/test_workflow_v2_invariants.py::test_advance_iteration_invariants"
+      ],
+      "replacement": "single workflow_v2_controller journal reducer"
+    },
+    {
+      "command": "REQUEST_DECISION",
+      "target_symbol": "workflow_v2_controller.StageController._request_decision",
+      "guard_families": [
+        "identity/provenance",
+        "pending Decision"
+      ],
+      "tests": [
+        "tests/test_workflow_v2_controller.py::test_request_decision",
+        "tests/test_workflow_v2_invariants.py::test_request_decision_invariants"
+      ],
+      "replacement": "single workflow_v2_controller journal reducer"
+    },
+    {
+      "command": "APPLY_DECISION",
+      "target_symbol": "workflow_v2_controller.StageController._apply_decision",
+      "guard_families": [
+        "identity/provenance",
+        "pending Decision",
+        "baseline/scope"
+      ],
+      "tests": [
+        "tests/test_workflow_v2_controller.py::test_apply_decision",
+        "tests/test_workflow_v2_invariants.py::test_apply_decision_invariants"
+      ],
+      "replacement": "single workflow_v2_controller journal reducer"
+    },
+    {
+      "command": "ADD_DEPENDENCY",
+      "target_symbol": "workflow_v2_controller.StageController._add_dependency",
+      "guard_families": [
+        "owner/dependency",
+        "budget",
+        "baseline/scope"
+      ],
+      "tests": [
+        "tests/test_workflow_v2_controller.py::test_add_dependency",
+        "tests/test_workflow_v2_invariants.py::test_add_dependency_invariants"
+      ],
+      "replacement": "single workflow_v2_controller journal reducer"
+    },
+    {
+      "command": "SATISFY_DEPENDENCY",
+      "target_symbol": "workflow_v2_controller.StageController._satisfy_dependency",
+      "guard_families": [
+        "owner/dependency",
+        "identity/provenance"
+      ],
+      "tests": [
+        "tests/test_workflow_v2_controller.py::test_satisfy_dependency",
+        "tests/test_workflow_v2_invariants.py::test_satisfy_dependency_invariants"
+      ],
+      "replacement": "single workflow_v2_controller journal reducer"
+    },
+    {
+      "command": "RESOLVE_BLOCKER",
+      "target_symbol": "workflow_v2_controller.StageController._resolve_blocker",
+      "guard_families": [
+        "identity/provenance",
+        "effect settlement"
+      ],
+      "tests": [
+        "tests/test_workflow_v2_controller.py::test_resolve_blocker",
+        "tests/test_workflow_v2_invariants.py::test_resolve_blocker_invariants"
+      ],
+      "replacement": "single workflow_v2_controller journal reducer"
+    },
+    {
+      "command": "APPLY_RECEIPT",
+      "target_symbol": "workflow_v2_controller.StageController._apply_receipt",
+      "guard_families": [
+        "identity/provenance",
+        "effect settlement"
+      ],
+      "tests": [
+        "tests/test_workflow_v2_controller.py::test_apply_receipt",
+        "tests/test_workflow_v2_invariants.py::test_apply_receipt_invariants"
+      ],
+      "replacement": "single workflow_v2_controller journal reducer"
+    },
+    {
+      "command": "COMMIT_INTEGRATION",
+      "target_symbol": "workflow_v2_controller.StageController._commit_integration",
+      "guard_families": [
+        "review/readiness",
+        "terminal/integration",
+        "effect settlement"
+      ],
+      "tests": [
+        "tests/test_workflow_v2_controller.py::test_commit_integration",
+        "tests/test_workflow_v2_invariants.py::test_commit_integration_invariants"
+      ],
+      "replacement": "single workflow_v2_controller journal reducer"
+    },
+    {
+      "command": "CLOSEOUT",
+      "target_symbol": "workflow_v2_controller.StageController._closeout",
+      "guard_families": [
+        "terminal/integration",
+        "effect settlement",
+        "identity/provenance"
+      ],
+      "tests": [
+        "tests/test_workflow_v2_controller.py::test_closeout",
+        "tests/test_workflow_v2_invariants.py::test_closeout_invariants"
+      ],
+      "replacement": "single workflow_v2_controller journal reducer"
+    },
+    {
+      "command": "STOP",
+      "target_symbol": "workflow_v2_controller.StageController._stop",
+      "guard_families": [
+        "terminal/integration",
+        "effect settlement",
+        "owner/dependency",
+        "pending Decision"
+      ],
+      "tests": [
+        "tests/test_workflow_v2_controller.py::test_stop",
+        "tests/test_workflow_v2_invariants.py::test_stop_invariants"
+      ],
+      "replacement": "single workflow_v2_controller journal reducer"
+    }
+  ]
+}

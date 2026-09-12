@@ -1,0 +1,17 @@
+{
+  "evidence_kind": "preservation_after_recheck",
+  "generated_on": "2026-09-12T18:08:18+08:00",
+  "host_before_digest": "1aaa2c1ad39e2bca3b69e956e8bed7a0c917e69dffcc963e3581ab94295b4c5b",
+  "host_after_digest": "1aaa2c1ad39e2bca3b69e956e8bed7a0c917e69dffcc963e3581ab94295b4c5b",
+  "host_file_count_before": 158,
+  "host_file_count_after": 158,
+  "host_unchanged": true,
+  "frozen_named_files_unchanged": true,
+  "frozen_git_head_before": "15fdb58cfbe91987e3a5112a9937e716bf265f59",
+  "frozen_git_head_after": "15fdb58cfbe91987e3a5112a9937e716bf265f59",
+  "frozen_git_status_count_before": 67,
+  "frozen_git_status_count_after": 67,
+  "frozen_status_unchanged": true,
+  "frozen_before_evidence": "implementation_evidence/phase-0/frozen-v2-preservation-before.json",
+  "host_before_evidence": "implementation_evidence/phase-0/host-preservation-before.json"
+}

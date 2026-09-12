@@ -36,6 +36,11 @@ from .stage_controller import (
     StageState,
     validate_stage_contract_v1,
 )
+from .workflow_v2_controller import (
+    StageController as WorkflowV2StageController,
+    WorkflowV2ControllerError,
+)
+from .workflow_v2_runtime import WorkflowRuntimeV2
 from .human_artifacts import (
     ARTIFACT_EVENT_KINDS,
     CANONICAL_HUMAN_ARTIFACTS,
@@ -440,6 +445,9 @@ __all__ = [
     "STAGE_STATES",
     "StageController",
     "StageControllerError",
+    "WorkflowV2StageController",
+    "WorkflowV2ControllerError",
+    "WorkflowRuntimeV2",
     "StageState",
     "validate_stage_contract_v1",
     "ARTIFACT_EVENT_KINDS",

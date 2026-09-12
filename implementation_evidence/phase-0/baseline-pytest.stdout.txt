@@ -1,0 +1,72 @@
+........................................................................ [ 16%]
+........................................................................ [ 33%]
+........................................................................ [ 50%]
+........................................................................ [ 67%]
+........................................................................ [ 83%]
+...................................................................FF    [100%]
+================================== FAILURES ===================================
+_ WorkflowSelfTestHarnessTests.test_human_gate_flow_is_bounded_and_keeps_raw_reply_out_of_files _
+
+self = <tests.test_workflow_self_test.WorkflowSelfTestHarnessTests testMethod=test_human_gate_flow_is_bounded_and_keeps_raw_reply_out_of_files>
+
+    def test_human_gate_flow_is_bounded_and_keeps_raw_reply_out_of_files(self) -> None:
+        # The run is still present while assertions inspect its three fixed
+        # artifacts.  TemporaryDirectory then removes only this disposable run.
+        with tempfile.TemporaryDirectory(
+            dir=str(REPO_ROOT / ".tmp"),
+            prefix="workflow_self_test_test_",
+        ) as directory:
+>           result = run_self_test(repo_root=REPO_ROOT, run_dir=Path(directory))
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+..\research_supervisor_v2_lifecycle_baseline_test\tests\test_workflow_self_test.py:23: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+..\research_supervisor_v2_lifecycle_baseline_test\scripts\workflow_self_test.py:362: in run_self_test
+    architecture, architecture_receipt_digest = _load_architecture_receipt(repository)
+                                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+repo_root = WindowsPath('D:/work/research_tools/research_supervisor_v2_lifecycle_baseline_test')
+
+    def _load_architecture_receipt(repo_root: Path) -> tuple[dict[str, Any], str]:
+        receipt_path = (repo_root / ARCHITECTURE_RECEIPT_RELATIVE).resolve()
+        if not receipt_path.is_file():
+>           raise SelfTestError(f"required architecture receipt is missing: {receipt_path}")
+E           scripts.workflow_self_test.SelfTestError: required architecture receipt is missing: D:\work\research_tools\research_supervisor_v2_lifecycle_baseline_test\.consultations\CONSULT-20260906-070055-bef2fdb6\receipt.json
+
+..\research_supervisor_v2_lifecycle_baseline_test\scripts\workflow_self_test.py:154: SelfTestError
+_ WorkflowSelfTestHarnessTests.test_stage_ready_closeout_uses_same_single_step_path _
+
+self = <tests.test_workflow_self_test.WorkflowSelfTestHarnessTests testMethod=test_stage_ready_closeout_uses_same_single_step_path>
+
+    def test_stage_ready_closeout_uses_same_single_step_path(self) -> None:
+        with tempfile.TemporaryDirectory(
+            dir=str(REPO_ROOT / ".tmp"),
+            prefix="workflow_self_test_test_",
+        ) as directory:
+>           result = run_self_test(
+                repo_root=REPO_ROOT,
+                run_dir=Path(directory),
+                closeout_decision="STAGE_READY",
+            )
+
+..\research_supervisor_v2_lifecycle_baseline_test\tests\test_workflow_self_test.py:54: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+..\research_supervisor_v2_lifecycle_baseline_test\scripts\workflow_self_test.py:362: in run_self_test
+    architecture, architecture_receipt_digest = _load_architecture_receipt(repository)
+                                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+repo_root = WindowsPath('D:/work/research_tools/research_supervisor_v2_lifecycle_baseline_test')
+
+    def _load_architecture_receipt(repo_root: Path) -> tuple[dict[str, Any], str]:
+        receipt_path = (repo_root / ARCHITECTURE_RECEIPT_RELATIVE).resolve()
+        if not receipt_path.is_file():
+>           raise SelfTestError(f"required architecture receipt is missing: {receipt_path}")
+E           scripts.workflow_self_test.SelfTestError: required architecture receipt is missing: D:\work\research_tools\research_supervisor_v2_lifecycle_baseline_test\.consultations\CONSULT-20260906-070055-bef2fdb6\receipt.json
+
+..\research_supervisor_v2_lifecycle_baseline_test\scripts\workflow_self_test.py:154: SelfTestError
+=========================== short test summary info ===========================
+FAILED ..\research_supervisor_v2_lifecycle_baseline_test\tests\test_workflow_self_test.py::WorkflowSelfTestHarnessTests::test_human_gate_flow_is_bounded_and_keeps_raw_reply_out_of_files
+FAILED ..\research_supervisor_v2_lifecycle_baseline_test\tests\test_workflow_self_test.py::WorkflowSelfTestHarnessTests::test_stage_ready_closeout_uses_same_single_step_path
+2 failed, 427 passed in 58.29s

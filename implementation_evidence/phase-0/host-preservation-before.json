@@ -1,14 +1,163 @@
 {
   "manifest_version": "phase-0.v1",
   "generated_on": "2026-09-12",
-  "name": "candidate-baseline-manifest",
-  "source_kind": "isolated candidate immutable baseline ref",
-  "root": "D:\\work\\research_tools\\research_supervisor_v2_lifecycle_candidate",
-  "ref": "15fdb58cfbe91987e3a5112a9937e716bf265f59",
+  "name": "host-full-preservation-manifest",
+  "source_kind": "stable HOST read-only full source tree",
+  "root": "D:\\work\\research_tools\\research_supervisor_poc",
   "normalization": "UTF-8 text with CRLF/CR normalized to LF for content comparison",
-  "file_count": 131,
-  "digest": "2796596c77e1ac7b49dde36fa178841cb60461199743156a4d4d933853d85971",
+  "file_count": 158,
+  "digest": "1aaa2c1ad39e2bca3b69e956e8bed7a0c917e69dffcc963e3581ab94295b4c5b",
   "files": [
+    {
+      "path": ".agents/skills/research-workflow/SKILL.md",
+      "sha256_normalized_utf8_lf": "820431dd804f9d0cec23cdb0aa7af69750ec3098c4cb1d8428b525a00893f13b",
+      "raw_bytes": 1809,
+      "normalized_bytes": 1809
+    },
+    {
+      "path": ".tmp-entry-e2e.py",
+      "sha256_normalized_utf8_lf": "915a96179ef97711a3057959d224c1d7cdaec9b025d16232f06396f05f8acf33",
+      "raw_bytes": 3147,
+      "normalized_bytes": 3145
+    },
+    {
+      "path": ".tmp-rg.txt",
+      "sha256_normalized_utf8_lf": "d078ea8b13f094ff2cc2ed86eac0fb1059c83db57ea21bd2c2ce0eada4e816c6",
+      "raw_bytes": 34372,
+      "normalized_bytes": 34023
+    },
+    {
+      "path": "AGENTS.md",
+      "sha256_normalized_utf8_lf": "6554fd8c98d3e256b6169e0b918665a5e9474b2894e480338511331d7c39bb87",
+      "raw_bytes": 662,
+      "normalized_bytes": 662
+    },
+    {
+      "path": "ARCHITECTURE.md",
+      "sha256_normalized_utf8_lf": "b1b6eab1d6a26e774863d09dc45947cf8543d623bf8ccf12b43b4df4ff28b956",
+      "raw_bytes": 10435,
+      "normalized_bytes": 10435
+    },
+    {
+      "path": "BOOTSTRAP_HANDOFF.md",
+      "sha256_normalized_utf8_lf": "0e1f3163a0765f6e11151ceb7a653b24e842c7135c73741eac844f97b260129b",
+      "raw_bytes": 8714,
+      "normalized_bytes": 8714
+    },
+    {
+      "path": "FINAL_REVIEW_RECONCILIATION.json",
+      "sha256_normalized_utf8_lf": "38869e6a4f893956b4e7692397ff3adae697edaa6c157aea04b999aa05bbeff1",
+      "raw_bytes": 1611,
+      "normalized_bytes": 1566
+    },
+    {
+      "path": "HUMAN_REVIEW.md",
+      "sha256_normalized_utf8_lf": "225ff4607097f59e6d6961fec76c46831b96a388428abff2f6b7f822013c85db",
+      "raw_bytes": 1565,
+      "normalized_bytes": 1565
+    },
+    {
+      "path": "LOCAL_BRIDGE_HANDOFF.md",
+      "sha256_normalized_utf8_lf": "a0305f9027276272775c06e637124749d2259573bd56eaa8cfb5c306c459775b",
+      "raw_bytes": 847,
+      "normalized_bytes": 847
+    },
+    {
+      "path": "PROJECT_HANDOFF.json",
+      "sha256_normalized_utf8_lf": "6f47cc1fd55dcc1bc80891614e5e8193aff64899537b400e20908bd8ca803f6a",
+      "raw_bytes": 447,
+      "normalized_bytes": 439
+    },
+    {
+      "path": "PROJECT_HANDOFF.md",
+      "sha256_normalized_utf8_lf": "e69a68e2527d5b7f9897538e6cd5a079d97b1a49faf7c1e5d7c78102f0321d90",
+      "raw_bytes": 23479,
+      "normalized_bytes": 23305
+    },
+    {
+      "path": "QUICKSTART.md",
+      "sha256_normalized_utf8_lf": "2aa843709fc70d7de11cd04aae76ccfe45dcf1403e05140c63f2584cdf753f77",
+      "raw_bytes": 11063,
+      "normalized_bytes": 11063
+    },
+    {
+      "path": "README.md",
+      "sha256_normalized_utf8_lf": "a3de42bafd5518aa908fe141349cc4047a17a5f88a9f6b782883fcc0e34d58fb",
+      "raw_bytes": 18289,
+      "normalized_bytes": 18289
+    },
+    {
+      "path": "RESEARCH_DECISION_LOG.md",
+      "sha256_normalized_utf8_lf": "823473898f2e093ac6b4a297c42e3fdd68bfb5085bf475384a6769eea797476d",
+      "raw_bytes": 12077,
+      "normalized_bytes": 12077
+    },
+    {
+      "path": "STAGE_EXECUTION_PLAN.md",
+      "sha256_normalized_utf8_lf": "bc712f05b81232a67335fc6ccc0ec893df688c8cf67b0ebc90b24c3f2c40ce1f",
+      "raw_bytes": 1562,
+      "normalized_bytes": 1562
+    },
+    {
+      "path": "STEP15_HANDOFF.md",
+      "sha256_normalized_utf8_lf": "e77c6fd9832bac1e703cb2c832e576849363d820e28de171c81fb6ed5618dc3d",
+      "raw_bytes": 4319,
+      "normalized_bytes": 4319
+    },
+    {
+      "path": "WORKFLOW_DEMO.md",
+      "sha256_normalized_utf8_lf": "8c83b248edbd6e53021218e19347465466727f4c9b8c584f6d848e4c3acce878",
+      "raw_bytes": 6306,
+      "normalized_bytes": 6306
+    },
+    {
+      "path": "debug-pack.mjs",
+      "sha256_normalized_utf8_lf": "ad50df0af0ff2eb91c1abf91d612718d1fa9264701d4b8eeb82136fdc5fa8566",
+      "raw_bytes": 516,
+      "normalized_bytes": 515
+    },
+    {
+      "path": "examples/runtime-composition.json",
+      "sha256_normalized_utf8_lf": "6c03acd51ff9212032ccf9de85c42a01249cb1ad0dfcbf82ad645a3f213cedf1",
+      "raw_bytes": 506,
+      "normalized_bytes": 506
+    },
+    {
+      "path": "fixtures/baseline.json",
+      "sha256_normalized_utf8_lf": "ae862868933675d37a6981f943920d16533f0ef9391afb872b3d53ee5b266282",
+      "raw_bytes": 190,
+      "normalized_bytes": 190
+    },
+    {
+      "path": "fixtures/fake_codex_task.json",
+      "sha256_normalized_utf8_lf": "af0c2078c4915d1c44d3cf63bd038981d6d0615b6d81c2f37fd4229415e38ac8",
+      "raw_bytes": 896,
+      "normalized_bytes": 896
+    },
+    {
+      "path": "fixtures/fake_planner_decisions.json",
+      "sha256_normalized_utf8_lf": "db8537977fdccb3a6626dc6a75913ebe7cec66f6e4484bf8bde1b9426cff2b16",
+      "raw_bytes": 758,
+      "normalized_bytes": 758
+    },
+    {
+      "path": "fixtures/fake_result_reports.json",
+      "sha256_normalized_utf8_lf": "50263665f120ca842c54ba6f7bb731f2e029df4c4748c75e18b41b08927aa9f8",
+      "raw_bytes": 2246,
+      "normalized_bytes": 2246
+    },
+    {
+      "path": "fixtures/stage_contract.json",
+      "sha256_normalized_utf8_lf": "75ac7784868b4192b85dd586ab8e8267939765d525dabec378ac67a2c07a299b",
+      "raw_bytes": 1139,
+      "normalized_bytes": 1139
+    },
+    {
+      "path": "pack-debug.json",
+      "sha256_normalized_utf8_lf": "244221f747509d7dfa74dc6cb4dd3a32d3502815bfa185a43f691ca28a277ea9",
+      "raw_bytes": 2659,
+      "normalized_bytes": 2659
+    },
     {
       "path": "schemas/artifact_manifest.schema.json",
       "sha256_normalized_utf8_lf": "61a50d2187c265d680a21ee3220bcf4d569791f3ebe0e2bbf9e3e2eb310deebf",
@@ -132,7 +281,7 @@
     {
       "path": "schemas/research_routing_contract.v1.schema.json",
       "sha256_normalized_utf8_lf": "f25e3a6fac2d59505361493a8e10564a9d1a5165046898986d4ea105455c314f",
-      "raw_bytes": 730,
+      "raw_bytes": 732,
       "normalized_bytes": 730
     },
     {
@@ -228,7 +377,7 @@
     {
       "path": "scripts/research_turn_real_e2e.py",
       "sha256_normalized_utf8_lf": "e841d5ceb33fa920722d11ecde1a1cae15fdeedb75ab80f20e475f41083691f5",
-      "raw_bytes": 4470,
+      "raw_bytes": 4548,
       "normalized_bytes": 4470
     },
     {
@@ -298,9 +447,21 @@
       "normalized_bytes": 31458
     },
     {
+      "path": "skills/codex-native-requirements-intake/SKILL.md",
+      "sha256_normalized_utf8_lf": "b0b5211cef8f51f5926a306f0a949780bcfa68ad1d21e793c781497a7cf036a4",
+      "raw_bytes": 3153,
+      "normalized_bytes": 3153
+    },
+    {
+      "path": "skills/stage-oriented-research-workflow/SKILL.md",
+      "sha256_normalized_utf8_lf": "581502776b0db279ef5c3a62326138ae7fcf314ef9089f88d34e22c68b094dfb",
+      "raw_bytes": 6691,
+      "normalized_bytes": 6691
+    },
+    {
       "path": "src/__init__.py",
       "sha256_normalized_utf8_lf": "ee938d96da8414c6908b524c5b4037a2e0f37428e08d6c4614cccc5cd33b4956",
-      "raw_bytes": 22910,
+      "raw_bytes": 22911,
       "normalized_bytes": 22910
     },
     {
@@ -354,7 +515,7 @@
     {
       "path": "src/delivery_integration.py",
       "sha256_normalized_utf8_lf": "7bca2197239e0eceec7769c00f1fab0fb91d44a5054c3595a78e5087113ab9c8",
-      "raw_bytes": 44951,
+      "raw_bytes": 45968,
       "normalized_bytes": 44951
     },
     {
@@ -390,7 +551,7 @@
     {
       "path": "src/forward_stage_planning.py",
       "sha256_normalized_utf8_lf": "69f165cec3ba20ae2422765818618e1eb4f4b497663c793c95f1332c6bfe4979",
-      "raw_bytes": 31151,
+      "raw_bytes": 31773,
       "normalized_bytes": 31151
     },
     {
@@ -450,7 +611,7 @@
     {
       "path": "src/research_routing.py",
       "sha256_normalized_utf8_lf": "03d02c0c6369f5fe712b28f7c5eff956fdf59bf6782ed4b932bde11c113825b6",
-      "raw_bytes": 3277,
+      "raw_bytes": 3278,
       "normalized_bytes": 3277
     },
     {
@@ -528,7 +689,7 @@
     {
       "path": "src/workflow_runtime.py",
       "sha256_normalized_utf8_lf": "98ecfd5047d931a846209463adc41a945e3c332b04c7c021b56308b0ee7463df",
-      "raw_bytes": 151656,
+      "raw_bytes": 153825,
       "normalized_bytes": 151656
     },
     {
@@ -648,7 +809,7 @@
     {
       "path": "tests/test_research_turn_integration.py",
       "sha256_normalized_utf8_lf": "42c644b5e9d285487951087a9c6f9237ec3cf2603d64750056e802c71e38bc10",
-      "raw_bytes": 4855,
+      "raw_bytes": 4857,
       "normalized_bytes": 4855
     },
     {
@@ -796,9 +957,6 @@
       "normalized_bytes": 3220
     }
   ],
-  "git_head": "4227fe64f622c4472421f5c36ced5e53c3cac176",
-  "baseline_ref": "15fdb58cfbe91987e3a5112a9937e716bf265f59",
-  "git_branch": "workflow-v2-lifecycle-candidate",
-  "host_normalized_digest": "2796596c77e1ac7b49dde36fa178841cb60461199743156a4d4d933853d85971",
-  "host_content_matches": true
+  "git_repository": false,
+  "verification_rule": "re-run this manifest and compare digest; HOST has no Git metadata"
 }

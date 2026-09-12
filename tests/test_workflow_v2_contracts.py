@@ -7,6 +7,7 @@ import json
 import unittest
 from pathlib import Path
 
+from src.contracts import sha256_json
 from src.workflow_v2_contracts import (
     ASSESSMENT_VERDICTS,
     DECISION_BOUNDARIES,
@@ -22,6 +23,7 @@ from src.workflow_v2_contracts import (
     assessment_identity,
     derive_objective_fingerprint,
     load_v2_schema,
+    observation_identity,
     validate_command_envelope,
     validate_correction_receipt,
     validate_decision,
@@ -96,6 +98,7 @@ class WorkflowV2ContractMatrix(unittest.TestCase):
             "immutable": True,
         }
         value.update(overrides)
+        value["observation_id"] = observation_identity(value)
         return value
 
     def manifest(self, **overrides):
@@ -123,7 +126,7 @@ class WorkflowV2ContractMatrix(unittest.TestCase):
             "subject_id": "assessment-12345678",
             "subject_digest": "assessment-12345678",
             "subject_version": 1,
-            "allowed_choices": ["CONTINUE", "REPLAN", "STAGE_READY"],
+            "allowed_choices": ["CONTINUE", "REPLAN:ENGINEERING_FIX", "REPLAN:NEXT_ITERATION", "REPLAN:BASELINE_CHANGE", "STAGE_READY"],
             "requested_action": "APPLY_GPT_DECISION",
             "provenance": {
                 "request_count": 1,
@@ -244,7 +247,7 @@ class WorkflowV2ContractMatrix(unittest.TestCase):
             evidence_manifest_digest="manifest-12345678",
             validator_code_digest="validator-new-12345678",
             validation_contract_revision="admission.v2",
-            correction_receipt_digest="correction-12345678",
+            correction_receipt_digest=sha256_json(receipt),
         )
         self.assertEqual(assessment["assessment_id"], same_id)
         changed_id = assessment_identity(
@@ -256,7 +259,7 @@ class WorkflowV2ContractMatrix(unittest.TestCase):
             evidence_manifest_digest="manifest-12345678",
             validator_code_digest="validator-other-12345678",
             validation_contract_revision="admission.v2",
-            correction_receipt_digest="correction-12345678",
+            correction_receipt_digest=sha256_json(receipt),
         )
         self.assertNotEqual(same_id, changed_id)
         self.assertEqual(validate_stage_assessment(assessment)["assessment_id"], same_id)
