@@ -7,8 +7,8 @@ only wires the protocol stream and never selects an executable or provider.
 
 from __future__ import annotations
 
-import sys
 import os
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.workflow_mcp import WorkflowMCPServer  # noqa: E402
+from src.mcp_supervisor import MCPTransportSupervisor  # noqa: E402
 
 
 TRANSPORT_TRACE_ENV = "RESEARCH_WORKFLOW_MCP_TRACE_PATH"
@@ -38,18 +39,40 @@ def _configure_utf8_stdio() -> None:
             reconfigure(encoding="utf-8", errors="strict", newline="\n")
 
 
-def main() -> int:
-    """Run the Product MCP STDIO boundary."""
+def _trace_path_is_valid(raw_trace_path: str | None) -> bool:
+    if not raw_trace_path or not raw_trace_path.strip():
+        return True
+    candidate = Path(raw_trace_path)
+    return candidate.is_absolute() and candidate.parent.is_dir()
 
-    _configure_utf8_stdio()
-    raw_trace_path = os.environ.get(TRANSPORT_TRACE_ENV)
-    trace_path = Path(raw_trace_path) if raw_trace_path and raw_trace_path.strip() else None
+
+def _run_worker() -> int:
+    """Run one isolated Product request worker."""
+
     try:
-        server = WorkflowMCPServer(transport_trace_path=trace_path)
+        server = WorkflowMCPServer(transport_trace_path=os.environ.get(TRANSPORT_TRACE_ENV))
     except ValueError:
         print("workflow MCP transport trace configuration is invalid", file=sys.stderr)
         return 2
     server.serve_stdio()
+    return 0
+
+
+def main() -> int:
+    """Run the Product MCP supervisor or its private worker."""
+
+    _configure_utf8_stdio()
+    raw_trace_path = os.environ.get(TRANSPORT_TRACE_ENV)
+    if not _trace_path_is_valid(raw_trace_path):
+        print("workflow MCP transport trace configuration is invalid", file=sys.stderr)
+        return 2
+    if "--worker" in sys.argv[1:]:
+        return _run_worker()
+    supervisor = MCPTransportSupervisor(
+        [sys.executable, str(Path(__file__).resolve()), "--worker"],
+        worker_cwd=str(ROOT),
+    )
+    supervisor.serve_stdio(sys.stdin, sys.stdout)
     return 0
 
 

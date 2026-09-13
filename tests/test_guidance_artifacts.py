@@ -103,16 +103,34 @@ class GuidanceArtifactTests(unittest.TestCase):
 
     def test_actual_markdown_digest_chain(self) -> None:
         root = Path("specs/spec-kit-adoption-and-repository-architecture-v1")
-        brief = json.loads(Path(".research/PROJECT_BRIEF.json").read_text(encoding="utf-8"))
-        checkpoint = json.loads(Path(".research/workflow-state.json").read_text(encoding="utf-8"))
-        result = validate_markdown_chain(
-            root,
-            accepted_brief=brief,
-            workflow_state=checkpoint,
-            allowed_paths=["templates", "src/guidance_artifacts.py"],
-            requirement_ids=["FR-001", "FR-002", "FR-003", "FR-004", "FR-005"],
-        )
-        self.assertEqual(result["intent_digest"], checkpoint["brief_digest"])
+        # This is a derived human-facing bundle.  Its committed V2 binding is
+        # the authority for this validation; the old V1 workflow-state.json
+        # checkpoint is intentionally not part of a fresh Product workspace.
+        binding = json.loads((root / "bindings.json").read_text(encoding="utf-8"))
+        intent = binding["intent"]
+        brief = {
+            "state": "APPROVED",
+            "project_id": intent["project_id"],
+            "revision": intent["brief_revision"],
+        }
+        # Git may materialize the tracked Markdown with CRLF on Windows while
+        # its committed digest headers are LF-based.  Validate a byte-stable
+        # isolated copy so this derived-artifact test does not depend on the
+        # checkout's line-ending policy.
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            for name in ("spec.md", "plan.md", "tasks.md"):
+                fixture.joinpath(name).write_bytes(
+                    (root / name).read_text(encoding="utf-8").replace("\r\n", "\n").encode("utf-8")
+                )
+            result = validate_markdown_chain(
+                fixture,
+                accepted_brief=brief,
+                workflow_state=intent,
+                allowed_paths=["templates", "src/guidance_artifacts.py"],
+                requirement_ids=["FR-001", "FR-002", "FR-003", "FR-004", "FR-005"],
+            )
+        self.assertEqual(result["intent_digest"], intent["brief_digest"])
         self.assertEqual(len(result["tasks_digest"]), 64)
 
 
