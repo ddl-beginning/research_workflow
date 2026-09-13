@@ -426,7 +426,7 @@ def run_installation_validation(args: argparse.Namespace) -> dict[str, Any]:
         planning_pack = context_pack(
             stage_goal="Confirm the release fixture and bounded Stage plan are sufficiently scoped for one real execution.",
             latest={"actualWork": "Fresh requirement, specs, and clean baseline exist; no provider action has run.", "tested": ["clean Git baseline", "fresh project identity"], "success": ["scope is src/add.py only", "task is non-destructive"], "failure": [], "change": "release planning gate", "whyConsult": "real GPT planning review is required", "localReferences": ["release/requirement.json", "specs/" + STAGE_ID + "/plan.md"]},
-            evidence=[{"sourcePath": "release/requirement.json", "logicalName": "requirement.json", "stagedName": "release/requirement.json", "role": "source"}, {"sourcePath": "specs/" + STAGE_ID + "/plan.md", "logicalName": "plan.md", "stagedName": "specs/plan.md", "role": "source"}],
+            evidence=[{"sourcePath": "release/requirement.json", "logicalName": "requirement.json", "stagedName": "release/requirement.json", "role": "source"}],
             commit=baseline,
             dirty=False,
         )
@@ -488,7 +488,7 @@ def run_installation_validation(args: argparse.Namespace) -> dict[str, Any]:
         technical_pack = context_pack(
             stage_goal="Review the admissible provider result for technical readiness for one scoped integration.",
             latest={"actualWork": "The real saved-ChatGPT Codex provider completed the bounded source fix.", "tested": [TEST_COMMAND], "success": ["provider status is SUCCEEDED", "observation is SETTLED", "assessment is ADMISSIBLE", "only src/add.py changed"], "failure": [], "change": f"observation {observation['observation_id']}; assessment {assessment['assessment_id']}", "whyConsult": "technical review is required before integration", "localReferences": ["release/requirement.json", "src/add.py"]},
-            evidence=[{"sourcePath": "release/requirement.json", "logicalName": "requirement.json", "stagedName": "release/requirement.json", "role": "source"}, {"sourcePath": "src/add.py", "logicalName": "add.py", "stagedName": "src/add.py", "role": "result"}],
+            evidence=[{"sourcePath": "release/requirement.json", "logicalName": "requirement.json", "stagedName": "release/requirement.json", "role": "source"}],
             commit=baseline,
             dirty=True,
         )
