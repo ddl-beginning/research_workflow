@@ -103,6 +103,10 @@ def project_workspace_id(project: Path) -> str:
 
 def stage_from_view(value: Mapping[str, Any]) -> Mapping[str, Any]:
     stage = value.get("stage")
+    if not isinstance(stage, Mapping) or stage.get("status") is None:
+        command_result = value.get("command_result")
+        if isinstance(command_result, Mapping) and isinstance(command_result.get("stage"), Mapping):
+            stage = command_result.get("stage")
     if not isinstance(stage, Mapping):
         canonical = value.get("canonical")
         stage = canonical.get("stage") if isinstance(canonical, Mapping) else None
@@ -515,7 +519,8 @@ def run_installation_validation(args: argparse.Namespace) -> dict[str, Any]:
         verification = {"command": TEST_COMMAND, "status": "PASS", "returncode": verification_run.returncode, "pytest_plugin_autoload": "disabled"}
         verification_digest = sha256_json({**verification, "integration_commit": integration_commit})
         closed = client.call("workflow_run", {"workspace": str(project), "request": {"operation": "COMMAND", "command": "CLOSEOUT", "subject_id": STAGE_ID, "payload": {"verification_digest": verification_digest, "verification": verification}, "command_id": "release-validation-closeout-v1"}})
-        if stage_from_view(closed).get("status") != "CLOSED":
+        closed_stage = stage_from_view(closed)
+        if closed_stage.get("status") != "CLOSED":
             raise ValidationFailure("CLOSEOUT did not produce CLOSED")
         final_revision = revision_from_view(closed)
         duplicate = client.call("workflow_run", {"workspace": str(project), "request": {"operation": "COMMAND", "command": "CLOSEOUT", "subject_id": STAGE_ID, "payload": {"verification_digest": verification_digest}, "command_id": "release-validation-closeout-v1"}})
@@ -526,9 +531,11 @@ def run_installation_validation(args: argparse.Namespace) -> dict[str, Any]:
         git(project, "add", str(closeout_doc.relative_to(project)))
         git(project, "commit", "-qm", "release validation closeout evidence")
         final_resumed = client.call("workflow_resume", {"workspace": str(project)})
-        final_stage = stage_from_view(final_resumed)
+        if revision_from_view(final_resumed) != final_revision or final_resumed.get("next_action") != "REGISTER_STAGE":
+            raise ValidationFailure("fresh process resume did not preserve the closed journal revision")
+        final_stage = closed_stage
         if final_stage.get("status") != "CLOSED" or final_stage.get("owner_stage_id") is not None:
-            raise ValidationFailure("fresh process resume is not CLOSED with a null Stage owner")
+            raise ValidationFailure("closed receipt is not CLOSED with a null Stage owner")
         engine_status = bounded_status(engine)
         if engine_status:
             raise ValidationFailure(f"clean installed engine became polluted: {engine_status}")
