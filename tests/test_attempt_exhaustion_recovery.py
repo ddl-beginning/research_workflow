@@ -221,6 +221,31 @@ class AttemptExhaustionRecoveryRegression(unittest.TestCase):
             self.assertEqual(len(reloaded.state["assessments"]), 1)
             self.assertEqual(len(reloaded.state["iterations"]), 2)
 
+    def test_assessment_replay_rebinds_after_continue_clears_projection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "journal.json"
+            controller, stage_id, attempts, observations = self._exhaust_current_iteration(state_path=path)
+            assessment = self._assess_latest(controller, stage_id, attempts[-1], observations[-1])
+            controller.apply_gpt_decision(
+                stage_id,
+                self.fixture.gpt_decision(assessment["assessment_id"]),
+                choice="CONTINUE",
+                command_id="command-continue-clears-assessment-12345678",
+            )
+            self.assertIsNone(controller.show_stage(stage_id)["current_assessment_id"])
+
+            reloaded = StageController.from_state(path)
+            replayed = reloaded.assess_result(
+                stage_id,
+                assessment,
+                command_id="command-replay-assessment-after-continue-12345678",
+            )
+
+            self.assertEqual(replayed["assessment"]["assessment_id"], assessment["assessment_id"])
+            self.assertEqual(
+                replayed["stage"]["current_assessment_id"], assessment["assessment_id"]
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

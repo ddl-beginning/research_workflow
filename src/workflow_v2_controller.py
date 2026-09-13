@@ -707,6 +707,16 @@ class StageController:
             existing = journal["assessments"][assessment["assessment_id"]]
             if canonical_json(existing) != canonical_json(assessment):
                 raise WorkflowV2ControllerError("assessment identity collision")
+            # A replay can arrive after a prior CONTINUE decision cleared the
+            # projection, while the immutable assessment and latest attempt
+            # are still the live candidate.  Re-bind that existing identity
+            # so recovery can continue through the canonical review path;
+            # never replace a different live assessment.
+            if (
+                stage.get("current_assessment_id") is None
+                and runtime.get("current_attempt_id") == assessment["attempt_id"]
+            ):
+                stage["current_assessment_id"] = assessment["assessment_id"]
             return {"stage": self.show_stage(stage_id, journal=journal), "assessment": _copy(existing)}
         journal["assessments"][assessment["assessment_id"]] = _copy(assessment)
         stage["current_assessment_id"] = assessment["assessment_id"]
