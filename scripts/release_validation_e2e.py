@@ -466,24 +466,14 @@ def run_installation_validation(args: argparse.Namespace) -> dict[str, Any]:
         observation = json.loads(identity_output.stdout.strip())
         identity_helper.unlink()
         client.call("workflow_run", {"workspace": str(project), "request": {"operation": "COMMAND", "command": "RECORD_OBSERVATION", "subject_id": STAGE_ID, "payload": {"observation": observation, "effect_state": "SETTLED"}, "command_id": "release-validation-observation-v1"}})
-        assessment = {
-            "schema_version": "stage_assessment.v2",
-            "assessment_id": "assessment-" + sha256_json({"observation": observation["observation_id"], "manifest": manifest["manifest_id"]}),
-            "stage_id": STAGE_ID,
-            "iteration_id": attempt["iteration_id"],
-            "attempt_id": attempt["attempt_id"],
-            "provider_result_digest": provider_result_digest,
-            "evidence_manifest_digest": manifest["manifest_id"],
-            "baseline_digest": baseline,
-            "validator_code_digest": sha256_bytes((engine / "src" / "workflow_v2_contracts.py").read_bytes()),
-            "validation_contract_revision": "release-validation-v1",
-            "verdict": "ADMISSIBLE",
-            "checks": {"provider_status": "PASS", "required_test": "PASS", "required_changed_path": "PASS", "nonempty_diff": "PASS", "protected_scope": "PASS", "routing": "STANDARD/gpt-5.6-luna/max/chatgpt"},
-            "revalidation": False,
-            "supersedes_assessment_id": None,
-            "correction_receipt_digest": None,
-            "evidence_refs": ["release/requirement.json", "src/add.py", "tests/test_add.py"],
-        }
+        assessment_input = {"observation": observation, "manifest": manifest, "baseline_digest": baseline, "validator_code_digest": sha256_bytes((engine / "src" / "workflow_v2_contracts.py").read_bytes()), "validation_contract_revision": "release-validation-v1", "checks": {"provider_status": "PASS", "required_test": "PASS", "required_changed_path": "PASS", "nonempty_diff": "PASS", "protected_scope": "PASS", "routing": "STANDARD/gpt-5.6-luna/max/chatgpt"}}
+        assessment_process = subprocess.run([str(engine_python), str(engine / "scripts" / "release_assessment_probe.py")], cwd=str(project), input=json.dumps(assessment_input, ensure_ascii=False), text=True, encoding="utf-8", errors="replace", capture_output=True, check=False, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+        if assessment_process.returncode != 0:
+            raise ValidationFailure("installed assessment contract helper failed")
+        try:
+            assessment = json.loads(assessment_process.stdout.strip())
+        except json.JSONDecodeError as exc:
+            raise ValidationFailure("installed assessment contract helper returned invalid JSON") from exc
         client.call("workflow_run", {"workspace": str(project), "request": {"operation": "COMMAND", "command": "ASSESS_RESULT", "subject_id": STAGE_ID, "payload": {"assessment": assessment}, "command_id": "release-validation-assessment-v1"}})
         technical_pack = context_pack(
             stage_goal="Review the admissible provider result for technical readiness for one scoped integration.",
