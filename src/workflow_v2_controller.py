@@ -1076,7 +1076,11 @@ class StageController:
                 stage["next_action"] = "RECORD_OBSERVATION"
             elif stage.get("current_assessment_id"):
                 stage["next_action"] = "APPLY_GPT_DECISION"
-            elif len(attempts) >= stage["budgets"]["max_attempts_total"]:
+            elif (
+                len(attempts) >= stage["budgets"]["max_attempts_total"]
+                or len(self._attempts_for(source, stage_id, stage.get("current_iteration_id")))
+                >= stage["budgets"]["max_attempts_per_iteration"]
+            ):
                 stage["next_action"] = "ASSESS_RESULT"
             else:
                 stage["next_action"] = "REQUEST_EXECUTION"
