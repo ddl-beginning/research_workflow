@@ -102,13 +102,20 @@ def project_workspace_id(project: Path) -> str:
 
 
 def stage_from_view(value: Mapping[str, Any]) -> Mapping[str, Any]:
-    canonical = value.get("canonical")
-    if not isinstance(canonical, Mapping):
-        raise ValidationFailure("Product response has no canonical projection")
-    stage = canonical.get("stage")
+    stage = value.get("stage")
+    if not isinstance(stage, Mapping):
+        canonical = value.get("canonical")
+        stage = canonical.get("stage") if isinstance(canonical, Mapping) else None
     if not isinstance(stage, Mapping):
         raise ValidationFailure("Product response canonical projection has no stage")
     return stage
+
+
+def revision_from_view(value: Mapping[str, Any]) -> Any:
+    if "revision" in value:
+        return value.get("revision")
+    canonical = value.get("canonical")
+    return canonical.get("revision") if isinstance(canonical, Mapping) else None
 
 
 class MCPClient:
@@ -223,7 +230,7 @@ def fixture_project(root: Path, *, label: str) -> None:
     (root / "release").mkdir()
     (root / "specs" / STAGE_ID).mkdir(parents=True)
     (root / ".gitignore").write_text(
-        "__pycache__/\n.pytest_cache/\n.research/\n.workflow-v2/\n",
+        "__pycache__/\n.pytest_cache/\n.research/\n.consultations/\n.workflow-v2/\n.tmp/\n",
         encoding="utf-8",
     )
     (root / SOURCE_PATH).write_text("def add(a, b):\n    return a - b\n", encoding="utf-8")
@@ -520,9 +527,9 @@ def run_installation_validation(args: argparse.Namespace) -> dict[str, Any]:
         closed = client.call("workflow_run", {"workspace": str(project), "request": {"operation": "COMMAND", "command": "CLOSEOUT", "subject_id": STAGE_ID, "payload": {"verification_digest": verification_digest, "verification": verification}, "command_id": "release-validation-closeout-v1"}})
         if stage_from_view(closed).get("status") != "CLOSED":
             raise ValidationFailure("CLOSEOUT did not produce CLOSED")
-        final_revision = closed.get("canonical", {}).get("revision")
+        final_revision = revision_from_view(closed)
         duplicate = client.call("workflow_run", {"workspace": str(project), "request": {"operation": "COMMAND", "command": "CLOSEOUT", "subject_id": STAGE_ID, "payload": {"verification_digest": verification_digest}, "command_id": "release-validation-closeout-v1"}})
-        if duplicate.get("canonical", {}).get("revision") != final_revision:
+        if revision_from_view(duplicate) != final_revision:
             raise ValidationFailure("duplicate CLOSEOUT dispatched a second effect")
         closeout_doc = project / "specs" / STAGE_ID / "CLOSEOUT.md"
         closeout_doc.write_text(f"# Workflow V2 Release Validation Closeout\n\n- Stage: `{STAGE_ID}`\n- Human decision: `ACCEPT_STAGE`\n- Provider: `openai-codex`\n- Routing: `STANDARD / gpt-5.6-luna / max / chatgpt`\n- Changed path: `{SOURCE_PATH}`\n- Required test: `{TEST_COMMAND}`\n- Integration commit: `{integration_commit}`\n- Verification: `PASS`\n- Controller state: `CLOSED`\n\nRaw prompts, responses, credentials, and cookies are not stored in this closeout.\n", encoding="utf-8")
