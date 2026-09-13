@@ -22,7 +22,7 @@ below are examples; replace them with paths on the current machine.
 ## 1. Clone the Product
 
 ```powershell
-git clone --branch workflow-v2-product-rc1 <PRODUCT_REPOSITORY_URL> C:\work\workflow-v2-product
+git clone --branch workflow-v2-stable <PRODUCT_REPOSITORY_URL> C:\work\workflow-v2-product
 Set-Location C:\work\workflow-v2-product
 git status --short --branch
 ```

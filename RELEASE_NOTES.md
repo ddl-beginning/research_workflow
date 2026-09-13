@@ -43,3 +43,9 @@ new project unless a future explicitly authorized migration stage defines that
 operation. Existing V1 projects remain on their existing host and are not
 silently converted.
 
+## Validation
+
+The release candidate `workflow-v2-product-rc7` passed the clean-room
+installation, real Provider/GPT lifecycle, resume, relocation, and
+documentation audit. See [RELEASE_VALIDATION.md](RELEASE_VALIDATION.md) for
+the bounded evidence and the two pre-existing historical fixture failures.
