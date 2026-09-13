@@ -7,6 +7,7 @@
   "additionalProperties": false,
   "required": ["schema_version"],
   "properties": {
+    "lifecycle_version": {"type": "string", "enum": ["v1", "v2"]},
     "schema_version": {"type": "string", "const": "runtime_composition.v1"},
     "stage": {
       "type": "object",
@@ -36,6 +37,8 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "profile_dir": {"type": ["string", "null"], "minLength": 1},
+        "transport": {"type": ["string", "null"], "enum": ["homepage_fallback", null]},
         "enabled": {"type": "boolean"},
         "root": {"type": ["string", "null"], "minLength": 1},
         "node_executable": {"type": "string", "minLength": 1},

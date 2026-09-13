@@ -211,10 +211,14 @@ class RuntimeCompositionConfig:
     bridge_root: str | None = None
     node_executable: str = "node"
     project_url: str | None = None
+    lifecycle_version: str = "v1"
+    bridge_profile_dir: str | None = None
+    bridge_transport: str | None = None
 
     def bounded_view(self) -> dict[str, Any]:
         return {
             "schema_version": self.schema_version,
+            "lifecycle_version": self.lifecycle_version,
             "config_path": str(self.config_path) if self.config_path is not None else None,
             "stage": {
                 "state_path": self.stage_state_path,
@@ -308,6 +312,7 @@ def _config_from_raw(raw: Mapping[str, Any], *, path: Path) -> RuntimeCompositio
     stage = raw.get("stage", {})
     executor = raw.get("executor", {})
     bridge = raw.get("bridge", {})
+    lifecycle_version = raw.get("lifecycle_version", "v1")
     if not isinstance(stage, Mapping) or not isinstance(executor, Mapping) or not isinstance(bridge, Mapping):
         raise RuntimeCompositionError("RUNTIME_CONFIG_INVALID", "runtime composition sections must be objects")
     providers_value = executor.get("providers", ["openai-codex"])
@@ -359,6 +364,9 @@ def _config_from_raw(raw: Mapping[str, Any], *, path: Path) -> RuntimeCompositio
         bridge_root=bridge_root,
         node_executable=node_executable.strip(),
         project_url=_optional_string(bridge.get("project_url"), "bridge.project_url", maximum=2000),
+        lifecycle_version=lifecycle_version,
+        bridge_profile_dir=_optional_string(bridge.get("profile_dir"), "bridge.profile_dir", maximum=2000),
+        bridge_transport=_optional_string(bridge.get("transport"), "bridge.transport", maximum=128),
     )
 
 

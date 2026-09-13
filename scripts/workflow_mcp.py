@@ -38,14 +38,20 @@ def _configure_utf8_stdio() -> None:
             reconfigure(encoding="utf-8", errors="strict", newline="\n")
 
 
-if __name__ == "__main__":  # pragma: no cover
+def main() -> int:
+    """Run the Product MCP STDIO boundary."""
+
     _configure_utf8_stdio()
     raw_trace_path = os.environ.get(TRANSPORT_TRACE_ENV)
     trace_path = Path(raw_trace_path) if raw_trace_path and raw_trace_path.strip() else None
     try:
         server = WorkflowMCPServer(transport_trace_path=trace_path)
-    except ValueError as exc:
-        # Opt-in diagnostics must never place non-JSON text on stdout.
+    except ValueError:
         print("workflow MCP transport trace configuration is invalid", file=sys.stderr)
-        raise SystemExit(2) from exc
+        return 2
     server.serve_stdio()
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())

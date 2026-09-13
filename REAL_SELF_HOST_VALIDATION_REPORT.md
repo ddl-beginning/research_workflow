@@ -38,12 +38,12 @@ Provider metadata-only artifacts are retained at
 `implementation_evidence/phase-7/real-provider-artifacts-v2_real_selfhost_validation-20260912-191659/`:
 `request.json`, `events.jsonl`, `workspace.diff`, and `run.json`. Raw prompt and
 raw JSONL storage are both explicitly false. The bounded run evidence is
-`implementation_evidence/phase-7/REAL_SELF_HOST_VALIDATION.json`.
+`../research_supervisor_v2_lifecycle_candidate/implementation_evidence/phase-7/REAL_SELF_HOST_VALIDATION.json`.
 
 ## Scenario validation
 
 The A-E run is recorded in
-`implementation_evidence/phase-7/SCENARIOS_A_E.json`; its fresh journals are
+`../research_supervisor_v2_lifecycle_candidate/implementation_evidence/phase-7/SCENARIOS_A_E.json`; its fresh journals are
 under `implementation_evidence/phase-7/scenarios/run-20260912-203100/`.
 
 | Scenario | Result and proof |
@@ -70,7 +70,7 @@ The final V2 route remains aligned with the accepted architecture:
   controller.
 
 The baseline manifests are retained in
-`implementation_evidence/phase-7/REAL_PHASE7_BASELINE.json`:
+`../research_supervisor_v2_lifecycle_candidate/implementation_evidence/phase-7/REAL_PHASE7_BASELINE.json`:
 
 | Scope | Files | Normalized digest |
 | --- | ---: | --- |
@@ -90,11 +90,11 @@ remained visible.
 ## Regression and preservation
 
 - Focused V2 regression: **50 passed**; output in
-  `implementation_evidence/phase-7/final-v2-focused-pytest.stdout.txt`.
+  `../research_supervisor_v2_lifecycle_candidate/implementation_evidence/phase-7/final-v2-focused-pytest.stdout.txt`.
 - Full candidate regression: **477 passed, 2 failed**; both failures are the
   pre-existing historical `workflow_self_test.py` cases requiring the absent
   `.consultations/CONSULT-20260906-070055-bef2fdb6/receipt.json`. Output in
-  `implementation_evidence/phase-7/final-full-pytest.stdout.txt`.
+  `../research_supervisor_v2_lifecycle_candidate/implementation_evidence/phase-7/final-full-pytest.stdout.txt`.
 - HOST `D:/work/research_tools/research_supervisor_poc`: 158-file normalized
   digest remains `1aaa2c1ad39e2bca3b69e956e8bed7a0c917e69dffcc963e3581ab94295b4c5b`.
 - Frozen V2 `D:/work/research_tools/research_supervisor_v2_clean`: named
@@ -102,7 +102,7 @@ remained visible.
   `15fdb58cfbe91987e3a5112a9937e716bf265f59`; dirty count remains `67`.
 
 The final preservation evidence is
-`implementation_evidence/phase-7/preservation-final.json`. No HOST or frozen
+`../research_supervisor_v2_lifecycle_candidate/implementation_evidence/phase-7/preservation-final.json`. No HOST or frozen
 V2 write was performed.
 
 ## Limitation

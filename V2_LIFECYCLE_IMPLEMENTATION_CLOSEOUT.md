@@ -12,7 +12,7 @@ deviation or production correction after baseline `2d5e416`.
 
 No Spec Kit program was started. The Human architecture acceptance remains the
 user-task attestation in
-`implementation_evidence/phase-0/human-architecture-acceptance.json`, not a
+`../research_supervisor_v2_lifecycle_candidate/implementation_evidence/phase-0/human-architecture-acceptance.json`, not a
 fabricated runtime receipt.
 
 ## Verification
@@ -38,8 +38,8 @@ fabricated runtime receipt.
 
 Full evidence is in
 `REAL_SELF_HOST_VALIDATION_REPORT.md`,
-`implementation_evidence/phase-7/REAL_SELF_HOST_VALIDATION.json`, and
-`implementation_evidence/phase-7/SCENARIOS_A_E.json`.
+`../research_supervisor_v2_lifecycle_candidate/implementation_evidence/phase-7/REAL_SELF_HOST_VALIDATION.json`, and
+`../research_supervisor_v2_lifecycle_candidate/implementation_evidence/phase-7/SCENARIOS_A_E.json`.
 
 ## Architecture conformance
 
@@ -58,7 +58,7 @@ HOST `D:\work\research_tools\research_supervisor_poc` remains unchanged:
 `D:\work\research_tools\research_supervisor_v2_clean` remains unchanged:
 named runtime hashes unchanged, HEAD
 `15fdb58cfbe91987e3a5112a9937e716bf265f59`, dirty count 67. Final evidence:
-`implementation_evidence/phase-7/preservation-final.json`.
+`../research_supervisor_v2_lifecycle_candidate/implementation_evidence/phase-7/preservation-final.json`.
 
 The only Phase 7 additions are candidate validation tooling and bounded
 evidence. A/D/E intentionally use local fixtures; the real external route and

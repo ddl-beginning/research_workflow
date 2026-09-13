@@ -1,0 +1,22 @@
+{
+  "schema_version": "runtime_composition.v1",
+  "lifecycle_version": "v2",
+  "stage": {
+    "state_path": ".workflow-v2/journal.json"
+  },
+  "executor": {
+    "providers": ["openai-codex"],
+    "preferred_model": "gpt-5.6-luna",
+    "fallback_model": null,
+    "auth_mode": "chatgpt",
+    "timeout_seconds": 600
+  },
+  "bridge": {
+    "enabled": true,
+    "root": "C:/path/to/chatgpt_browser_bridge",
+    "profile_dir": "C:/path/to/chatgpt_browser_bridge/.auth/chatgpt-profile",
+    "node_executable": "node",
+    "transport": "homepage_fallback",
+    "project_url": null
+  }
+}

@@ -31,6 +31,14 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 
+# Direct script execution sets ``sys.path[0]`` to ``scripts/``.  Keep the
+# product source importable from any caller working directory without adding a
+# machine-specific checkout path or requiring installation as a package.
+_PRODUCT_ROOT = Path(__file__).resolve().parents[1]
+if str(_PRODUCT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PRODUCT_ROOT))
+
+
 DEFAULT_MCP_NAME = "research-supervisor"
 DEFAULT_SKILL_NAME = "research-workflow"
 SKILL_QUICK_VALIDATE_ENV = "CODEX_SKILL_QUICK_VALIDATE"
@@ -185,7 +193,7 @@ def discover_paths(
     launcher = _resolve_file(root / "scripts" / "workflow_mcp.py", "workflow MCP launcher")
     assert launcher is not None
     source = _resolve_existing_directory(
-        skill_source or root / ".agents" / "skills" / DEFAULT_SKILL_NAME,
+        skill_source or root / "skills" / "stage-oriented-research-workflow",
         "skill source",
     )
     user_root = Path(user_skill_root or (Path.home() / ".agents" / "skills")).expanduser().resolve()
@@ -747,8 +755,47 @@ def _paths_from_args(args: argparse.Namespace) -> RuntimePaths:
     )
 
 
+def _initialize_product_runtime(
+    workspace: str | os.PathLike[str],
+    *,
+    config_path: str | os.PathLike[str] | None = None,
+) -> Mapping[str, Any]:
+    """Call the product runtime initializer without loading installer paths.
+
+    ``init`` is a product-workspace operation.  Keep its import lazy so the
+    command does not discover the user skill, Codex executable, or MCP
+    registration before the product runtime has diagnosed the requested
+    workspace.  The small wrapper is also the test seam for the CLI boundary.
+    """
+
+    from src.product_workflow_runtime import initialize_product_runtime
+    from src.runtime_composition import RuntimeCompositionError
+    from src.workflow_runtime import WorkflowRuntimeError
+
+    try:
+        result = initialize_product_runtime(workspace, config_path=config_path)
+    except (RuntimeCompositionError, WorkflowRuntimeError) as exc:
+        details = getattr(exc, "details", None)
+        if not isinstance(details, Mapping) or not details:
+            bounded_view = getattr(exc, "bounded_view", None)
+            if callable(bounded_view):
+                try:
+                    candidate = bounded_view()
+                except Exception:  # noqa: BLE001 - diagnostic boundary
+                    candidate = None
+                if isinstance(candidate, Mapping):
+                    details = candidate
+        code = getattr(exc, "code", None)
+        if not isinstance(code, str) or not code.strip():
+            code = "PRODUCT_RUNTIME_INIT_FAILED"
+        raise CLIError(code, str(exc)[:MAX_DIAGNOSTIC_TEXT], details=details if isinstance(details, Mapping) else None) from exc
+    if not isinstance(result, Mapping):
+        raise CLIError("INIT_RESULT_INVALID", "product runtime initializer returned a non-object")
+    return result
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Install and diagnose the local research-workflow Codex integration.")
+    parser = argparse.ArgumentParser(description="Install and diagnose the local Workflow V2 Product Codex integration.")
     subparsers = parser.add_subparsers(dest="command", required=True)
     for name, aliases in (
         ("install", ["register"]),
@@ -758,10 +805,28 @@ def build_parser() -> argparse.ArgumentParser:
     ):
         subparser = subparsers.add_parser(name, aliases=aliases)
         _common_arguments(subparser)
+    init_parser = subparsers.add_parser(
+        "init",
+        help="initialize and diagnose the Product runtime for an explicit workspace",
+    )
+    init_parser.add_argument("--workspace", required=True, help="existing Product workspace directory")
+    init_parser.add_argument("--runtime-config", help="existing runtime-composition config file")
+    init_parser.add_argument("--receipt", help="append bounded operation evidence to this local JSON path")
+    init_parser.add_argument("--json", action="store_true", help="emit bounded JSON")
     return parser
 
 
 def run_command(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    if args.command == "init":
+        initialized = _initialize_product_runtime(
+            args.workspace,
+            config_path=args.runtime_config,
+        )
+        result = copy.deepcopy(dict(initialized))
+        result.setdefault("schema_version", "research_workflow_init.v1")
+        result.setdefault("operation", "init")
+        return (0 if result.get("ready") is not False else 1), result
+
     paths = _paths_from_args(args)
     if args.command in {"install", "register"}:
         skill = install_skill(paths)

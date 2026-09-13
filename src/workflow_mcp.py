@@ -38,7 +38,7 @@ MCP_INITIALIZE_INSTRUCTIONS = (
     "Use workflow_resume first. Only on WORKFLOW_NOT_FOUND call workflow_start. "
     "Follow next_action/next_tool and ask at most one requirement question. "
     "Use workflow_answer for the current question, bounded updates, approval, or design review. "
-    "DESIGN_ACCEPT means Step 15 is READY, not PLANNED; workflow_run must use the configured Core V1 runner, "
+    "DESIGN_ACCEPT means Step 15 is READY, not PLANNED; workflow_run uses Core V1 for legacy config or the sole V2 StageController for explicit v2 config, "
     "and PLANNED requires validated Stage evidence. Do not bypass Core or mutate state directly."
 )
 
@@ -315,6 +315,19 @@ class WorkflowMCPServer:
         workspace = arguments.get("workspace", arguments.get("workspace_root", self.default_workspace))
         if not isinstance(workspace, str) or not workspace.strip():
             raise WorkflowRuntimeError("WORKSPACE_REQUIRED", "workspace must be supplied or configured")
+        # Explicit product composition selects the frozen V2 command adapter.
+        # Keep injected legacy/test runtimes and the default v1 path unchanged.
+        if (self.runtime_factory is WorkflowRuntime and self.runner is None
+                and self.core_runner is None and self.core_runner_factory is None
+                and self.composition_factory is None and self.orchestrator_factory is None):
+            from .runtime_composition import load_runtime_composition_config
+            try:
+                config = load_runtime_composition_config(workspace)
+            except RuntimeCompositionError as exc:
+                raise WorkflowRuntimeError(exc.code, str(exc), details=exc.bounded_view()) from exc
+            if config.lifecycle_version == "v2":
+                from .product_workflow_runtime import ProductWorkflowRuntime
+                return ProductWorkflowRuntime(workspace, config=config)
         kwargs: dict[str, Any] = {"runner": self.runner if runner is None else runner}
         if self.checkpoint_path is not None:
             kwargs["checkpoint_path"] = self.checkpoint_path
@@ -381,6 +394,8 @@ class WorkflowMCPServer:
         args = dict(arguments or {})
         runner = self.runner
         runtime = self._runtime(args, runner=runner)
+        if name == "workflow_run" and getattr(runtime, "lifecycle_version", None) == "v2":
+            return runtime.run(args.get("request"))
         if name == "workflow_run" and runner is None:
             # Rehydrate/validate the persisted workflow before discovering a
             # runtime composition.  A missing workflow must report the stable

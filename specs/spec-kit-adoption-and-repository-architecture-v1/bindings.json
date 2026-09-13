@@ -1,0 +1,32 @@
+{
+  "schema_version": "guidance_binding.v2",
+  "intent": {
+    "project_id": "project-8b081cf16e37a7462d011ed2",
+    "brief_revision": 2,
+    "brief_digest": "1c96e7ccab2e8a5a920781fe5f0c53ac8a1b8218ce2d66065f117abf7fb5463b",
+    "source_path": ".research/PROJECT_BRIEF.json"
+  },
+  "artifacts": {
+    "spec_path": "spec.md",
+    "spec_digest": "87a564b1674064c74039827320782a03a17d30ea506acc1f0cf98c1318c83058",
+    "plan_path": "plan.md",
+    "plan_digest": "e7967eddade69067f74ff0273a46c1bc2adb1d443366fd2acf4946c7a1c17f23",
+    "tasks_path": "tasks.md",
+    "tasks_digest": "c52e161c67bfd62dd5c1e97ebafdce2e3fa3650495005bd757e291962305aa5e"
+  },
+  "plan": {
+    "allowed_paths": [
+      "templates",
+      "src/guidance_artifacts.py",
+      "tests/test_guidance_artifacts.py",
+      "specs/spec-kit-adoption-and-repository-architecture-v1",
+      ".specify/memory/constitution.md"
+    ],
+    "stage_contract_digest": "guidance-correction-scope-v1"
+  },
+  "tasks": {
+    "task_ids": ["T001", "T002", "T003", "T004"],
+    "requirement_ids": ["FR-001", "FR-002", "FR-003", "FR-004", "FR-005"]
+  },
+  "policy": "Bindings are derived evidence; they never write or replace the V2 journal. The canonical constitution lives under .specify/memory/; the old Stage-local copy remains readable history only."
+}
