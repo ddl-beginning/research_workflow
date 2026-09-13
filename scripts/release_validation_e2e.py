@@ -523,7 +523,7 @@ def run_installation_validation(args: argparse.Namespace) -> dict[str, Any]:
         if closed_stage.get("status") != "CLOSED":
             raise ValidationFailure("CLOSEOUT did not produce CLOSED")
         final_revision = revision_from_view(closed)
-        duplicate = client.call("workflow_run", {"workspace": str(project), "request": {"operation": "COMMAND", "command": "CLOSEOUT", "subject_id": STAGE_ID, "payload": {"verification_digest": verification_digest}, "command_id": "release-validation-closeout-v1"}})
+        duplicate = client.call("workflow_run", {"workspace": str(project), "request": {"operation": "COMMAND", "command": "CLOSEOUT", "subject_id": STAGE_ID, "payload": {"verification_digest": verification_digest, "verification": verification}, "command_id": "release-validation-closeout-v1"}})
         if revision_from_view(duplicate) != final_revision:
             raise ValidationFailure("duplicate CLOSEOUT dispatched a second effect")
         closeout_doc = project / "specs" / STAGE_ID / "CLOSEOUT.md"
