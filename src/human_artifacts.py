@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .design_review import DesignReviewError, normalize_design_summary
+from .human_summary import build_human_presentation, render_human_presentation
 
 
 STAGE_EXECUTION_PLAN_FILENAME = "STAGE_EXECUTION_PLAN.md"
@@ -1230,6 +1231,7 @@ def build_human_review(
     stage_metadata: Any = None,
     consultation_metadata: Any = None,
     design_review_metadata: Any = None,
+    artifact_root: str | os.PathLike[str] | None = None,
 ) -> str:
     """Render ``HUMAN_REVIEW.md`` from bounded gate and review metadata."""
 
@@ -1241,6 +1243,19 @@ def build_human_review(
         design_review_metadata=design_review_metadata,
         metadata=metadata,
     )
+    presentation_metadata = dict(metadata or {})
+    if isinstance(stage_metadata, Mapping):
+        presentation_metadata.setdefault("stage", stage_metadata.get("stage", stage_metadata))
+    if isinstance(consultation_metadata, Mapping):
+        presentation_metadata.setdefault("consultation", consultation_metadata)
+    if isinstance(design_review_metadata, Mapping):
+        presentation_metadata.setdefault("design_review", design_review_metadata)
+    presentation = build_human_presentation(
+        metadata=presentation_metadata,
+        canonical_state=snapshot,
+        artifact_root=artifact_root,
+    )
+    presentation_text = render_human_presentation(presentation) + "\n\n"
     gate_status, gate = _gate(snapshot)
     consult = _latest_consultation(snapshot)
     stage = snapshot.get("stage") if isinstance(snapshot.get("stage"), Mapping) else {}
@@ -1278,7 +1293,7 @@ def build_human_review(
                 "",
             ]
         lines += [f"- 阶段目标：{closure.get('stage_goal', '未提供')}", f"- 用户可见目标：{closure.get('user_visible_goal', '未提供')}", f"- 假设：{closure.get('hypothesis', '未提供')}", f"- 实验：{closure.get('experiment', '未提供')}", f"- 证伪条件：{closure.get('falsifier', '未提供')}", "- 验收条件：", _bullet_values(closure.get('acceptance')), "- 停止规则：", _bullet_values(closure.get('stop_rules')), "- Required checks：", _bullet_values(closure.get('required_checks')), "- Review artifacts：", _bullet_values(closure.get('review_artifacts')), f"- Baseline：{closure.get('baseline', '未提供')}", f"- Architecture decision：{closure.get('architecture_decision', '未提供')}", "", "## 你现在需要决定什么", "", "请在当前任务中直接回复以下三种决定之一；不要修改 JSON、checkpoint 或 StageController：", "", "- **ACCEPT**：接受当前 Design Package，Workflow 将写入 machine state；后续才可规划实施 Stage。", "- **REQUEST_CHANGES**：指出需要修改的方案、风险或验证项，Workflow 将记录反馈并等待修订。", "- **REJECT**：拒绝当前设计，Workflow 将记录拒绝原因并停止在设计评审阶段。", "", "ACCEPT 前不会创建或启动正式实施 Stage。"]
-        return "\n".join(lines) + "\n"
+        return presentation_text + "\n".join(lines) + "\n"
     workflow_decision = consult.get("workflow_decision") or (
         "STAGE_READY" if str(stage.get("status", "")).upper() == "STAGE_READY" else None
     )
@@ -1564,7 +1579,7 @@ def build_human_review(
         "",
         ]
     )
-    return "\n".join(lines)
+    return presentation_text + "\n".join(lines)
 
 
 def generate_human_artifacts(
@@ -1575,6 +1590,7 @@ def generate_human_artifacts(
     stage_metadata: Any = None,
     consultation_metadata: Any = None,
     design_review_metadata: Any = None,
+    artifact_root: str | os.PathLike[str] | None = None,
 ) -> dict[str, str]:
     """Return all three canonical documents without touching the filesystem."""
 
@@ -1589,7 +1605,7 @@ def generate_human_artifacts(
     return {
         STAGE_EXECUTION_PLAN_FILENAME: build_stage_execution_plan(**common),
         RESEARCH_DECISION_LOG_FILENAME: build_research_decision_log(**common),
-        HUMAN_REVIEW_FILENAME: build_human_review(**common),
+        HUMAN_REVIEW_FILENAME: build_human_review(**common, artifact_root=artifact_root),
     }
 
 
@@ -1646,6 +1662,7 @@ def write_human_artifacts(
     stage_metadata: Any = None,
     consultation_metadata: Any = None,
     design_review_metadata: Any = None,
+    artifact_root: str | os.PathLike[str] | None = None,
 ) -> dict[str, Path]:
     """Create/update the lifecycle artifacts for one supported event.
 
@@ -1671,6 +1688,10 @@ def write_human_artifacts(
         design_review_metadata=design_review_metadata,
         metadata=metadata,
     )
+    should_update_review = (
+        event is None
+        and event_type is None
+    ) or _human_review_update_required(snapshot)
     documents = generate_human_artifacts(
         metadata,
         event=event,
@@ -1678,11 +1699,8 @@ def write_human_artifacts(
         stage_metadata=stage_metadata,
         consultation_metadata=consultation_metadata,
         design_review_metadata=design_review_metadata,
+        artifact_root=root if should_update_review else None,
     )
-    should_update_review = (
-        event is None
-        and event_type is None
-    ) or _human_review_update_required(snapshot)
     names = [STAGE_EXECUTION_PLAN_FILENAME, RESEARCH_DECISION_LOG_FILENAME]
     if should_update_review:
         names.append(HUMAN_REVIEW_FILENAME)

@@ -25,10 +25,14 @@ def audit(root: str | Path) -> dict[str, Any]:
         "INSTALL.md": base / "INSTALL.md",
         "QUICKSTART.md": base / "QUICKSTART.md",
         "TROUBLESHOOTING.md": base / "TROUBLESHOOTING.md",
+        "install.ps1": base / "install.ps1",
         "pyproject.toml": base / "pyproject.toml",
+        "workflow.py": base / "scripts" / "workflow.py",
         "workflow_mcp.py": base / "scripts" / "workflow_mcp.py",
         "product_doctor.py": base / "scripts" / "product_doctor.py",
+        "workflow-launcher.SKILL.md": base / "skills" / "workflow-launcher" / "SKILL.md",
         "stage.schema.json": base / "schemas" / "workflow_v2" / "stage.schema.json",
+        "MODEL_ROUTING_AUDIT.md": base / "MODEL_ROUTING_AUDIT.md",
     }
     checks: list[dict[str, str]] = []
     contents: dict[str, str] = {}
@@ -39,9 +43,9 @@ def audit(root: str | Path) -> dict[str, Any]:
             contents[label] = path.read_text(encoding="utf-8")
 
     requirements = {
-        "README.md": ("Workflow V2 Product", "Prerequisites", "INSTALL.md", "QUICKSTART.md"),
-        "INSTALL.md": ("Prerequisites", "runtime-composition.v2", "codex mcp", "workflow-v2-doctor", "ChatGPT", "Browser Bridge"),
-        "QUICKSTART.md": ("workflow_resume", "workflow_start", "workflow_run", "CLOSEOUT.md"),
+        "README.md": ("Workflow V2.1", "Install", "First-run authentication", "autonomous_research", "workflow.exe"),
+        "INSTALL.md": ("Prerequisites", "workflow.exe setup", "ChatGPT", "Browser Bridge", "Do not paste"),
+        "QUICKSTART.md": ("workflow.exe", "workflow.exe resume", "$workflow", "autonomous_research"),
         "TROUBLESHOOTING.md": (
             "CODEX_RUNTIME_UNAVAILABLE",
             "AUTHENTICATION_REQUIRED",
@@ -51,12 +55,16 @@ def audit(root: str | Path) -> dict[str, Any]:
             "WORKFLOW_NOT_FOUND",
             "HUMAN_APPROVAL_REQUIRED",
             "CONSULTATION_EFFECT_UNRESOLVED",
+            "GPT_AUTH_REQUIRED",
+            "cookie",
         ),
+        "workflow-launcher.SKILL.md": ("$workflow", "workflow resume", "thin", "lifecycle"),
+        "MODEL_ROUTING_AUDIT.md": ("STANDARD", "FRONTIER", "codex exec", "parent", "child"),
     }
     for file_name, terms in requirements.items():
-        text = contents.get(file_name, "")
+        text = contents.get(file_name, "").casefold()
         for term in terms:
-            checks.append(_check(f"docs.{file_name}.{term}", term in text, f"required term: {term}"))
+            checks.append(_check(f"docs.{file_name}.{term}", term.casefold() in text, f"required term: {term}"))
 
     ready = all(item["status"] == "PASS" for item in checks)
     return {

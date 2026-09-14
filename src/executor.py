@@ -179,9 +179,13 @@ class ExecutionRequest:
             for key in (
                 "request_id",
                 "executor_request_id",
+                "parent_operation_id",
+                "child_operation_id",
+                "operation_id",
                 "execution_profile",
                 "execution_profile_authority",
                 "standard_execution_failures",
+                "fallback_model",
                 "lane",
                 "expected_plan_hash",
                 "abstraction_layer",

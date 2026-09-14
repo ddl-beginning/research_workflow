@@ -6,3 +6,11 @@ __pycache__/
 .tmp/
 .workflow-v2/
 *.egg-info/
+# Defensive ignores for accidental local setup artifacts.  The canonical
+# machine config and browser profile live outside this repository.
+ResearchWorkflow/
+browser-profile/
+workspace-registry.json
+health.json
+cookies*.json
+storage-state*.json

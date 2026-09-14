@@ -4,13 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "workflow-v2-product"
-version = "1.0.0"
+version = "2.1.0"
 description = "Workflow V2 Product: bounded, resumable, project-scoped execution"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []
 
 [project.scripts]
+workflow = "scripts.workflow:main"
+research-workflow = "scripts.workflow:main"
 workflow-v2 = "scripts.research_workflow_cli:main"
 workflow-v2-doctor = "scripts.product_doctor:main"
 workflow-v2-mcp = "scripts.workflow_mcp:main"

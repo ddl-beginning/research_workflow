@@ -60,6 +60,12 @@ from .human_artifacts import (
     update_human_artifacts_for_event,
     write_human_artifacts,
 )
+from .human_summary import (
+    MACHINE_DETAIL_KEYS,
+    PRESENTATION_STATUSES,
+    build_human_presentation,
+    render_human_presentation,
+)
 from .artifacts import (
     ARTIFACT_ROLES,
     ArtifactRegistry,
@@ -467,6 +473,10 @@ __all__ = [
     "update_human_artifacts",
     "update_human_artifacts_for_event",
     "write_human_artifacts",
+    "MACHINE_DETAIL_KEYS",
+    "PRESENTATION_STATUSES",
+    "build_human_presentation",
+    "render_human_presentation",
     "ARTIFACT_ROLES",
     "ArtifactRegistry",
     "ArtifactRegistryError",

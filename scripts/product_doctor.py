@@ -26,7 +26,7 @@ from src.product_workflow_runtime import doctor_product_runtime
 from src.runtime_composition import RuntimeCompositionConfig, RuntimeCompositionError, load_runtime_composition_config
 
 
-PRODUCT_VERSION = "1.0.0"
+PRODUCT_VERSION = "2.1.0"
 MCP_NAME = "research-supervisor"
 CONFIG_ENV = "RESEARCH_WORKFLOW_RUNTIME_CONFIG"
 

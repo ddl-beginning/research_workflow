@@ -239,6 +239,18 @@ def select_available_model(
         return None
 
     selected = match(normalized)
+    if selected is None:
+        # Some Codex CLI catalogs expose an account-scoped id and a generic
+        # model field while retaining a stable family display name (for
+        # example ``acct-luna`` / ``Luna``).  Treat that observed family name
+        # as an alias of the canonical route; this is catalog resolution, not
+        # a fallback to another route.
+        for family in ("luna", "astra"):
+            if family not in normalized:
+                continue
+            selected = match(family)
+            if selected:
+                break
     if selected:
         return selected
     if fallback is not None:
@@ -383,6 +395,55 @@ def _status_paths(output: str) -> tuple[str, ...]:
 
 def _digest_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8", errors="replace")).hexdigest()
+
+
+def _operation_ids(request: ExecutionRequest) -> tuple[str, str]:
+    """Return stable parent/child identities for one isolated Codex turn."""
+
+    metadata = request.metadata
+    parent = metadata.get("parent_operation_id") or metadata.get("operation_id") or metadata.get("request_id") or request.task_id
+    if not isinstance(parent, str) or not parent.strip():
+        raise ContractValidationError("parent_operation_id must be a bounded identity")
+    parent = parent.strip()[:256]
+    explicit_child = metadata.get("child_operation_id")
+    if explicit_child is not None:
+        if not isinstance(explicit_child, str) or not explicit_child.strip():
+            raise ContractValidationError("child_operation_id must be a bounded identity")
+        child = explicit_child.strip()[:256]
+    else:
+        seed = json.dumps(
+            {
+                "parent": parent,
+                "task_id": request.task_id,
+                "attempt_index": request.attempt_index,
+                "execution_profile": metadata.get("execution_profile", "STANDARD"),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        child = "child-" + _digest_text(seed)[:32]
+    return parent, child
+
+
+def _result_identity(
+    *,
+    child_operation_id: str,
+    returncode: int,
+    terminal_status: str,
+    changed_files: Sequence[str],
+    tests: Sequence[Mapping[str, Any]],
+    diff_digest: str,
+) -> str:
+    payload = {
+        "child_operation_id": child_operation_id,
+        "returncode": returncode,
+        "terminal_status": terminal_status,
+        "changed_files": list(changed_files),
+        "tests": [dict(item) for item in tests],
+        "diff_sha256": diff_digest,
+    }
+    return "result-" + _digest_text(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")))[:40]
 
 
 def _normalise_command_text(value: str) -> str:
@@ -761,6 +822,7 @@ class OpenAICodexExecutor:
         problems: Sequence[str],
         model: str,
         routing: RoutingDecision,
+        execution_binding: Mapping[str, Any],
     ) -> dict[str, Any]:
         """Persist only bounded, metadata-only run evidence outside workspace."""
 
@@ -794,6 +856,7 @@ class OpenAICodexExecutor:
                 "actual_model": model,
                 "execution_profile": routing.execution_profile,
                 "reasoning_effort": routing.reasoning_effort,
+                **dict(execution_binding),
                 "auth_mode": "chatgpt",
                 "profile_derivation_reason": routing.profile_derivation_reason,
                 "executor_request_id": routing.executor_request_id,
@@ -939,6 +1002,20 @@ class OpenAICodexExecutor:
             "profile_derivation_reason": None,
             "executor_request_id": request.metadata.get("executor_request_id") or request.metadata.get("request_id") or request.task_id,
         }
+        if routing is not None:
+            parent_operation_id, child_operation_id = _operation_ids(request)
+            routing_view.update(
+                {
+                    "requested_route": routing.execution_profile,
+                    "requested_model": routing.model,
+                    "requested_reasoning_effort": routing.reasoning_effort,
+                    "actual_model": model,
+                    "actual_reasoning_effort": routing.reasoning_effort if model is not None else None,
+                    "parent_operation_id": parent_operation_id,
+                    "child_operation_id": child_operation_id,
+                    "result_identity": "result-" + _digest_text(f"{child_operation_id}:{code}:{bounded_reason}")[:40],
+                }
+            )
         measurements = {
             "openai_codex": {
                 "model": model,
@@ -1035,7 +1112,10 @@ class OpenAICodexExecutor:
         preference = routing.model
         fallback = None
         if routing.execution_profile == "STANDARD":
-            fallback = request.metadata.get("fallback_model") or self.fallback_model or self.preferred_model
+            # A fallback is allowed only when explicitly configured by the
+            # caller/provider.  The implicit preferred-model fallback would
+            # hide a missing canonical model and misstate the route.
+            fallback = request.metadata.get("fallback_model") or self.fallback_model
         try:
             model = select_available_model(self._runtime.models, preference, fallback=fallback)
         except OpenAICodexUnavailable as exc:
@@ -1047,6 +1127,16 @@ class OpenAICodexExecutor:
                 reason=str(exc),
                 routing=routing,
             )
+        parent_operation_id, child_operation_id = _operation_ids(request)
+        execution_binding = {
+            "requested_route": routing.execution_profile,
+            "requested_model": routing.model,
+            "requested_reasoning_effort": routing.reasoning_effort,
+            "actual_model": model,
+            "actual_reasoning_effort": routing.reasoning_effort,
+            "parent_operation_id": parent_operation_id,
+            "child_operation_id": child_operation_id,
+        }
         requirements = self._requirements(request)
         artifact_root = self._artifact_root(workspace, request)
         before = self._status(workspace)
@@ -1141,6 +1231,16 @@ class OpenAICodexExecutor:
             "required_test_passed": observation.required_test_passed,
             "nonempty_diff": diff_nonempty,
         }
+        tests = list(observation.tests)
+        diff_digest = _digest_text(after_diff.stdout)
+        execution_binding["result_identity"] = _result_identity(
+            child_operation_id=child_operation_id,
+            returncode=run.returncode,
+            terminal_status=observation.terminal_status,
+            changed_files=changed_files,
+            tests=tests,
+            diff_digest=diff_digest,
+        )
         artifact_info: dict[str, Any] | None = None
         if artifact_root is not None:
             artifact_info = self._persist_artifacts(
@@ -1161,13 +1261,13 @@ class OpenAICodexExecutor:
                 problems=problems,
                 model=model,
                 routing=routing,
+                execution_binding=execution_binding,
             )
             if not artifact_info.get("saved", False):
                 problems.append("artifact_persistence_failed")
                 acceptance["coding_e2e_accepted"] = False
 
         status = "SUCCEEDED" if not problems else ("ERROR" if provider_failure is not None else "FAILED")
-        tests = list(observation.tests)
         diff_bytes = len(after_diff.stdout.encode("utf-8", errors="replace"))
         evidence_refs = ["codex://jsonl-events", "workspace://git-status", "workspace://git-diff"]
         review_artifacts: list[dict[str, Any]] = []
@@ -1200,6 +1300,7 @@ class OpenAICodexExecutor:
                     "actual_model": model,
                     "execution_profile": routing.execution_profile,
                     "reasoning_effort": routing.reasoning_effort,
+                    **execution_binding,
                     "provider_id": self.descriptor.provider_id,
                     "executable": self._runtime.executable,
                     "auth_mode": "chatgpt",
@@ -1219,7 +1320,7 @@ class OpenAICodexExecutor:
                     "required_test_seen": observation.required_test_seen,
                     "required_test_passed": observation.required_test_passed,
                     "before_diff_digest": _digest_text(before_diff.stdout),
-                    "after_diff_digest": _digest_text(after_diff.stdout),
+                    "after_diff_digest": diff_digest,
                     "before_diff_returncode": before_diff.returncode,
                     "after_diff_returncode": after_diff.returncode,
                     "diff_bytes": diff_bytes,
@@ -1272,6 +1373,7 @@ class OpenAICodexExecutor:
                 "actual_model": model,
                 "execution_profile": routing.execution_profile,
                 "reasoning_effort": routing.reasoning_effort,
+                **execution_binding,
                 "executable": self._runtime.executable,
                 "auth_mode": "chatgpt",
                 "profile_derivation_reason": routing.profile_derivation_reason,
@@ -1286,7 +1388,7 @@ class OpenAICodexExecutor:
                 "required_test_passed": observation.required_test_passed,
                 "diff_nonempty": diff_nonempty,
                 "diff_bytes": diff_bytes,
-                "diff_sha256": _digest_text(after_diff.stdout),
+                "diff_sha256": diff_digest,
                 "before_diff_returncode": before_diff.returncode,
                 "after_diff_returncode": after_diff.returncode,
                 "stdout": _stream_evidence(run.stdout),

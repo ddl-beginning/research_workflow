@@ -76,6 +76,8 @@ class RuntimePaths:
     python_executable: Path
     quick_validate: Path | None
     mcp_name: str = DEFAULT_MCP_NAME
+    skill_name: str = DEFAULT_SKILL_NAME
+    runtime_config: Path | None = None
 
     def bounded_view(self) -> dict[str, Any]:
         return {
@@ -88,6 +90,8 @@ class RuntimePaths:
             "python_executable": self.python_executable.as_posix(),
             "quick_validate_present": self.quick_validate is not None,
             "mcp_name": self.mcp_name,
+            "skill_name": self.skill_name,
+            "runtime_config_configured": self.runtime_config is not None,
         }
 
 
@@ -185,6 +189,8 @@ def discover_paths(
     python_executable: str | os.PathLike[str] | None = None,
     quick_validate: str | os.PathLike[str] | None = None,
     mcp_name: str = DEFAULT_MCP_NAME,
+    skill_name: str = DEFAULT_SKILL_NAME,
+    runtime_config: str | os.PathLike[str] | None = None,
 ) -> RuntimePaths:
     """Resolve portable runtime paths without assuming a checkout location."""
 
@@ -203,11 +209,13 @@ def discover_paths(
         launcher=launcher,
         skill_source=source,
         user_skill_root=user_root,
-        skill_target=user_root / DEFAULT_SKILL_NAME,
+        skill_target=user_root / skill_name,
         codex_executable=_discover_codex(codex_executable),
         python_executable=python_path,
         quick_validate=_discover_quick_validate(str(quick_validate) if quick_validate else None),
         mcp_name=mcp_name,
+        skill_name=skill_name,
+        runtime_config=Path(runtime_config).expanduser().resolve() if runtime_config else None,
     )
 
 
@@ -305,8 +313,17 @@ def registration_matches(entry: Mapping[str, Any] | None, paths: RuntimePaths) -
     if not isinstance(args, list) or len(args) != 1 or not _path_token_equal(args[0], str(paths.launcher)):
         return False
     env = transport.get("env", {})
-    if isinstance(env, Mapping) and env:
-        return False
+    if paths.runtime_config is None:
+        if isinstance(env, Mapping) and env:
+            return False
+    else:
+        if not isinstance(env, Mapping):
+            return False
+        configured = env.get("RESEARCH_WORKFLOW_RUNTIME_CONFIG")
+        if not isinstance(configured, str) or not _path_token_equal(configured, str(paths.runtime_config)):
+            return False
+        if set(str(key) for key in env) != {"RESEARCH_WORKFLOW_RUNTIME_CONFIG"}:
+            return False
     return True
 
 
@@ -435,7 +452,7 @@ def _expected_registration(paths: RuntimePaths) -> dict[str, Any]:
         "transport_type": "stdio",
         "command": str(paths.python_executable),
         "args": [str(paths.launcher)],
-        "env_keys": [],
+        "env_keys": ["RESEARCH_WORKFLOW_RUNTIME_CONFIG"] if paths.runtime_config is not None else [],
         "cwd_configured": False,
         "enabled": True,
     }
@@ -623,17 +640,11 @@ def ensure_registration(paths: RuntimePaths, *, force: bool = False) -> dict[str
             changed = "replaced"
         else:
             changed = "created"
-        result = _run_command(
-            [
-                str(codex),
-                "mcp",
-                "add",
-                paths.mcp_name,
-                "--",
-                str(paths.python_executable),
-                str(paths.launcher),
-            ]
-        )
+        registration_argv = [str(codex), "mcp", "add", paths.mcp_name]
+        if paths.runtime_config is not None:
+            registration_argv.extend(["--env", f"RESEARCH_WORKFLOW_RUNTIME_CONFIG={paths.runtime_config}"])
+        registration_argv.extend(["--", str(paths.python_executable), str(paths.launcher)])
+        result = _run_command(registration_argv)
         if result.returncode != 0:
             restored = False
             if existing is not None:
@@ -739,6 +750,8 @@ def _common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--python-executable", help="Python executable used for MCP and validation")
     parser.add_argument("--quick-validate", help="skill-creator quick_validate.py path")
     parser.add_argument("--mcp-name", default=DEFAULT_MCP_NAME, help="target MCP registration name")
+    parser.add_argument("--skill-name", default=DEFAULT_SKILL_NAME, help="user-scope skill name")
+    parser.add_argument("--runtime-config", help="machine-local runtime composition config to expose to MCP")
     parser.add_argument("--receipt", help="append bounded operation evidence to this local JSON path")
     parser.add_argument("--json", action="store_true", help="emit bounded JSON")
 
@@ -752,6 +765,8 @@ def _paths_from_args(args: argparse.Namespace) -> RuntimePaths:
         python_executable=args.python_executable,
         quick_validate=args.quick_validate,
         mcp_name=args.mcp_name,
+        skill_name=args.skill_name,
+        runtime_config=args.runtime_config,
     )
 
 

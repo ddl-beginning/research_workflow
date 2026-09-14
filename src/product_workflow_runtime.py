@@ -22,6 +22,7 @@ from .project_intake import ProjectIntakeError, ProjectRequirementsIntake
 from .runtime_composition import RuntimeCompositionConfig, load_runtime_composition_config
 from .stage_integration import StageIntegrationError, parse_dialogue_decision, subprocess_bridge_runner
 from .workflow_runtime import WorkflowRuntimeError
+from .human_summary import build_human_presentation
 from .workflow_v2_contracts import PUBLIC_COMMANDS, validate_stage
 from .workflow_v2_controller import StageController, WorkflowV2ControllerError
 
@@ -231,13 +232,24 @@ class ProductWorkflowRuntime:
         if brief is None:
             raise WorkflowRuntimeError("WORKFLOW_NOT_FOUND", "workflow has not been started")
         projection = self.controller.resume_projection()
+        presentation = build_human_presentation(
+            metadata=extra,
+            canonical_state=projection,
+            artifact_root=self.root,
+        )
         if brief["state"] != "APPROVED":
             question = self.intake.current_question
             action = "ASK_REQUIREMENT" if question else "REQUEST_BRIEF_APPROVAL"
-            return {"schema_version": "product_workflow_result.v1", "next_action": action,
+            return {"human_summary": presentation["human_summary"],
+                    "machine_details": presentation["machine_details"],
+                    "presentation": presentation,
+                    "schema_version": "product_workflow_result.v1", "next_action": action,
                     "next_tool": "workflow_answer", "question_id": question.get("question_id") if question else None,
                     "question": question, "brief_state": brief["state"], "canonical": projection, **extra}
-        return {"schema_version": "product_workflow_result.v1", "lifecycle_version": "v2",
+        return {"human_summary": presentation["human_summary"],
+                "machine_details": presentation["machine_details"],
+                "presentation": presentation,
+                "schema_version": "product_workflow_result.v1", "lifecycle_version": "v2",
                 "workspace_root": str(self.root), "project_id": brief["project_id"],
                 "brief_state": brief["state"], **projection, "next_tool": "workflow_answer" if projection["next_actor"] == "Human" else "workflow_run",
                 "question_id": None, **extra}

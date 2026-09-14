@@ -1,4 +1,31 @@
-# Workflow V2 Troubleshooting
+# Workflow V2.1 Troubleshooting
+
+Start with the two user-facing checks:
+
+```powershell
+workflow.exe doctor
+workflow.exe doctor --probe-browser
+```
+
+The usual recovery path is `workflow.exe setup` in PowerShell. It may require two normal human
+actions: `codex login` for Codex's ChatGPT session and an interactive ChatGPT
+login in the dedicated Browser Bridge profile. A `GPT_AUTH_REQUIRED` result is
+an authentication state, not a Workflow algorithm failure.
+
+If a result stops at a checkpoint, read the `HUMAN_SUMMARY` block first. The
+`MACHINE_DETAILS` block is the stable diagnostic layer. `CONTINUE` and
+`REPLAN` do not require a human response; a true `HUMAN_GATE` lists the
+decision options, while a visual gate without a real artifact is a
+`HUMAN_REVIEW_PRESENTATION_INCOMPLETE` presentation problem.
+
+Authentication is machine-local by design. Never read a browser cookie DB,
+export cookies, copy a browser profile to another computer, paste a session
+cookie, or store a password/token in runtime config. Run `workflow.exe setup` on
+each machine and sign in there normally.
+
+`workflow.exe setup --reset-machine-config` removes only the generated machine
+runtime config. It preserves project briefs, journals, history, and the
+browser profile.
 
 Use the symptom, meaning, and safe recovery below. Do not delete or rewrite a
 journal, receipt, consultation, quarantine item, or browser profile to make a
@@ -41,6 +68,19 @@ Safe recovery: run `npm ci` in the separate bridge checkout and repair the
 machine-local paths. Do not copy the bridge profile into the Product or
 project. Human action is required if the browser needs login or a project URL
 must be selected.
+
+## Browser probe could not create a fresh conversation (GPT_BROWSER_PROBE_FAILED)
+
+Meaning: the separate bridge was found and launched, but its bounded health
+prompt did not complete. For example, `FRESH_CHAT_CREATION_FAILED` means the
+ChatGPT page/UI did not expose a usable fresh-conversation state; it is not
+proof that the account is logged out.
+
+Safe diagnosis: run `workflow.exe doctor --probe-browser`, inspect the visible
+dedicated browser profile, and confirm that the bridge checkout is healthy.
+If the result changes to `GPT_AUTH_REQUIRED`, sign in interactively in that
+profile and rerun the probe. Do not export cookies or paste session state into
+the machine config.
 
 ## ATTACHMENT_NOT_READY
 

@@ -20,6 +20,7 @@ from typing import Any, Callable, Mapping, TextIO
 
 from .workflow_core_adapter import CoreV1RunnerAdapter, CoreV1RunnerError
 from .workflow_runtime import WorkflowRuntime, WorkflowRuntimeError
+from .human_summary import build_human_presentation
 from .runtime_composition import (
     RuntimeComposition,
     RuntimeCompositionError,
@@ -443,7 +444,7 @@ class WorkflowMCPServer:
             "jsonrpc": "2.0",
             "id": identifier,
             "result": {
-                "content": [{"type": "text", "text": json.dumps(value, ensure_ascii=False, sort_keys=True)}],
+                "content": [{"type": "text", "text": json.dumps(value, ensure_ascii=False)}],
                 "structuredContent": value,
                 "isError": False,
             },
@@ -455,21 +456,33 @@ class WorkflowMCPServer:
 
     @staticmethod
     def _tool_error(identifier: Any, error: WorkflowRuntimeError) -> dict[str, Any]:
+        next_action = "BLOCKED"
+        if error.code in {"DESIGN_REVIEW_REQUIRED", "DESIGN_REVIEW_NOT_PENDING", "DESIGN_REVIEW_RECONSULT_REQUIRED"}:
+            next_action = "REQUEST_DESIGN_REVIEW"
+        presentation = build_human_presentation(
+            metadata={
+                "presentation_status": "BLOCKED",
+                "blocker_summary": str(error),
+                "earliest_remaining_failure": error.code,
+                "human_action": "请补齐错误信息中指向的最小输入，然后重新调用 Workflow。",
+            },
+            canonical_state={"next_action": next_action},
+        )
         payload = {
+            "human_summary": presentation["human_summary"],
+            "machine_details": presentation["machine_details"],
+            "presentation": presentation,
             "schema_version": "workflow_mcp_error.v1",
             "error": {"code": error.code, "message": str(error)},
         }
         if getattr(error, "details", None):
             payload["details"] = deepcopy(dict(error.details))
-        if error.code == "RUNNER_NOT_CONFIGURED":
-            payload["next_action"] = "BLOCKED"
-        elif error.code in {"DESIGN_REVIEW_REQUIRED", "DESIGN_REVIEW_NOT_PENDING", "DESIGN_REVIEW_RECONSULT_REQUIRED"}:
-            payload["next_action"] = "REQUEST_DESIGN_REVIEW"
+        payload["next_action"] = next_action
         return {
             "jsonrpc": "2.0",
             "id": identifier,
             "result": {
-                "content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False, sort_keys=True)}],
+                "content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}],
                 "structuredContent": payload,
                 "isError": True,
             },

@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from .contracts import ContractValidationError, canonical_json, load_schema, validate_instance
+from .execution_profile import default_execution_profile
 from .project_state import (
     PROJECT_BRIEF_RELATIVE_PATH,
     ProjectStateError,
@@ -1122,6 +1123,10 @@ class ProjectRequirementsIntake:
             "rough_requirement": raw_text or "",
             "original_requirement": raw_text or "",
             "brief": initial_brief,
+            # The execution profile is a small, durable policy projection
+            # owned by this canonical brief.  It does not introduce another
+            # controller, journal, or authority store.
+            "execution_profile": default_execution_profile(),
             "requirement_sources": {"confirmed_fields": sorted(_source_field_names(brief))},
             "repository_facts": _repo_facts(self.root),
             "revision": 1,
