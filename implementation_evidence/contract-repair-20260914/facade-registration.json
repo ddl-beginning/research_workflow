@@ -1,0 +1,21 @@
+{
+  "captured_at": "2026-09-14T17:15:00+08:00",
+  "facade_workspace": "D:/work/mls02/projects/facade_geometry",
+  "target_identity": "ACQUISITION_REALISM_BRIDGE_S4_S7",
+  "route_changed": false,
+  "research_executed": false,
+  "reload_resume": "PASS",
+  "fresh_build": "PASS",
+  "stage_registration": "PASS",
+  "registered_schema_version": "stage.v2",
+  "project_id": "project-1b4f3d9cb6b6ece0abf2dcde",
+  "workspace_id": "workspace-94c2b15996d81880e20c1f2a",
+  "journal_revision": 1,
+  "journal_path": "D:/work/mls02/projects/facade_geometry/.workflow-v2/journal.json",
+  "client_stage_sha256": "23d811bbdfd8d2244a89841b6138898799465746bb10b699ba51f5870487c107",
+  "transport_payload_sha256": "0373a84f6cb5c394c889a9588f9031ba55090cc54601cec94ecd5a68cc1081bf",
+  "supervisor_received_stage_sha256": "23d811bbdfd8d2244a89841b6138898799465746bb10b699ba51f5870487c107",
+  "next_action": "START",
+  "benchmark_changed": false,
+  "old_failure_payload_reused": false
+}

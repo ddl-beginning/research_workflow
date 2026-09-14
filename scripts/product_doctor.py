@@ -22,6 +22,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.openai_codex_executor import OpenAICodexExecutor
+from src.contract_handshake import compare_handshake, compare_stage_action_handshake
 from src.product_workflow_runtime import doctor_product_runtime
 from src.runtime_composition import RuntimeCompositionConfig, RuntimeCompositionError, load_runtime_composition_config
 
@@ -89,12 +90,50 @@ def _registration_check(config: RuntimeCompositionConfig | None) -> dict[str, An
         command_ok = Path(command).resolve() == Path(sys.executable).resolve() or Path(command).name.casefold() in {"python", "python.exe"}
         launcher_ok = isinstance(args, list) and any(Path(str(item)).resolve() == launcher.resolve() for item in args)
         env_ok = isinstance(env, Mapping) and CONFIG_ENV in env
-        return _check(
+        check = _check(
             "mcp.product_entry",
             command_ok and launcher_ok and env_ok,
             code="MCP_REGISTRATION_MISMATCH" if not (command_ok and launcher_ok and env_ok) else None,
             detail="registered Product launcher and machine-local runtime config are present",
         )
+        if check["status"] == "PASS":
+            try:
+                child_env = os.environ.copy()
+                if isinstance(env, Mapping):
+                    child_env.update({str(key): str(value) for key, value in env.items()})
+                probe = subprocess.run(
+                    [command, *[str(item) for item in args]],
+                    input=json.dumps({"jsonrpc": "2.0", "id": "contract-handshake", "method": "initialize", "params": {}}) + "\n",
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    env=child_env,
+                    timeout=20,
+                    check=False,
+                )
+                response = None
+                for line in probe.stdout.splitlines():
+                    if not line.strip():
+                        continue
+                    try:
+                        candidate = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(candidate, Mapping) and candidate.get("id") == "contract-handshake":
+                        response = candidate
+                        break
+                handshake = response.get("result", {}).get("contract_handshake") if (
+                    probe.returncode == 0 and isinstance(response, Mapping)
+                    and isinstance(response.get("result"), Mapping)
+                ) else None
+                if isinstance(handshake, Mapping):
+                    check["contract_handshake"] = dict(handshake)
+                else:
+                    check["contract_handshake_error"] = "fresh supervisor did not return a successful matching JSON-RPC contract identity"
+            except (OSError, subprocess.SubprocessError, json.JSONDecodeError, TypeError, ValueError):
+                check["contract_handshake_error"] = "fresh supervisor handshake failed"
+        return check
     return _check("mcp.product_entry", False, code="MCP_NOT_REGISTERED", detail=f"MCP server {MCP_NAME!r} is not registered")
 
 
@@ -131,7 +170,41 @@ def run_doctor(workspace: str | os.PathLike[str], config_path: str | os.PathLike
     else:
         for name, code in (("lifecycle.v2", "EXPLICIT_V2_CONFIG_REQUIRED"), ("codex.runtime", "CODEX_RUNTIME_UNAVAILABLE"), ("chatgpt.auth", "AUTHENTICATION_REQUIRED"), ("standard.model", "STANDARD_MODEL_UNAVAILABLE"), ("browser.bridge", "BRIDGE_CONFIGURATION_REQUIRED"), ("machine.runtime_root", "RUNTIME_CONFIG_REQUIRED")):
             checks.append(_check(name, False, code=code))
-    checks.append(_registration_check(config))
+    registration = _registration_check(config)
+    checks.append(registration)
+    handshake = compare_handshake(registration.get("contract_handshake"))
+    handshake_ok = (
+        registration.get("status") == "PASS"
+        and registration.get("contract_handshake_error") is None
+        and handshake["compatible"] is True
+    )
+    handshake_failure_code = (
+        "STALE_SUPERVISOR_RUNTIME"
+        if handshake.get("supervisor_runtime_source_digest") not in {None, handshake.get("client_runtime_source_digest")}
+        else "WORKFLOW_CONTRACT_VERSION_MISMATCH"
+    )
+    checks.append(_check(
+        "contract.handshake",
+        handshake_ok,
+        code=None if handshake_ok else handshake_failure_code,
+        detail=(
+            f"client={handshake['client_contract_version']} supervisor={handshake['supervisor_contract_version']} "
+            f"schema_digest_equal={handshake['client_schema_digest'] == handshake['supervisor_schema_digest']} "
+            f"runtime_source_equal={handshake.get('client_runtime_source_digest') == handshake.get('supervisor_runtime_source_digest')}"
+        ),
+    ))
+    stage_handshake = compare_stage_action_handshake(registration.get("contract_handshake"))
+    stage_handshake_ok = (
+        registration.get("status") == "PASS"
+        and registration.get("contract_handshake_error") is None
+        and stage_handshake["compatible"] is True
+    )
+    checks.append(_check(
+        "contract.stage_actions",
+        stage_handshake_ok,
+        code=None if stage_handshake_ok else "WORKFLOW_CONTRACT_VERSION_MISMATCH",
+        detail="REGISTER_STAGE, PLAN_STAGE, START_STAGE and downstream Stage actions share the canonical request.stage boundary",
+    ))
     ready = all(item["status"] == "PASS" for item in checks)
     return {
         "schema_version": "workflow_v2_product_doctor.v1",
@@ -141,6 +214,8 @@ def run_doctor(workspace: str | os.PathLike[str], config_path: str | os.PathLike
         "ready": ready,
         "checks": checks,
         "runtime": runtime,
+        "contract_handshake": handshake,
+        "stage_action_handshake": stage_handshake,
         "writes_performed": False,
         "provider_dispatch_performed": False,
         "gpt_calls_performed": False,

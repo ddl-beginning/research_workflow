@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .contracts import ContractValidationError, canonical_json, sha256_json
+from .contract_handshake import STAGE_PROPAGATION_INVARIANT, payload_snapshot, stage_digest, stage_identity_digest
 from .workflow_v2_contracts import (
     PUBLIC_COMMANDS,
     STAGE_STATES,
@@ -68,6 +69,12 @@ def _new_command_id() -> str:
     return "command-" + uuid.uuid4().hex
 
 
+def build_registration_payload(stage: Mapping[str, Any]) -> dict[str, Any]:
+    """Build the one canonical V2 registration payload envelope."""
+
+    return {"stage": validate_stage(stage)}
+
+
 TERMINAL_EFFECTS = {"NOT_SENT_PROVEN", "SETTLED"}
 UNSETTLED_EFFECTS = {"INTENT_COMMITTED", "SENT_UNSETTLED", "UNKNOWN", "CONFLICT"}
 
@@ -82,6 +89,7 @@ class StageController:
         self.state_path = Path(state_path).resolve() if state_path is not None else None
         self._lock = threading.RLock()
         self._journal = self._empty_journal()
+        self._last_registration_trace: dict[str, Any] | None = None
         if self.state_path is not None and self.state_path.is_file():
             self._journal = self._read_journal(self.state_path)
             if self._journal["workspace_id"] != self.workspace_id:
@@ -398,6 +406,26 @@ class StageController:
         except KeyError as exc:
             raise WorkflowV2ControllerError(f"unknown Stage: {stage_id}") from exc
 
+    def resolve_canonical_stage(self, stage_id: str, *, journal: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        """Resolve the authoritative Stage object for a Stage-scoped action.
+
+        The journal is the sole lifecycle authority.  This method validates and
+        detaches that stored object; it never rebuilds a Stage from projected
+        fields or accepts the legacy ``stage_contract.v1`` shape.
+        """
+
+        source = self._journal if journal is None else journal
+        stage = validate_stage(self._stage(source, _text(stage_id, "stage_id")))
+        if stage.get("schema_version") != "stage.v2":
+            raise WorkflowV2ControllerError(f"{STAGE_PROPAGATION_INVARIANT}: canonical Stage is not stage.v2")
+        return stage
+
+    def canonical_stage_digests(self, stage_id: str, *, journal: Mapping[str, Any] | None = None) -> dict[str, str]:
+        """Return full and immutable-identity digests for one canonical Stage."""
+
+        stage = self.resolve_canonical_stage(stage_id, journal=journal)
+        return {"stage_sha256": stage_digest(stage), "identity_sha256": stage_identity_digest(stage)}
+
     def _runtime(self, journal: dict[str, Any], stage_id: str) -> dict[str, Any]:
         return journal["stage_runtime"].setdefault(
             stage_id,
@@ -476,7 +504,20 @@ class StageController:
         return handlers[command_type](journal, command, payload)
 
     def _register_stage(self, journal: dict[str, Any], command: Mapping[str, Any], payload: Mapping[str, Any]) -> dict[str, Any]:
-        stage = validate_stage(payload.get("stage", {}))
+        if not isinstance(payload, Mapping) or not isinstance(payload.get("stage"), Mapping):
+            raise WorkflowV2ControllerError(
+                "REGISTER_STAGE requires the canonical payload envelope {'stage': <stage.v2>}"
+            )
+        stage_payload = payload["stage"]
+        self._last_registration_trace = {
+            "action": "REGISTER_STAGE",
+            "canonical_stage": payload_snapshot(stage_payload),
+            "canonical_stage_digest": stage_digest(stage_payload),
+            "canonical_stage_identity_digest": stage_identity_digest(stage_payload),
+            "transport_payload": payload_snapshot(payload),
+            "supervisor_received_payload": payload_snapshot(stage_payload),
+        }
+        stage = validate_stage(stage_payload)
         if stage["workspace_id"] != self.workspace_id:
             raise WorkflowV2ControllerError("Stage workspace identity does not match journal")
         if stage["stage_id"] in journal["stages"]:
@@ -1107,7 +1148,8 @@ class StageController:
         return {"workspace_id": self.workspace_id, "revision": self.revision, "stage": stage, "phase": "WAITING" if next_action == "WAIT" else "RUNNING", "next_action": next_action, "next_actor": actor}
 
     def register_stage(self, stage: Mapping[str, Any], **kwargs: Any) -> dict[str, Any]:
-        return self.dispatch("REGISTER_STAGE", subject_id=stage["stage_id"], payload={"stage": stage}, **kwargs)
+        payload = build_registration_payload(stage)
+        return self.dispatch("REGISTER_STAGE", subject_id=payload["stage"]["stage_id"], payload=payload, **kwargs)
 
     def start(self, stage_id: str, **kwargs: Any) -> dict[str, Any]:
         return self.dispatch("START", subject_id=stage_id, payload=kwargs.pop("payload", {}), **kwargs)
@@ -1161,4 +1203,4 @@ class StageController:
         return self.dispatch("STOP", subject_id=stage_id, payload=_copy(payload if payload is not None else kwargs), command_id=command_id, expected_revision=expected_revision)
 
 
-__all__ = ["StageController", "WorkflowV2ControllerError"]
+__all__ = ["StageController", "WorkflowV2ControllerError", "build_registration_payload"]

@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from scripts import product_doctor
+from src.contract_handshake import supervisor_handshake
 
 
 def test_doctor_is_read_only_and_reports_unconfigured_clean_workspace(tmp_path: Path, monkeypatch):
@@ -61,4 +62,22 @@ def test_doctor_uses_real_machine_config_without_creating_stage(tmp_path: Path, 
     assert result["runtime"]["lifecycle_version"] == "v2"
     assert result["writes_performed"] is False
     assert not (workspace / ".workflow-v2").exists()
+
+
+def test_doctor_reports_stage_action_handshake_skew(tmp_path: Path, monkeypatch):
+    workspace = tmp_path / "new-project"
+    workspace.mkdir()
+    handshake = supervisor_handshake()
+    handshake["stage_action_handshake"]["actions"]["PLAN_STAGE"]["stage_location"] = "payload.stage"
+    monkeypatch.setattr(
+        product_doctor,
+        "_registration_check",
+        lambda _config: {"name": "mcp.product_entry", "status": "PASS", "contract_handshake": handshake},
+    )
+
+    result = product_doctor.run_doctor(workspace, workspace / ".research" / "missing.json")
+
+    check = next(item for item in result["checks"] if item["name"] == "contract.stage_actions")
+    assert check["status"] == "FAIL"
+    assert check["code"] == "WORKFLOW_CONTRACT_VERSION_MISMATCH"
 

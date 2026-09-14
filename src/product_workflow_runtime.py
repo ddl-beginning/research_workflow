@@ -10,12 +10,19 @@ import hashlib
 import json
 import os
 import shutil
+import copy
 from functools import wraps
 from pathlib import Path
 from typing import Any, Mapping
 
 from .bridge_adapter import BridgeEnvelopeError, normalize_bridge_envelope
 from .artifact_resolver import ArtifactResolver, ArtifactResolverError
+from .contract_handshake import (
+    STAGE_PROPAGATION_INVARIANT,
+    payload_snapshot,
+    stage_digest,
+    stage_identity_digest,
+)
 from .contracts import ContractValidationError, canonical_json, sha256_json
 from .openai_codex_executor import OpenAICodexExecutor
 from .project_intake import ProjectIntakeError, ProjectRequirementsIntake
@@ -25,6 +32,20 @@ from .workflow_runtime import WorkflowRuntimeError
 from .human_summary import build_human_presentation
 from .workflow_v2_contracts import PUBLIC_COMMANDS, validate_stage
 from .workflow_v2_controller import StageController, WorkflowV2ControllerError
+
+
+STAGE_SCOPED_COMMANDS = frozenset({
+    "START", "START_STAGE", "REQUEST_EXECUTION", "RECORD_OBSERVATION",
+    "OBSERVE_RESULT", "ASSESS_RESULT", "APPLY_GPT_DECISION", "ADVANCE_ITERATION",
+    "REQUEST_DECISION", "APPLY_DECISION", "RESOLVE_BLOCKER", "APPLY_RECEIPT",
+    "COMMIT_INTEGRATION", "CLOSEOUT", "CLOSE_STAGE", "STOP", "ADD_DEPENDENCY",
+    "SATISFY_DEPENDENCY",
+})
+_COMMAND_WIRE_NAMES = {
+    "START_STAGE": "START",
+    "OBSERVE_RESULT": "RECORD_OBSERVATION",
+    "CLOSE_STAGE": "CLOSEOUT",
+}
 
 
 def _boundary(function):
@@ -197,11 +218,183 @@ class ProductWorkflowRuntime:
     """MCP read/submit adapter; no legacy Bootstrap or Core V1 state routing."""
     lifecycle_version = "v2"
 
-    def __init__(self, workspace: str | Path, *, config: RuntimeCompositionConfig) -> None:
+    def __init__(self, workspace: str | Path, *, config: RuntimeCompositionConfig,
+                 maintenance_capability: Any | None = None) -> None:
         self.root = Path(workspace).expanduser().resolve(strict=True)
         self.config = config
         self.intake = ProjectRequirementsIntake(self.root)
         self.controller = _controller(self.root, config)
+        self.maintenance_capability = maintenance_capability
+        self._transport_request_snapshot: dict[str, Any] | None = None
+        self._transport_request_pending = False
+        self._last_contract_trace: dict[str, Any] | None = None
+
+    @property
+    def last_contract_trace(self) -> dict[str, Any] | None:
+        return copy.deepcopy(self._last_contract_trace)
+
+    def note_transport_request(self, request: Mapping[str, Any]) -> None:
+        """Record the request as received at the MCP transport boundary."""
+
+        self._transport_request_snapshot = payload_snapshot(request)
+        self._transport_request_pending = True
+
+    def repair_context(self) -> dict[str, Any]:
+        """Capture bounded business identity before a Workflow-only repair."""
+
+        brief = self.intake.state
+        projection = self.controller.resume_projection()
+        stage = projection.get("stage") if isinstance(projection, Mapping) else None
+        stage = stage if isinstance(stage, Mapping) else {}
+        return {
+            "workspace_root": str(self.root),
+            "project_id": brief.get("project_id") if isinstance(brief, Mapping) else None,
+            "stage_id": stage.get("stage_id") if isinstance(stage, Mapping) else None,
+            "objective_fingerprint": stage.get("objective_fingerprint"),
+            "baseline_digest": stage.get("baseline_digest"),
+            "stage_identity_digest": stage_identity_digest(stage) if stage else None,
+            "revision": projection.get("revision") if isinstance(projection, Mapping) else None,
+            "status": stage.get("status"),
+            "next_action": projection.get("next_action") if isinstance(projection, Mapping) else None,
+            "target_identity": stage.get("target_identity") if isinstance(stage, Mapping) else None,
+        }
+
+    def _stage_failure(self, code: str, message: str, *, request: Mapping[str, Any], action: str,
+                       canonical_stage: Mapping[str, Any] | None = None) -> WorkflowRuntimeError:
+        trace = self._build_contract_trace(
+            action=action,
+            request=request,
+            canonical_stage=canonical_stage,
+            supervisor_request=request,
+        )
+        self._last_contract_trace = trace
+        return WorkflowRuntimeError(
+            code,
+            message,
+            details={
+                "failure_classification": code,
+                "contract_propagation_invariant": STAGE_PROPAGATION_INVARIANT,
+                "contract_trace": trace,
+            },
+        )
+
+    def _build_contract_trace(self, *, action: str, request: Mapping[str, Any],
+                              canonical_stage: Mapping[str, Any] | None,
+                              supervisor_request: Mapping[str, Any]) -> dict[str, Any]:
+        canonical = payload_snapshot(canonical_stage) if isinstance(canonical_stage, Mapping) else None
+        return {
+            "action": action,
+            "invariant": STAGE_PROPAGATION_INVARIANT,
+            "canonical_stage": canonical,
+            "canonical_stage_digest": stage_digest(canonical_stage) if isinstance(canonical_stage, Mapping) else None,
+            "canonical_stage_identity_digest": stage_identity_digest(canonical_stage) if isinstance(canonical_stage, Mapping) else None,
+            "client_request": payload_snapshot(request),
+            "transport_request": copy.deepcopy(self._transport_request_snapshot or payload_snapshot(request)),
+            "supervisor_received_request": payload_snapshot(supervisor_request),
+        }
+
+    def _resolve_stage_request(self, request: Mapping[str, Any], action: str, *, allow_missing: bool = False) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Attach the one canonical Stage object to a Stage-scoped request."""
+
+        normalized = copy.deepcopy(dict(request))
+        raw_stage = normalized.get("stage")
+        stage_id = normalized.get("stage_id") or normalized.get("subject_id")
+        if isinstance(raw_stage, Mapping):
+            if raw_stage.get("schema_version") == "stage_contract.v1":
+                raise self._stage_failure(
+                    "CONTRACT_VERSION_MISMATCH",
+                    f"{action} accepts only the canonical stage.v2 object at request.stage",
+                    request=request,
+                    action=action,
+                )
+            try:
+                candidate = validate_stage(raw_stage)
+            except ContractValidationError as exc:
+                raise self._stage_failure(
+                    "STAGE_SCOPED_ACTION_MUST_USE_CANONICAL_STAGE",
+                    f"{action} request.stage is not a valid canonical stage.v2 object",
+                    request=request,
+                    action=action,
+                ) from exc
+            stage_id = candidate["stage_id"]
+        elif raw_stage is not None:
+            raise self._stage_failure(
+                "STAGE_SCOPED_ACTION_MUST_USE_CANONICAL_STAGE",
+                f"{action} requires an object at request.stage",
+                request=request,
+                action=action,
+            )
+        elif not allow_missing:
+            if action != "PLAN_STAGE" and isinstance(stage_id, str) and stage_id not in self.controller.state.get("stages", {}):
+                raise WorkflowRuntimeError("V2_CONTRACT_REJECTED", f"unknown Stage: {stage_id}")
+            raise self._stage_failure(
+                "PLAN_STAGE_STAGE_OBJECT_OMITTED" if action == "PLAN_STAGE" else STAGE_PROPAGATION_INVARIANT,
+                f"{action} requires the canonical stage.v2 object at request.stage",
+                request=request,
+                action=action,
+            )
+        if not isinstance(stage_id, str) or not stage_id.strip():
+            raise self._stage_failure(
+                "STAGE_SCOPED_ACTION_MUST_USE_CANONICAL_STAGE",
+                f"{action} requires stage_id to resolve the canonical Stage",
+                request=request,
+                action=action,
+            )
+        try:
+            canonical = self.controller.resolve_canonical_stage(stage_id)
+        except WorkflowV2ControllerError as exc:
+            # PLAN_STAGE is the one pre-registration boundary: its validated
+            # request.stage is the canonical candidate that REGISTER_STAGE
+            # will commit. Every later action resolves from the journal.
+            if action == "PLAN_STAGE" and isinstance(raw_stage, Mapping) and stage_id == candidate["stage_id"]:
+                canonical = candidate
+            elif raw_stage is None and allow_missing:
+                return normalized, {"stage_id": stage_id, "canonical_stage": None}
+            else:
+                raise WorkflowRuntimeError("V2_CONTRACT_REJECTED", str(exc)) from exc
+        if isinstance(raw_stage, Mapping) and canonical_json(canonical) != canonical_json(candidate):
+            raise self._stage_failure(
+                STAGE_PROPAGATION_INVARIANT,
+                f"{action} request.stage differs from the canonical Stage authority",
+                request=request,
+                action=action,
+                canonical_stage=canonical,
+            )
+        normalized["stage"] = canonical
+        trace = self._build_contract_trace(
+            action=action,
+            request=request,
+            canonical_stage=canonical,
+            supervisor_request=normalized,
+        )
+        self._last_contract_trace = trace
+        return normalized, {"stage_id": canonical["stage_id"], "canonical_stage": canonical, "trace": trace}
+
+    def build_stage_scoped_request(self, action: str, request: Mapping[str, Any], *, allow_missing: bool = False) -> dict[str, Any]:
+        """Build a request with ``request.stage`` resolved from the authority."""
+
+        normalized, _ = self._resolve_stage_request(request, action.upper(), allow_missing=allow_missing)
+        return normalized
+
+    def repair_request(self, request: Mapping[str, Any], error: BaseException) -> dict[str, Any] | None:
+        """Repair only an omitted Stage projection using the journal authority."""
+
+        if not isinstance(request, Mapping):
+            return None
+        operation = str(request.get("operation", "")).upper()
+        action = operation
+        if operation == "COMMAND":
+            action = str(request.get("command", "")).upper()
+            action = _COMMAND_WIRE_NAMES.get(action, action)
+        if action not in {"PLAN_STAGE", *{_COMMAND_WIRE_NAMES.get(item, item) for item in STAGE_SCOPED_COMMANDS}}:
+            return None
+        try:
+            normalized, info = self._resolve_stage_request(request, action, allow_missing=True)
+        except WorkflowRuntimeError:
+            return None
+        if not isinstance(info.get("canonical_stage"), Mapping):
+            return None
+        return normalized
 
     def _artifact_path(self, artifact_kind: str, *, relative_path: str, source_operation: str) -> Path:
         """Resolve durable Product evidence through the single placement seam.
@@ -293,8 +486,21 @@ class ProductWorkflowRuntime:
             decision = self.controller.state["decisions"].get(answer["decision_id"])
             if decision is None or decision["actor_kind"] != "HUMAN":
                 raise WorkflowRuntimeError("DECISION_INVALID", "no matching pending Human decision")
+            stage = self.controller.resolve_canonical_stage(decision["subject_id"])
+            decision_request = {
+                "operation": "ANSWER",
+                "command": "APPLY_DECISION",
+                "subject_id": stage["stage_id"],
+                "stage": stage,
+            }
+            self._last_contract_trace = self._build_contract_trace(
+                action="APPLY_DECISION",
+                request=decision_request,
+                canonical_stage=stage,
+                supervisor_request=decision_request,
+            )
             result = self.controller.apply_decision(decision["subject_id"], payload=dict(answer))
-            return self._view(decision_result=result)
+            return self._view(decision_result=result, contract_propagation=self.last_contract_trace)
         if sum((answer is not None, update is not None, bool(approve or mode == "APPROVE"))) != 1:
             raise WorkflowRuntimeError("INPUT_INVALID", "answer, update and approve are exclusive")
         if approve or mode == "APPROVE":
@@ -338,6 +544,11 @@ class ProductWorkflowRuntime:
     def run(self, request: Mapping[str, Any]) -> dict[str, Any]:
         if not isinstance(request, Mapping):
             raise WorkflowRuntimeError("RUN_REQUEST_INVALID", "workflow_run requires a request object")
+        self._last_contract_trace = None
+        if self._transport_request_pending:
+            self._transport_request_pending = False
+        else:
+            self._transport_request_snapshot = payload_snapshot(request)
         brief = self.intake.state
         if brief is None:
             raise WorkflowRuntimeError("WORKFLOW_NOT_FOUND", "workflow has not been started")
@@ -350,7 +561,8 @@ class ProductWorkflowRuntime:
             diagnostic = doctor_product_runtime(self.root, config=self.config)
             if not diagnostic["ready"]:
                 raise WorkflowRuntimeError("RUNNER_NOT_CONFIGURED", "Product dependencies are not ready", details=diagnostic)
-            stage = validate_stage(request.get("stage", {}))
+            request, stage_info = self._resolve_stage_request(request, "PLAN_STAGE")
+            stage = stage_info["canonical_stage"]
             if stage["workspace_id"] != self.controller.workspace_id or stage["project_id"] != brief["project_id"]:
                 raise WorkflowRuntimeError("WORKSPACE_IDENTITY_MISMATCH", "planning proposal belongs to another workspace/project")
             if stage["status"] != "PLANNED":
@@ -397,12 +609,14 @@ class ProductWorkflowRuntime:
                 result = _seal({"input_digest": digest, **self._consult(request, purpose="STAGE_PLANNING")})
                 _immutable(result_path, result)
             if result["decision"] != "CONTINUE":
-                return self._view(planning=result, WORKFLOW_DECISION=result["decision"], stage_created=False)
+                return self._view(planning=result, WORKFLOW_DECISION=result["decision"], stage_created=False,
+                                  contract_propagation=self.last_contract_trace)
             self.controller.initialize()
             if stage["stage_id"] not in self.controller.state["stages"]:
                 self.controller.register_stage(stage, command_id="command-plan-" + digest[:32])
             return self._view(planning=result, WORKFLOW_DECISION=result["decision"], stage_created=True,
-                              stage_started=False, runner_ready=True)
+                              stage_started=False, runner_ready=True,
+                              contract_propagation=self.last_contract_trace)
         if operation == "CONSULT_REVIEW":
             stage = self.controller.show_stage(request.get("stage_id"))
             assessment_id = stage.get("current_assessment_id")
@@ -436,9 +650,17 @@ class ProductWorkflowRuntime:
         # Registration cannot bypass real planning; Human decisions have a
         # dedicated resolver and are not accepted as a run side effect.
         command = request.get("command")
-        if operation == "COMMAND" and command in PUBLIC_COMMANDS and command not in {"REGISTER_STAGE", "APPLY_DECISION"}:
-            result = self.controller.dispatch(command, subject_id=request.get("subject_id"),
-                       payload=request.get("payload", {}), command_id=request.get("command_id"),
-                       expected_revision=request.get("expected_revision"))
-            return self._view(command_result=result)
+        if operation == "COMMAND":
+            command_name = str(command or "").upper()
+            wire_command = _COMMAND_WIRE_NAMES.get(command_name, command_name)
+            if wire_command in PUBLIC_COMMANDS and wire_command not in {"REGISTER_STAGE", "APPLY_DECISION"}:
+                normalized_request = request
+                propagation = None
+                if wire_command in STAGE_SCOPED_COMMANDS:
+                    normalized_request, info = self._resolve_stage_request(request, wire_command)
+                    propagation = info.get("trace")
+                result = self.controller.dispatch(wire_command, subject_id=normalized_request.get("subject_id"),
+                           payload=normalized_request.get("payload", {}), command_id=normalized_request.get("command_id"),
+                           expected_revision=normalized_request.get("expected_revision"))
+                return self._view(command_result=result, contract_propagation=propagation or self.last_contract_trace)
         raise WorkflowRuntimeError("RUN_REQUEST_INVALID", "Product run requires PLAN_STAGE, DOCTOR or an allowed canonical command")

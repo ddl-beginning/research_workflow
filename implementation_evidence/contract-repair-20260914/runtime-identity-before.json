@@ -1,0 +1,116 @@
+{
+  "captured_at": "2026-09-14T17:11:17.4661538+08:00",
+  "engine_workspace": "D:/work/research_tools/research_supervisor_v2_lifecycle_repair_20260913",
+  "client_code_commit": "ce91083f4ca77651c7d87a5ae4b53d2e33fcb053",
+  "cli_version": {
+    "workflow_product": "2.1.0",
+    "codex_cli": "codex-cli 0.154.0",
+    "python": "3.11.5"
+  },
+  "launcher_version": {
+    "product_version": "2.1.0",
+    "mcp_server_version": "0.1.0",
+    "launcher_git_commit": "ce91083f4ca77651c7d87a5ae4b53d2e33fcb053",
+    "launcher_sha256": "30f0e51ddb3c4c16f24ac7bd87a713f14713454f4f6e842bf1e8e58cf196ce28"
+  },
+  "mcp_registration": {
+    "name": "research-supervisor",
+    "command": "D:/anaconda2023/python.exe",
+    "args": [
+      "D:/work/research_tools/research_supervisor_v2_lifecycle_repair_20260913/scripts/workflow_mcp.py"
+    ],
+    "cwd": null,
+    "env_keys": ["RESEARCH_WORKFLOW_RUNTIME_CONFIG"],
+    "runtime_config": "C:/Users/Administrator/AppData/Local/ResearchWorkflow/product-v2-runtime.json"
+  },
+  "mcp_processes_observed": [
+    {
+      "pid": 4672,
+      "start_time": "2026-09-14T11:48:51.5078426+08:00",
+      "supervisor_code_path": "D:/work/research_tools/research_supervisor_v2_lifecycle_repair_20260913",
+      "supervisor_commit_at_path": "ce91083f4ca77651c7d87a5ae4b53d2e33fcb053"
+    },
+    {
+      "pid": 7652,
+      "start_time": "2026-09-14T15:53:22.0394506+08:00",
+      "supervisor_code_path": "D:/work/research_tools/research_supervisor_v2_lifecycle_repair_20260913",
+      "supervisor_commit_at_path": "ce91083f4ca77651c7d87a5ae4b53d2e33fcb053"
+    },
+    {
+      "pid": 16652,
+      "start_time": "2026-09-14T14:19:24.7696913+08:00",
+      "supervisor_code_path": "D:/work/research_tools/research_supervisor_v2_lifecycle_repair_20260913",
+      "supervisor_commit_at_path": "ce91083f4ca77651c7d87a5ae4b53d2e33fcb053"
+    },
+    {
+      "pid": 50104,
+      "start_time": "2026-09-14T17:03:06.7804551+08:00",
+      "supervisor_code_path": "D:/work/research_tools/research_supervisor_v2_lifecycle_repair_20260913",
+      "supervisor_commit_at_path": "ce91083f4ca77651c7d87a5ae4b53d2e33fcb053"
+    },
+    {
+      "pid": 51640,
+      "start_time": "2026-09-14T16:58:49.8375284+08:00",
+      "supervisor_code_path": "D:/work/research_tools/research_supervisor_v2_lifecycle_repair_20260913",
+      "supervisor_commit_at_path": "ce91083f4ca77651c7d87a5ae4b53d2e33fcb053"
+    },
+    {
+      "pid": 57052,
+      "start_time": "2026-09-14T11:48:51.5275690+08:00",
+      "supervisor_code_path": "D:/work/research_tools/research_supervisor_v2_lifecycle_repair_20260913",
+      "supervisor_commit_at_path": "ce91083f4ca77651c7d87a5ae4b53d2e33fcb053"
+    },
+    {
+      "pid": 57900,
+      "start_time": "2026-09-14T17:03:05.7725202+08:00",
+      "supervisor_code_path": "D:/work/research_tools/research_supervisor_v2_lifecycle_repair_20260913",
+      "supervisor_commit_at_path": "ce91083f4ca77651c7d87a5ae4b53d2e33fcb053"
+    },
+    {
+      "pid": 61196,
+      "start_time": "2026-09-14T11:12:56.5456415+08:00",
+      "supervisor_code_path": "D:/work/research_tools/research_supervisor_v2_lifecycle_repair_20260913",
+      "supervisor_commit_at_path": "ce91083f4ca77651c7d87a5ae4b53d2e33fcb053"
+    },
+    {
+      "pid": 45596,
+      "start_time": "2026-09-13T21:58:46.0498829+08:00",
+      "supervisor_code_path": "D:/work/research_tools/research_supervisor_v2_product",
+      "supervisor_commit_at_path": "fc8a030f4391ade6e1ecb314e734eca3acb6ffa7"
+    },
+    {
+      "pid": 52932,
+      "start_time": "2026-09-14T09:31:01.5628569+08:00",
+      "supervisor_code_path": "D:/work/research_tools/research_supervisor_v2_product",
+      "supervisor_commit_at_path": "fc8a030f4391ade6e1ecb314e734eca3acb6ffa7"
+    },
+    {
+      "pid": 3016,
+      "start_time": "2026-09-11T16:15:47.0331925+08:00",
+      "supervisor_code_path": "D:/work/research_tools/research_supervisor_poc",
+      "supervisor_commit_at_path": null
+    }
+  ],
+  "mcp_process_pid_for_failed_request": null,
+  "mcp_process_start_time_for_failed_request": null,
+  "supervisor_code_path": "D:/work/research_tools/research_supervisor_v2_lifecycle_repair_20260913/src",
+  "supervisor_commit": "ce91083f4ca77651c7d87a5ae4b53d2e33fcb053",
+  "supervisor_version": "2.1.0 / MCP 0.1.0",
+  "registration_schema_path": "D:/work/research_tools/research_supervisor_v2_lifecycle_repair_20260913/schemas/workflow_v2/stage.schema.json",
+  "validator_schema_path": "D:/work/research_tools/research_supervisor_v2_lifecycle_repair_20260913/schemas/workflow_v2/stage.schema.json",
+  "schema_authority_before": {
+    "client_contract_version": "stage.v2",
+    "supervisor_contract_version": "stage.v2",
+    "client_schema_digest": "d4354e9c8a64d77bb4e08714ac285f001f3bfe4f38a03dfcc22aedde01d2d004",
+    "supervisor_schema_digest": "d4354e9c8a64d77bb4e08714ac285f001f3bfe4f38a03dfcc22aedde01d2d004"
+  },
+  "stale_runtime_findings": {
+    "classification": "CLIENT_SUPERVISOR_RUNTIME_VERSION_SKEW",
+    "evidence": "old research-supervisor and v2_product MCP processes remain alive; current registration points to lifecycle_repair, but pre-existing processes cannot be assumed to have loaded current source",
+    "python_environment": "D:/anaconda2023/python.exe; workflow-v2-product is an editable install pointing at the lifecycle_repair worktree",
+    "pythonpath": "PYTHONPATH was not set in the diagnostic shell; MCP registration has no PYTHONPATH override",
+    "runtime_config": "C:/Users/Administrator/AppData/Local/ResearchWorkflow/product-v2-runtime.json"
+  },
+  "note": "The exact failed PID was not exposed by Codex MCP introspection. All discovered candidates and their executable/path/start-time identities are recorded; a fresh-process handshake is required before registration.",
+  "pre_change": true
+}

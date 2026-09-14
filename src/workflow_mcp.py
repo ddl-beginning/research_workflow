@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, TextIO
 
 from .workflow_core_adapter import CoreV1RunnerAdapter, CoreV1RunnerError
+from .contract_handshake import supervisor_handshake
+from .workflow_repair import is_repairable_failure, run_bounded_self_repair
 from .workflow_runtime import WorkflowRuntime, WorkflowRuntimeError
 from .human_summary import build_human_presentation
 from .runtime_composition import (
@@ -275,6 +277,7 @@ class WorkflowMCPServer:
         composition_factory: Callable[[str], RuntimeComposition | CoreV1RunnerAdapter] | None = None,
         orchestrator_factory: Callable[[str], Any] | None = None,
         transport_trace_path: str | os.PathLike[str] | None = None,
+        maintenance_capability: Callable[[Mapping[str, Any], BaseException], Mapping[str, Any] | None] | None = None,
     ) -> None:
         self._transport_trace = _TransportTrace(transport_trace_path)
         self.runner = runner
@@ -293,6 +296,9 @@ class WorkflowMCPServer:
         if orchestrator_factory is not None and not callable(orchestrator_factory):
             raise WorkflowRuntimeError("ORCHESTRATOR_INVALID", "orchestrator_factory must be callable")
         self.orchestrator_factory = orchestrator_factory
+        if maintenance_capability is not None and not callable(maintenance_capability):
+            raise WorkflowRuntimeError("MAINTENANCE_INVALID", "maintenance_capability must be callable")
+        self.maintenance_capability = maintenance_capability
 
     def _default_orchestrator_enabled(self) -> bool:
         return (
@@ -328,7 +334,11 @@ class WorkflowMCPServer:
                 raise WorkflowRuntimeError(exc.code, str(exc), details=exc.bounded_view()) from exc
             if config.lifecycle_version == "v2":
                 from .product_workflow_runtime import ProductWorkflowRuntime
-                return ProductWorkflowRuntime(workspace, config=config)
+                return ProductWorkflowRuntime(
+                    workspace,
+                    config=config,
+                    maintenance_capability=self.maintenance_capability,
+                )
         kwargs: dict[str, Any] = {"runner": self.runner if runner is None else runner}
         if self.checkpoint_path is not None:
             kwargs["checkpoint_path"] = self.checkpoint_path
@@ -396,7 +406,33 @@ class WorkflowMCPServer:
         runner = self.runner
         runtime = self._runtime(args, runner=runner)
         if name == "workflow_run" and getattr(runtime, "lifecycle_version", None) == "v2":
-            return runtime.run(args.get("request"))
+            request = args.get("request")
+            if isinstance(request, Mapping) and hasattr(runtime, "note_transport_request"):
+                runtime.note_transport_request(request)
+            try:
+                return runtime.run(request)
+            except WorkflowRuntimeError as exc:
+                if not is_repairable_failure(exc) or not hasattr(runtime, "repair_request"):
+                    raise
+                repair = run_bounded_self_repair(
+                    runtime,
+                    request if isinstance(request, Mapping) else {},
+                    exc,
+                    maintenance_capability=self.maintenance_capability,
+                )
+                if repair.get("status") != "PASS":
+                    raise
+                # The retry is an internal repaired request. Preserve the
+                # original wire snapshot so the four-layer trace proves what
+                # transport omitted and what the supervisor repaired.
+                if isinstance(request, Mapping) and hasattr(runtime, "note_transport_request"):
+                    runtime.note_transport_request(request)
+                retried = runtime.run(repair["request"])
+                if isinstance(retried, Mapping):
+                    result = dict(retried)
+                    result["self_repair"] = {key: value for key, value in repair.items() if key != "request"}
+                    return result
+                return retried
         if name == "workflow_run" and runner is None:
             # Rehydrate/validate the persisted workflow before discovering a
             # runtime composition.  A missing workflow must report the stable
@@ -459,12 +495,17 @@ class WorkflowMCPServer:
         next_action = "BLOCKED"
         if error.code in {"DESIGN_REVIEW_REQUIRED", "DESIGN_REVIEW_NOT_PENDING", "DESIGN_REVIEW_RECONSULT_REQUIRED"}:
             next_action = "REQUEST_DESIGN_REVIEW"
+        repairable = is_repairable_failure(error)
         presentation = build_human_presentation(
             metadata={
                 "presentation_status": "BLOCKED",
                 "blocker_summary": str(error),
                 "earliest_remaining_failure": error.code,
-                "human_action": "请补齐错误信息中指向的最小输入，然后重新调用 Workflow。",
+                "human_action": (
+                    "无；Workflow 将按 bounded self-repair 路由处理该内部故障。"
+                    if repairable else "请补齐错误信息中指向的最小输入，然后重新调用 Workflow。"
+                ),
+                "human_intervention_count": 0,
             },
             canonical_state={"next_action": next_action},
         )
@@ -517,6 +558,7 @@ class WorkflowMCPServer:
                     "protocolVersion": MCP_PROTOCOL_VERSION,
                     "capabilities": {"tools": {}},
                     "serverInfo": {"name": MCP_SERVER_NAME, "version": MCP_SERVER_VERSION},
+                    "contract_handshake": supervisor_handshake(),
                     "instructions": MCP_INITIALIZE_INSTRUCTIONS,
                 },
             )

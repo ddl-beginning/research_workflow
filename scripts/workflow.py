@@ -212,6 +212,7 @@ def _doctor_report(workspace: Path, paths: MachinePaths, config_path: Path, *, p
                 browser_check["status"] == "PASS" and "OK" or "FAIL",
                 browser_probe["status"] == "PASS" and "OK" or "FAIL",
                 state("mcp.product_entry"),
+                state("contract.stage_actions"),
                 state("runtime.config"),
                 "OK" if project_status == "READY" else "FAIL",
             )
@@ -224,6 +225,7 @@ def _doctor_report(workspace: Path, paths: MachinePaths, config_path: Path, *, p
             "GPT Browser": {"status": "OK" if browser_probe["status"] == "PASS" else "LOGIN REQUIRED" if browser_probe["code"] == "GPT_AUTH_REQUIRED" else "CHECK SETUP", "detail": browser_probe["detail"]},
             "Browser Bridge": {"status": "OK" if browser_check["status"] == "PASS" else "FAIL", "detail": browser_check["detail"]},
             "MCP": {"status": "OK" if state("mcp.product_entry") == "OK" else "FAIL", "detail": "research-supervisor registration"},
+            "Stage Contract": {"status": "OK" if state("contract.stage_actions") == "OK" else "FAIL", "detail": "canonical Stage propagation handshake"},
             "Machine Runtime": {"status": "OK" if state("runtime.config") == "OK" else "FAIL", "detail": paths.root.as_posix()},
             "Project": {"status": "OK" if summary else "NOT INITIALIZED", "detail": summary.get("project_name") if summary else workspace.name},
             "Project Workflow": {"status": project_status, "detail": "autonomous_research profile + V2 journal" if project_status == "READY" else "run workflow init"},
