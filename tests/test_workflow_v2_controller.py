@@ -182,6 +182,31 @@ class WorkflowV2ControllerScenarios(unittest.TestCase):
         with self.assertRaises(WorkflowV2ControllerError):
             self.controller.request_execution("stage-12345678", command_id="command-after-close-12345678")
 
+    def test_resume_projection_exposes_resolved_gpt_decision_for_human_output(self):
+        request = self.controller.request_execution("stage-12345678", command_id="command-human-output-request-12345678")
+        attempt = request["attempt"]
+        observation = self.observation(
+            attempt_id=attempt["attempt_id"],
+            iteration_id=attempt["iteration_id"],
+            observation_id="observation-human-output-12345678",
+            evidence_manifest_digest="manifest-human-output-12345678",
+            provider_result_digest="provider-human-output-12345678",
+        )
+        self.controller.record_observation(
+            "stage-12345678", observation, effect_state="SETTLED", command_id="command-human-output-observe-12345678"
+        )
+        assessment = self.make_assessment(observation)
+        self.controller.assess_result("stage-12345678", assessment, command_id="command-human-output-assess-12345678")
+        decision = self.gpt_decision(assessment["assessment_id"], allowed_choices=["BLOCKED"])
+        self.controller.apply_gpt_decision(
+            "stage-12345678", decision, choice="BLOCKED", command_id="command-human-output-blocked-12345678"
+        )
+
+        projection = self.controller.resume_projection()
+        self.assertEqual(projection["next_action"], "APPLY_GPT_DECISION")
+        self.assertEqual(projection["gpt_decision"], "BLOCKED")
+        self.assertEqual(projection["gpt_decision_id"], decision["decision_id"])
+
     def test_command_idempotency_and_stale_revision_are_fail_closed(self):
         stage = self.stage("stage-idempotent").copy()
         first = self.controller.register_stage(stage, command_id="command-idempotent-12345678")

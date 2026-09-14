@@ -1415,11 +1415,34 @@ class StageController:
             stage["next_action"] = None
         return stage
 
+    @staticmethod
+    def _resolved_gpt_decision(journal: Mapping[str, Any], assessment_id: str | None) -> dict[str, Any] | None:
+        if not isinstance(assessment_id, str) or not assessment_id:
+            return None
+        matches = [
+            decision
+            for decision in journal.get("decisions", {}).values()
+            if (
+                decision.get("actor_kind") == "GPT"
+                and decision.get("boundary") == "TECHNICAL_REVIEW"
+                and decision.get("subject_id") == assessment_id
+                and decision.get("resolution") is not None
+            )
+        ]
+        return _copy(matches[-1]) if matches else None
+
     def resume_projection(self) -> dict[str, Any]:
         stage = self.show_stage()
         next_action = stage.get("next_action")
         actor = "Human" if next_action in {"APPLY_DECISION"} else ("Provider" if next_action == "RECORD_OBSERVATION" else "Controller")
-        return {"workspace_id": self.workspace_id, "revision": self.revision, "stage": stage, "phase": "WAITING" if next_action == "WAIT" else "RUNNING", "next_action": next_action, "next_actor": actor}
+        projection = {"workspace_id": self.workspace_id, "revision": self.revision, "stage": stage, "phase": "WAITING" if next_action == "WAIT" else "RUNNING", "next_action": next_action, "next_actor": actor}
+        decision = self._resolved_gpt_decision(self._journal, stage.get("current_assessment_id"))
+        if decision is not None:
+            # This is a read-only presentation projection.  The lifecycle
+            # authority remains the Stage and journal decision records.
+            projection["gpt_decision"] = decision["resolution"]
+            projection["gpt_decision_id"] = decision["decision_id"]
+        return projection
 
     def register_stage(self, stage: Mapping[str, Any], **kwargs: Any) -> dict[str, Any]:
         payload = build_registration_payload(stage)
