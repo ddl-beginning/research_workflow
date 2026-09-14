@@ -26,6 +26,8 @@ import time
 from pathlib import Path
 from typing import Any, Mapping
 
+from src.release_gate import evaluate_gpt_review_pipeline
+
 
 PRODUCT_ROOT = Path(__file__).resolve().parents[1]
 MCP_NAME = "research-supervisor"
@@ -517,6 +519,15 @@ def run_installation_validation(args: argparse.Namespace) -> dict[str, Any]:
         reviewed = client.call("workflow_run", {"workspace": str(project), "request": {"operation": "CONSULT_REVIEW", "stage_id": STAGE_ID, "review_revision": 1, "prompt": "Perform the technical review using only this fresh packet. The real provider succeeded, the immutable observation is SETTLED, the current assessment is ADMISSIBLE, the exact test passed, and the delta is exactly src/add.py. STAGE_READY is technical readiness for COMMIT_INTEGRATION, not Human approval. Do not execute or modify anything. Return one final standalone line exactly: WORKFLOW_DECISION: STAGE_READY", "context_pack": technical_pack}})
         technical = require_decision(reviewed, "STAGE_READY", "technical_review")
         decision = {"schema_version": "decision.v2", "decision_id": "decision-real-gpt-" + str(technical["response_digest"])[:24], "actor_kind": "GPT", "boundary": "TECHNICAL_REVIEW", "subject_id": assessment["assessment_id"], "subject_digest": assessment["assessment_id"], "subject_version": 1, "allowed_choices": ["STAGE_READY"], "requested_action": "Apply the exact real GPT technical-review result to the current assessment.", "provenance": {"request_count": technical["request_count"], "conversation_id": technical["conversation_id"], "response_digest": technical["response_digest"], "packet_digest": technical["packet_digest"]}, "supersedes": None}
+        gpt_review_pipeline = evaluate_gpt_review_pipeline(
+            transport_status="PASS" if all(technical.get(key) for key in ("consultation_id", "conversation_id", "packet_digest")) and technical.get("request_count") == 1 else "FAIL",
+            response_received=bool(technical.get("response_digest")),
+            decision=technical.get("decision"),
+            decision_parsed=True,
+            decision_bound=decision["subject_id"] == assessment["assessment_id"] and decision["subject_digest"] == assessment["assessment_id"],
+        )
+        if not gpt_review_pipeline["engine_release"]:
+            raise ValidationFailure("GPT review transport/response/parse/binding gate failed")
         ready = client.call("workflow_run", {"workspace": str(project), "request": {"operation": "COMMAND", "command": "APPLY_GPT_DECISION", "subject_id": STAGE_ID, "payload": {"decision": decision, "choice": "STAGE_READY"}, "command_id": "release-validation-gpt-ready-v1"}})
         if stage_from_view(ready).get("status") != "READY":
             raise ValidationFailure("real GPT STAGE_READY did not produce READY")
@@ -605,6 +616,7 @@ def run_installation_validation(args: argparse.Namespace) -> dict[str, Any]:
             "planning": {key: planning.get(key) for key in ("consultation_id", "conversation_id", "request_count", "packet_digest", "decision")},
             "provider": {"provider_id": provider_view.get("provider_id"), "executor_request_id": provider_view.get("executor_request_id"), "actual_model": provider_view.get("actual_model"), "execution_profile": provider_view.get("execution_profile"), "reasoning_effort": provider_view.get("reasoning_effort"), "auth_mode": provider_view.get("auth_mode"), "status": provider_result.get("status"), "changed_files": provider_result.get("changed_files"), "tests": provider_result.get("tests"), "artifacts": str(artifact_dir)},
             "technical_review": {key: technical.get(key) for key in ("consultation_id", "conversation_id", "request_count", "packet_digest", "decision")},
+            "gpt_review_pipeline": gpt_review_pipeline,
             "controller": {"observation_id": observation["observation_id"], "assessment_id": assessment["assessment_id"], "assessment_verdict": assessment["verdict"], "integration_operation_id": operation_id, "integration_effect_state": "SETTLED", "resume_at_intent": {"status": intent_stage.get("status"), "stage_id": intent_stage.get("stage_id"), "process_restarted": True}, "duplicate_closeout_no_new_effect": True},
             "relocation": {"doctor_ready": True, "resume_identity_preserved": True, "engine_status_clean": True, "engine": str(relocated_engine), "project": str(relocated_project)},
             "transport": {"trace": str(trace), "process_start_count": process_starts, "process_exit_count": process_exits, "fresh_process_per_call": True},

@@ -27,7 +27,9 @@ workflow.exe resume
 ```
 
 The optional `$workflow` Codex trigger delegates to the same command. If it is
-unavailable, use `workflow`; no slash command is required.
+unavailable, use `workflow.exe` (or `research-workflow`); no slash command is
+required. In PowerShell, the bare `workflow` name is reserved and should not
+be used.
 
 At `STAGE_READY`, `HUMAN_GATE`, or `BLOCKED`, the first screen is a plain
 language Human Summary. The stable `MACHINE_DETAILS` block follows it. A
