@@ -22,6 +22,31 @@
         "prove_not_sent": {"type": "boolean"}
       }
     },
+    "handoff_invariant_version": {"const": "provider-handoff-v1"},
+    "provider_handoff_manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workflow_operation_id", "stage_id", "iteration_id", "attempt_id",
+        "provider_owner", "provider_route", "provider_request_identity",
+        "request_digest", "reconstructible_request_descriptor", "idempotency_key",
+        "reconciliation_identity", "dispatch_state"
+      ],
+      "properties": {
+        "workflow_operation_id": {"type": "string", "minLength": 8},
+        "stage_id": {"type": "string", "minLength": 1},
+        "iteration_id": {"type": "string", "minLength": 1},
+        "attempt_id": {"type": "string", "minLength": 8},
+        "provider_owner": {"type": "string", "minLength": 1},
+        "provider_route": {"type": "string", "minLength": 1},
+        "provider_request_identity": {"type": "string", "minLength": 8},
+        "request_digest": {"type": "string", "minLength": 8},
+        "reconstructible_request_descriptor": {"type": "object"},
+        "idempotency_key": {"type": "string", "minLength": 8},
+        "reconciliation_identity": {"type": "string", "minLength": 8},
+        "dispatch_state": {"type": "string", "enum": ["PREPARED", "DISPATCHED", "RECEIPT_OBSERVED"]}
+      }
+    },
     "status": {"type": "string", "enum": ["INTENT", "RECEIPT_OBSERVED", "SETTLED", "BLOCKED"]},
     "receipt_digest": {"type": "string", "minLength": 8},
     "receipt": {"type": "object"}

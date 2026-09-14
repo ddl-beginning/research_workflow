@@ -31,11 +31,12 @@ from .stage_integration import StageIntegrationError, parse_dialogue_decision, s
 from .workflow_runtime import WorkflowRuntimeError
 from .human_summary import build_human_presentation
 from .workflow_v2_contracts import PUBLIC_COMMANDS, validate_stage
-from .workflow_v2_controller import StageController, WorkflowV2ControllerError
+from .workflow_v2_controller import StageController, WorkflowV2ControllerError, build_provider_handoff_manifest
 
 
 STAGE_SCOPED_COMMANDS = frozenset({
     "START", "START_STAGE", "REQUEST_EXECUTION", "RECORD_OBSERVATION",
+    "RESOLVE_LEGACY_ORPHAN",
     "OBSERVE_RESULT", "ASSESS_RESULT", "APPLY_GPT_DECISION", "ADVANCE_ITERATION",
     "REQUEST_DECISION", "APPLY_DECISION", "RESOLVE_BLOCKER", "APPLY_RECEIPT",
     "COMMIT_INTEGRATION", "CLOSEOUT", "CLOSE_STAGE", "STOP", "ADD_DEPENDENCY",
@@ -451,6 +452,32 @@ class ProductWorkflowRuntime:
         return self._view()
 
     def resume(self) -> dict[str, Any]:
+        projection = self.controller.resume_projection()
+        if projection.get("next_action") == "RESOLVE_LEGACY_ORPHAN":
+            stage = projection.get("stage", {})
+            operation_id = stage.get("in_flight_operation_id")
+            if isinstance(operation_id, str) and operation_id:
+                audit = self.controller.audit_legacy_side_effects(stage.get("stage_id"), search_roots=[self.root])
+                if audit.get("classification") == "NONE" and audit.get("complete") is True:
+                    resolution = self.controller.resolve_legacy_orphan(
+                        stage["stage_id"],
+                        operation_id=operation_id,
+                        effect_class="REVERSIBLE_LOCAL_RESEARCH",
+                        side_effect_audit=audit,
+                        command_id="command-legacy-orphan-resolution-" + operation_id[-32:],
+                    )
+                    return self._view(
+                        legacy_resolution=resolution.get("legacy_resolution"),
+                        old_operation_preserved=True,
+                        old_operation_redispatched=False,
+                        side_effect_audit=audit,
+                        self_repair={"status": "PASS", "human_intervention_count": 0},
+                    )
+                return self._view(
+                    legacy_resolution={"status": "REQUIRES_BOUNDED_AUDIT", "operation_id": operation_id},
+                    side_effect_audit=audit,
+                    self_repair={"status": "NOT_SAFE_TO_ABANDON", "human_intervention_count": 0},
+                )
         return self._view()
 
     @_boundary
@@ -659,8 +686,28 @@ class ProductWorkflowRuntime:
                 if wire_command in STAGE_SCOPED_COMMANDS:
                     normalized_request, info = self._resolve_stage_request(request, wire_command)
                     propagation = info.get("trace")
+                payload = copy.deepcopy(dict(normalized_request.get("payload", {})))
+                command_id = normalized_request.get("command_id")
+                if wire_command == "REQUEST_EXECUTION" and "provider_handoff_manifest" not in payload:
+                    if not isinstance(command_id, str) or not command_id:
+                        command_id = "command-" + sha256_json({"command": wire_command, "subject_id": normalized_request.get("subject_id"), "payload": payload})[:32]
+                    stage = normalized_request["stage"]
+                    request_body = payload.get("request", {})
+                    request_id = payload.get("request_id") or (command_id if command_id.startswith("request-") else "request-" + command_id)
+                    attempt_id = payload.get("attempt_id") or (command_id if command_id.startswith("attempt-") else "attempt-" + command_id)
+                    operation_id = payload.get("operation_id") or (command_id if command_id.startswith("operation-") else "operation-" + command_id)
+                    payload["provider_handoff_manifest"] = build_provider_handoff_manifest(
+                        operation_id=operation_id,
+                        stage_id=stage["stage_id"],
+                        iteration_id=stage["current_iteration_id"],
+                        attempt_id=attempt_id,
+                        request_id=request_id,
+                        request=request_body,
+                        provenance=payload.get("provenance", {"provider": "fixture-provider", "engine_digest": "engine-fixed-v2"}),
+                        purpose=payload.get("purpose", stage["purpose"]),
+                    )
                 result = self.controller.dispatch(wire_command, subject_id=normalized_request.get("subject_id"),
-                           payload=normalized_request.get("payload", {}), command_id=normalized_request.get("command_id"),
+                           payload=payload, command_id=command_id,
                            expected_revision=normalized_request.get("expected_revision"))
                 return self._view(command_result=result, contract_propagation=propagation or self.last_contract_trace)
         raise WorkflowRuntimeError("RUN_REQUEST_INVALID", "Product run requires PLAN_STAGE, DOCTOR or an allowed canonical command")

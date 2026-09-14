@@ -33,11 +33,13 @@ from .workflow_v2_contracts import (
     validate_evidence_manifest,
     validate_execution_attempt,
     validate_operation_envelope,
+    validate_provider_handoff_manifest,
     validate_provider_observation,
     validate_semantic_iteration,
     validate_stage,
     validate_stage_assessment,
     validate_typed_replan,
+    PROVIDER_HANDOFF_INVARIANT_VERSION,
 )
 
 
@@ -69,6 +71,53 @@ def _new_command_id() -> str:
     return "command-" + uuid.uuid4().hex
 
 
+def build_provider_handoff_manifest(
+    *,
+    operation_id: str,
+    stage_id: str,
+    iteration_id: str,
+    attempt_id: str,
+    request_id: str,
+    request: Mapping[str, Any],
+    provenance: Mapping[str, Any],
+    purpose: str,
+) -> dict[str, Any]:
+    """Build the durable, secret-free handoff record for one execution intent."""
+
+    request_value = _copy(dict(request))
+    request_digest = sha256_json(request_value)
+    provider_owner = str(provenance.get("provider") or "fixture-provider")
+    provider_route = str(provenance.get("provider_route") or provider_owner)
+    provider_request_identity = str(provenance.get("provider_request_id") or request_id)
+    descriptor = {
+        "schema_version": "request_descriptor.v1",
+        "operation": "REQUEST_EXECUTION",
+        "purpose": str(purpose),
+        "request_digest": request_digest,
+        "request": request_value,
+        "provider_args": {
+            "provider_owner": provider_owner,
+            "provider_route": provider_route,
+            "provider_request_identity": provider_request_identity,
+        },
+    }
+    manifest = {
+        "workflow_operation_id": operation_id,
+        "stage_id": stage_id,
+        "iteration_id": iteration_id,
+        "attempt_id": attempt_id,
+        "provider_owner": provider_owner,
+        "provider_route": provider_route,
+        "provider_request_identity": provider_request_identity,
+        "request_digest": request_digest,
+        "reconstructible_request_descriptor": descriptor,
+        "idempotency_key": "idempotency-" + sha256_json({"operation_id": operation_id, "request_digest": request_digest})[:40],
+        "reconciliation_identity": "reconcile-" + sha256_json({"operation_id": operation_id, "provider_request_identity": provider_request_identity})[:40],
+        "dispatch_state": "PREPARED",
+    }
+    return validate_provider_handoff_manifest(manifest)
+
+
 def build_registration_payload(stage: Mapping[str, Any]) -> dict[str, Any]:
     """Build the one canonical V2 registration payload envelope."""
 
@@ -77,6 +126,8 @@ def build_registration_payload(stage: Mapping[str, Any]) -> dict[str, Any]:
 
 TERMINAL_EFFECTS = {"NOT_SENT_PROVEN", "SETTLED"}
 UNSETTLED_EFFECTS = {"INTENT_COMMITTED", "SENT_UNSETTLED", "UNKNOWN", "CONFLICT"}
+LEGACY_ORPHAN_CLASSIFICATION = "ORPHANED_UNRECOVERABLE_PROVIDER_HANDOFF"
+LEGACY_ORPHAN_RESOLUTION = "ABANDON_OLD_OPERATION_AND_CREATE_NEW_ATTEMPT"
 
 
 class StageController:
@@ -145,6 +196,7 @@ class StageController:
             "decisions": {},
             "dependencies": {},
             "operations": {},
+            "legacy_resolutions": {},
             "correction_decisions": {},
             "blockers": {},
         }
@@ -225,6 +277,9 @@ class StageController:
         for key in ("commands", "stages", "stage_runtime", "iterations", "attempts", "observations", "assessments", "decisions", "dependencies", "operations", "correction_decisions", "blockers"):
             if not isinstance(payload.get(key), dict):
                 raise WorkflowV2ControllerError(f"journal collection is invalid: {key}")
+        legacy_resolutions = payload.get("legacy_resolutions", {})
+        if not isinstance(legacy_resolutions, dict):
+            raise WorkflowV2ControllerError("journal collection is invalid: legacy_resolutions")
         for stage in payload["stages"].values():
             checked_stage = validate_stage(stage)
             if checked_stage["workspace_id"] != payload["workspace_id"]:
@@ -253,6 +308,35 @@ class StageController:
             validate_dependency_graph(dependencies, max_nodes=10_000, max_depth=10_000)
         for operation in payload["operations"].values():
             validate_operation_envelope(operation)
+        for resolution_id, resolution in legacy_resolutions.items():
+            if not isinstance(resolution, Mapping) or resolution.get("resolution_id") != resolution_id:
+                raise WorkflowV2ControllerError("legacy resolution identity is invalid")
+            required = (
+                "schema_version", "resolution_id", "operation_id", "attempt_id", "stage_id",
+                "iteration_id", "classification", "reason", "resolution", "effect_class",
+                "side_effect_evidence", "old_operation_preserved", "old_operation_redispatched",
+                "human_intervention_count",
+            )
+            if any(not isinstance(resolution.get(field), str) or not resolution[field] for field in required[:-3]):
+                raise WorkflowV2ControllerError("legacy resolution record is incomplete")
+            if resolution.get("schema_version") != "legacy_operation_resolution.v1":
+                raise WorkflowV2ControllerError("legacy resolution schema is invalid")
+            if resolution.get("classification") != LEGACY_ORPHAN_CLASSIFICATION or resolution.get("resolution") != LEGACY_ORPHAN_RESOLUTION:
+                raise WorkflowV2ControllerError("legacy resolution classification is invalid")
+            if resolution.get("effect_class") != "REVERSIBLE_LOCAL_RESEARCH" or resolution.get("side_effect_evidence") != "NONE":
+                raise WorkflowV2ControllerError("legacy resolution effect audit is invalid")
+            if resolution.get("old_operation_preserved") is not True or resolution.get("old_operation_redispatched") is not False:
+                raise WorkflowV2ControllerError("legacy resolution preservation proof is invalid")
+            if resolution.get("human_intervention_count") != 0:
+                raise WorkflowV2ControllerError("legacy resolution cannot add a Human gate")
+            operation = payload["operations"].get(resolution["operation_id"])
+            attempt = payload["attempts"].get(resolution["attempt_id"])
+            if operation is None or attempt is None or operation.get("subject_id") != resolution["attempt_id"]:
+                raise WorkflowV2ControllerError("legacy resolution does not bind an existing operation attempt")
+            if attempt.get("stage_id") != resolution["stage_id"] or attempt.get("iteration_id") != resolution["iteration_id"]:
+                raise WorkflowV2ControllerError("legacy resolution attempt identity is invalid")
+            if operation.get("handoff_invariant_version") is not None or operation.get("provider_handoff_manifest") is not None:
+                raise WorkflowV2ControllerError("post-invariant operation cannot be a legacy orphan")
         command_event_ids: set[str] = set()
         for command_id, command_record in payload["commands"].items():
             if not isinstance(command_record, Mapping):
@@ -301,6 +385,8 @@ class StageController:
             "attempts", "observations", "assessments", "decisions", "dependencies",
             "operations", "correction_decisions", "blockers", "executable_owner_stage_id",
         )
+        if "legacy_resolutions" in journal:
+            keys = (*keys[:-2], "legacy_resolutions", *keys[-2:])
         return sha256_json({key: _copy(journal.get(key)) for key in keys})
 
     def _persist(self, payload: Mapping[str, Any]) -> None:
@@ -457,6 +543,91 @@ class StageController:
             if attempt.get("stage_id") == stage_id and (iteration_id is None or attempt.get("iteration_id") == iteration_id)
         ]
 
+    def _legacy_resolution_for_attempt(self, journal: Mapping[str, Any], attempt_id: str) -> dict[str, Any] | None:
+        return next(
+            (
+                resolution
+                for resolution in journal.get("legacy_resolutions", {}).values()
+                if resolution.get("attempt_id") == attempt_id
+            ),
+            None,
+        )
+
+    def _budgeted_attempts_for(self, journal: Mapping[str, Any], stage_id: str, iteration_id: str | None = None) -> list[dict[str, Any]]:
+        return [
+            attempt
+            for attempt in self._attempts_for(journal, stage_id, iteration_id)
+            if self._legacy_resolution_for_attempt(journal, attempt["attempt_id"]) is None
+        ]
+
+    def _legacy_orphan_operation(self, journal: Mapping[str, Any], stage_id: str) -> tuple[dict[str, Any], dict[str, Any]] | None:
+        runtime = journal.get("stage_runtime", {}).get(stage_id, {})
+        operation_id = runtime.get("in_flight_operation_id")
+        if not operation_id:
+            return None
+        operation = journal.get("operations", {}).get(operation_id)
+        if not isinstance(operation, Mapping):
+            return None
+        attempt = journal.get("attempts", {}).get(operation.get("subject_id"))
+        if not isinstance(attempt, Mapping):
+            return None
+        if operation.get("handoff_invariant_version") == PROVIDER_HANDOFF_INVARIANT_VERSION and operation.get("provider_handoff_manifest") is None:
+            raise WorkflowV2ControllerError("CRITICAL_PROVIDER_HANDOFF_INVARIANT_VIOLATION")
+        if operation.get("handoff_invariant_version") is None and operation.get("provider_handoff_manifest") is None:
+            return _copy(dict(operation)), _copy(dict(attempt))
+        return None
+
+    def audit_legacy_side_effects(self, stage_id: str | None = None, *, search_roots: list[str | Path] | None = None) -> dict[str, Any]:
+        """Run one bounded, metadata-only audit before legacy abandonment."""
+
+        stage = self.show_stage(stage_id)
+        selected_stage_id = stage.get("stage_id")
+        if not isinstance(selected_stage_id, str):
+            raise WorkflowV2ControllerError("legacy side-effect audit requires an active Stage")
+        orphan = self._legacy_orphan_operation(self._journal, selected_stage_id)
+        if orphan is None:
+            raise WorkflowV2ControllerError("current Stage has no pre-invariant orphan operation")
+        operation_id, _attempt = orphan
+        operation_token = operation_id["operation_id"]
+        roots: list[Path] = []
+        if self.state_path is not None:
+            roots.append(self.state_path.parent)
+        roots.extend(Path(item).expanduser().resolve() for item in (search_roots or []))
+        matches: list[str] = []
+        inaccessible: list[str] = []
+        seen: set[Path] = set()
+        for root in roots:
+            root = root.resolve()
+            if root in seen or not root.is_dir():
+                continue
+            seen.add(root)
+            try:
+                candidates = root.rglob("*")
+            except OSError as exc:
+                inaccessible.append(str(root))
+                continue
+            for candidate in candidates:
+                if not candidate.is_file() or candidate.name in {self.state_path.name if self.state_path else "", (self.state_path.name + ".lock") if self.state_path else ""}:
+                    continue
+                if ".git" in candidate.parts:
+                    continue
+                try:
+                    if candidate.stat().st_size > 2 * 1024 * 1024:
+                        continue
+                    if operation_token.encode("utf-8") in candidate.read_bytes():
+                        matches.append(str(candidate))
+                except OSError:
+                    inaccessible.append(str(candidate))
+        classification = "AMBIGUOUS" if inaccessible else "PRESENT" if matches else "NONE"
+        return {
+            "schema_version": "side_effect_audit.v1",
+            "operation_id": operation_token,
+            "classification": classification,
+            "complete": not inaccessible,
+            "checked_scopes": [str(root) for root in roots],
+            "matches": sorted(set(matches)),
+        }
+
     def _descendant_ids(self, journal: Mapping[str, Any], stage_id: str) -> set[str]:
         children: dict[str, set[str]] = {}
         for edge in journal["dependencies"].values():
@@ -487,6 +658,7 @@ class StageController:
             "REGISTER_STAGE": self._register_stage,
             "START": self._start,
             "REQUEST_EXECUTION": self._request_execution,
+            "RESOLVE_LEGACY_ORPHAN": self._resolve_legacy_orphan,
             "RECORD_OBSERVATION": self._record_observation,
             "ASSESS_RESULT": self._assess_result,
             "APPLY_GPT_DECISION": self._apply_gpt_decision,
@@ -585,21 +757,29 @@ class StageController:
         if not iteration_id or iteration_id not in journal["iterations"]:
             raise WorkflowV2ControllerError("execution requires an opened semantic iteration")
         iteration_attempts = self._attempts_for(journal, stage_id, iteration_id)
-        if len(iteration_attempts) >= stage["budgets"]["max_attempts_per_iteration"]:
+        budgeted_iteration_attempts = self._budgeted_attempts_for(journal, stage_id, iteration_id)
+        if len(budgeted_iteration_attempts) >= stage["budgets"]["max_attempts_per_iteration"]:
             raise WorkflowV2ControllerError("per-iteration attempt budget exhausted")
-        if len(self._attempts_for(journal, stage_id)) >= stage["budgets"]["max_attempts_total"]:
+        if len(self._budgeted_attempts_for(journal, stage_id)) >= stage["budgets"]["max_attempts_total"]:
             raise WorkflowV2ControllerError("total attempt budget exhausted")
         for ancestor_id in self._ancestor_ids(journal, stage_id):
             ancestor = self._stage(journal, ancestor_id)
             descendant_attempts = sum(
-                len(self._attempts_for(journal, descendant_id))
+                len(self._budgeted_attempts_for(journal, descendant_id))
                 for descendant_id in self._descendant_ids(journal, ancestor_id)
             )
             if descendant_attempts >= ancestor["budgets"]["max_descendant_attempts"]:
                 raise WorkflowV2ControllerError("descendant attempt budget exhausted")
         reason = str(payload.get("reason", "INITIAL")).upper()
-        if iteration_attempts and reason not in {"RETRY", "ENGINEERING_FIX", "CONTINUE"}:
+        if iteration_attempts and reason not in {"RETRY", "ENGINEERING_FIX", "CONTINUE", "LEGACY_ORPHAN_RECOVERY"}:
             raise WorkflowV2ControllerError("a later attempt needs an explicit typed retry/review reason")
+        if reason == "LEGACY_ORPHAN_RECOVERY":
+            if not any(
+                resolution.get("stage_id") == stage_id
+                and resolution.get("resolution") == LEGACY_ORPHAN_RESOLUTION
+                for resolution in journal.get("legacy_resolutions", {}).values()
+            ):
+                raise WorkflowV2ControllerError("LEGACY_ORPHAN_RECOVERY requires a committed orphan resolution")
         if reason == "RETRY" and iteration_attempts:
             latest_attempt = max(iteration_attempts, key=lambda item: item["attempt_index"])
             latest_observation = next(
@@ -619,6 +799,25 @@ class StageController:
         attempt_id = payload.get("attempt_id") or _id("attempt", command["command_id"])
         request_digest = payload.get("request_digest") or sha256_json(request)
         provenance = _copy(payload.get("provenance", {"provider": "fixture-provider", "engine_digest": "engine-fixed-v2"}))
+        purpose = payload.get("purpose", stage["purpose"])
+        operation_id = payload.get("operation_id") or _id("operation", command["command_id"])
+        handoff = payload.get("provider_handoff_manifest")
+        if not isinstance(handoff, Mapping):
+            raise WorkflowV2ControllerError("INTENT_COMMIT_REQUIRES_RECOVERABLE_PROVIDER_HANDOFF")
+        handoff = validate_provider_handoff_manifest(handoff)
+        if request_digest != sha256_json(request):
+            raise WorkflowV2ControllerError("provider handoff request_digest does not match request bytes")
+        expected_handoff = {
+            "workflow_operation_id": operation_id,
+            "stage_id": stage_id,
+            "iteration_id": iteration_id,
+            "attempt_id": attempt_id,
+            "request_digest": request_digest,
+        }
+        if any(handoff.get(field) != value for field, value in expected_handoff.items()):
+            raise WorkflowV2ControllerError("provider handoff manifest does not bind the execution identity")
+        if handoff.get("dispatch_state") != "PREPARED":
+            raise WorkflowV2ControllerError("provider handoff must be durably PREPARED before intent commit")
         attempt = {
             "schema_version": "execution_attempt.v2",
             "attempt_id": attempt_id,
@@ -627,14 +826,13 @@ class StageController:
             "request_id": request_id,
             "request_digest": request_digest,
             "provenance": provenance,
-            "purpose": payload.get("purpose", stage["purpose"]),
+            "purpose": purpose,
             "effect_state": "INTENT_COMMITTED",
             "attempt_index": len(self._attempts_for(journal, stage_id)) + 1,
             "committed": True,
             "status": "REQUESTED",
         }
         validate_execution_attempt(attempt)
-        operation_id = payload.get("operation_id") or _id("operation", command["command_id"])
         operation = {
             "schema_version": "operation_envelope.v2",
             "operation_id": operation_id,
@@ -643,6 +841,8 @@ class StageController:
             "intent_digest": request_digest,
             "effect_state": "INTENT_COMMITTED",
             "capability_manifest": _copy(payload.get("capability_manifest", {"query_by_operation_id": False, "idempotent_submit": False, "fence": False, "prove_not_sent": False})),
+            "handoff_invariant_version": PROVIDER_HANDOFF_INVARIANT_VERSION,
+            "provider_handoff_manifest": _copy(handoff),
             "status": "INTENT",
         }
         validate_operation_envelope(operation)
@@ -653,6 +853,76 @@ class StageController:
         runtime["execution_authorized"] = False
         stage["current_assessment_id"] = None
         return {"stage": self.show_stage(stage_id, journal=journal), "attempt": _copy(attempt), "operation": _copy(operation)}
+
+    def _resolve_legacy_orphan(self, journal: dict[str, Any], command: Mapping[str, Any], payload: Mapping[str, Any]) -> dict[str, Any]:
+        """Append-only resolution for a pre-invariant orphaned intent.
+
+        The historical attempt and operation are deliberately not rewritten.
+        Only the canonical runtime pointer is released and a resolution record
+        is appended, allowing the normal REQUEST_EXECUTION command to create a
+        distinct replacement identity.
+        """
+
+        stage_id = command["subject_id"]
+        stage = self._stage(journal, stage_id)
+        self._require_status(stage, {"ACTIVE"})
+        operation_id = _text(payload.get("operation_id"), "operation_id")
+        operation = journal["operations"].get(operation_id)
+        if operation is None:
+            raise WorkflowV2ControllerError("legacy resolution requires an existing operation")
+        attempt_id = operation.get("subject_id")
+        attempt = journal["attempts"].get(attempt_id)
+        if attempt is None or attempt.get("stage_id") != stage_id:
+            raise WorkflowV2ControllerError("legacy resolution operation is not bound to this Stage")
+        if operation.get("handoff_invariant_version") == PROVIDER_HANDOFF_INVARIANT_VERSION:
+            if operation.get("provider_handoff_manifest") is None:
+                raise WorkflowV2ControllerError("CRITICAL_PROVIDER_HANDOFF_INVARIANT_VIOLATION")
+            raise WorkflowV2ControllerError("legacy resolution is only valid for pre-invariant operations")
+        if operation.get("provider_handoff_manifest") is not None:
+            raise WorkflowV2ControllerError("legacy resolution cannot classify a partially formed handoff")
+        if operation.get("effect_state") != "INTENT_COMMITTED" or operation.get("status") != "INTENT":
+            raise WorkflowV2ControllerError("legacy resolution requires an unresolved intent")
+        if attempt.get("effect_state") != "INTENT_COMMITTED" or attempt.get("status") != "REQUESTED":
+            raise WorkflowV2ControllerError("legacy resolution requires an unobserved attempt")
+        if self._runtime(journal, stage_id).get("in_flight_operation_id") != operation_id:
+            raise WorkflowV2ControllerError("legacy resolution operation is not the current in-flight operation")
+        if any(observation.get("attempt_id") == attempt_id for observation in journal["observations"].values()):
+            raise WorkflowV2ControllerError("legacy resolution cannot abandon an observed attempt")
+        audit = payload.get("side_effect_audit")
+        if not isinstance(audit, Mapping) or audit.get("operation_id") != operation_id or audit.get("classification") != "NONE" or audit.get("complete") is not True:
+            raise WorkflowV2ControllerError("legacy resolution requires a complete NONE side-effect audit")
+        if payload.get("effect_class") != "REVERSIBLE_LOCAL_RESEARCH":
+            raise WorkflowV2ControllerError("legacy resolution is only automatic for reversible local research")
+        resolution_id = payload.get("resolution_id") or _id("legacy-resolution", command["command_id"])
+        resolution = {
+            "schema_version": "legacy_operation_resolution.v1",
+            "resolution_id": resolution_id,
+            "operation_id": operation_id,
+            "attempt_id": attempt_id,
+            "stage_id": stage_id,
+            "iteration_id": attempt["iteration_id"],
+            "classification": LEGACY_ORPHAN_CLASSIFICATION,
+            "reason": "provider identity/request/receipt absent in pre-invariant operation",
+            "resolution": LEGACY_ORPHAN_RESOLUTION,
+            "effect_class": "REVERSIBLE_LOCAL_RESEARCH",
+            "side_effect_evidence": "NONE",
+            "side_effect_audit": _copy(dict(audit)),
+            "old_operation_preserved": True,
+            "old_operation_redispatched": False,
+            "human_intervention_count": 0,
+        }
+        journal.setdefault("legacy_resolutions", {})[resolution_id] = resolution
+        runtime = self._runtime(journal, stage_id)
+        runtime["current_attempt_id"] = None
+        runtime["in_flight_operation_id"] = None
+        runtime["execution_authorized"] = False
+        stage["current_assessment_id"] = None
+        return {
+            "stage": self.show_stage(stage_id, journal=journal),
+            "legacy_resolution": _copy(resolution),
+            "old_operation": _copy(operation),
+            "old_attempt": _copy(attempt),
+        }
 
     def _record_observation(self, journal: dict[str, Any], command: Mapping[str, Any], payload: Mapping[str, Any]) -> dict[str, Any]:
         observation = validate_provider_observation(payload.get("observation", {}))
@@ -1124,12 +1394,16 @@ class StageController:
             if stage["pending_decisions"]:
                 stage["next_action"] = "APPLY_DECISION"
             elif runtime.get("in_flight_operation_id"):
-                stage["next_action"] = "RECORD_OBSERVATION"
+                stage["next_action"] = (
+                    "RESOLVE_LEGACY_ORPHAN"
+                    if self._legacy_orphan_operation(source, stage_id) is not None
+                    else "RECORD_OBSERVATION"
+                )
             elif stage.get("current_assessment_id"):
                 stage["next_action"] = "APPLY_GPT_DECISION"
             elif (
-                len(attempts) >= stage["budgets"]["max_attempts_total"]
-                or len(self._attempts_for(source, stage_id, stage.get("current_iteration_id")))
+                len(self._budgeted_attempts_for(source, stage_id)) >= stage["budgets"]["max_attempts_total"]
+                or len(self._budgeted_attempts_for(source, stage_id, stage.get("current_iteration_id")))
                 >= stage["budgets"]["max_attempts_per_iteration"]
             ):
                 stage["next_action"] = "ASSESS_RESULT"
@@ -1155,9 +1429,36 @@ class StageController:
         return self.dispatch("START", subject_id=stage_id, payload=kwargs.pop("payload", {}), **kwargs)
 
     def request_execution(self, stage_id: str, **kwargs: Any) -> dict[str, Any]:
-        payload = kwargs.pop("payload", {})
-        payload.update({key: kwargs.pop(key) for key in tuple(kwargs) if key in {"request", "request_id", "attempt_id", "request_digest", "provenance", "purpose", "reason", "operation_id", "capability_manifest"}})
-        return self.dispatch("REQUEST_EXECUTION", subject_id=stage_id, payload=payload, **kwargs)
+        payload = _copy(kwargs.pop("payload", {}))
+        payload.update({key: kwargs.pop(key) for key in tuple(kwargs) if key in {"request", "request_id", "attempt_id", "request_digest", "provenance", "purpose", "reason", "operation_id", "capability_manifest", "provider_handoff_manifest"}})
+        command_id = kwargs.pop("command_id", None) or _new_command_id()
+        if "provider_handoff_manifest" not in payload:
+            stage = self.resolve_canonical_stage(stage_id)
+            iteration_id = stage.get("current_iteration_id")
+            if not isinstance(iteration_id, str) or not iteration_id:
+                raise WorkflowV2ControllerError("execution requires an opened semantic iteration")
+            request = payload.get("request", {})
+            request_id = payload.get("request_id") or _id("request", command_id)
+            attempt_id = payload.get("attempt_id") or _id("attempt", command_id)
+            operation_id = payload.get("operation_id") or _id("operation", command_id)
+            provenance = payload.get("provenance", {"provider": "fixture-provider", "engine_digest": "engine-fixed-v2"})
+            purpose = payload.get("purpose", stage["purpose"])
+            payload["provider_handoff_manifest"] = build_provider_handoff_manifest(
+                operation_id=operation_id,
+                stage_id=stage_id,
+                iteration_id=iteration_id,
+                attempt_id=attempt_id,
+                request_id=request_id,
+                request=request,
+                provenance=provenance,
+                purpose=purpose,
+            )
+        return self.dispatch("REQUEST_EXECUTION", subject_id=stage_id, payload=payload, command_id=command_id, **kwargs)
+
+    def resolve_legacy_orphan(self, stage_id: str, **kwargs: Any) -> dict[str, Any]:
+        payload = _copy(kwargs.pop("payload", {}))
+        payload.update({key: kwargs.pop(key) for key in tuple(kwargs) if key in {"operation_id", "effect_class", "side_effect_audit", "resolution_id"}})
+        return self.dispatch("RESOLVE_LEGACY_ORPHAN", subject_id=stage_id, payload=payload, **kwargs)
 
     def record_observation(self, stage_id: str, observation: Mapping[str, Any], **kwargs: Any) -> dict[str, Any]:
         return self.dispatch("RECORD_OBSERVATION", subject_id=stage_id, payload={"observation": observation, **{key: kwargs.pop(key) for key in tuple(kwargs) if key in {"effect_state"}}}, **kwargs)
@@ -1203,4 +1504,7 @@ class StageController:
         return self.dispatch("STOP", subject_id=stage_id, payload=_copy(payload if payload is not None else kwargs), command_id=command_id, expected_revision=expected_revision)
 
 
-__all__ = ["StageController", "WorkflowV2ControllerError", "build_registration_payload"]
+__all__ = [
+    "StageController", "WorkflowV2ControllerError", "build_registration_payload",
+    "build_provider_handoff_manifest", "LEGACY_ORPHAN_CLASSIFICATION", "LEGACY_ORPHAN_RESOLUTION",
+]

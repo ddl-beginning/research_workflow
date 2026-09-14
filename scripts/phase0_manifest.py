@@ -347,7 +347,7 @@ def main() -> None:
     )
 
     target_commands = [
-        "REGISTER_STAGE", "START", "REQUEST_EXECUTION", "RECORD_OBSERVATION", "ASSESS_RESULT",
+        "REGISTER_STAGE", "START", "REQUEST_EXECUTION", "RESOLVE_LEGACY_ORPHAN", "RECORD_OBSERVATION", "ASSESS_RESULT",
         "APPLY_GPT_DECISION", "ADVANCE_ITERATION", "REQUEST_DECISION", "APPLY_DECISION",
         "ADD_DEPENDENCY", "SATISFY_DEPENDENCY", "RESOLVE_BLOCKER", "APPLY_RECEIPT",
         "COMMIT_INTEGRATION", "CLOSEOUT", "STOP",
@@ -394,7 +394,7 @@ def main() -> None:
                 "Stage", "Semantic Iteration", "Execution Attempt", "Provider Result / Observation",
                 "Stage Result / Assessment", "Decision", "Dependency",
             ],
-            "shared_support_roots_target": ["Command Envelope", "Operation Envelope", "Evidence Manifest"],
+            "shared_support_roots_target": ["Command Envelope", "Operation Envelope", "Evidence Manifest", "Provider Handoff Manifest"],
             "stage_states_target": ["PLANNED", "ACTIVE", "READY", "CLOSED", "STOPPED"],
             "before_schema_counts": {"host": len(list((HOST / "schemas").glob("*.json"))), "v2_current": len(list((V2 / "schemas").glob("*.json")))},
             "retirement_note": "bootstrap/recovery schemas may remain archive/read compatibility evidence but cannot be writable lifecycle roots",
@@ -425,7 +425,7 @@ def main() -> None:
     )
 
     target_commands = [
-        "REGISTER_STAGE", "START", "REQUEST_EXECUTION", "RECORD_OBSERVATION", "ASSESS_RESULT",
+        "REGISTER_STAGE", "START", "REQUEST_EXECUTION", "RESOLVE_LEGACY_ORPHAN", "RECORD_OBSERVATION", "ASSESS_RESULT",
         "APPLY_GPT_DECISION", "ADVANCE_ITERATION", "REQUEST_DECISION", "APPLY_DECISION",
         "ADD_DEPENDENCY", "SATISFY_DEPENDENCY", "RESOLVE_BLOCKER", "APPLY_RECEIPT",
         "COMMIT_INTEGRATION", "CLOSEOUT", "STOP",
@@ -434,6 +434,7 @@ def main() -> None:
         "REGISTER_STAGE": "workflow_v2_controller.StageController._register_stage",
         "START": "workflow_v2_controller.StageController._start",
         "REQUEST_EXECUTION": "workflow_v2_controller.StageController._request_execution",
+        "RESOLVE_LEGACY_ORPHAN": "workflow_v2_controller.StageController._resolve_legacy_orphan",
         "RECORD_OBSERVATION": "workflow_v2_controller.StageController._record_observation",
         "ASSESS_RESULT": "workflow_v2_controller.StageController._assess_result",
         "APPLY_GPT_DECISION": "workflow_v2_controller.StageController._apply_gpt_decision",
@@ -452,6 +453,7 @@ def main() -> None:
         "REGISTER_STAGE": ["identity/provenance", "baseline/scope"],
         "START": ["baseline/scope", "owner/dependency", "pending Decision", "budget"],
         "REQUEST_EXECUTION": ["owner/dependency", "budget", "effect settlement", "pending Decision"],
+        "RESOLVE_LEGACY_ORPHAN": ["identity/provenance", "effect settlement", "bounded local side-effect audit"],
         "RECORD_OBSERVATION": ["identity/provenance", "effect settlement"],
         "ASSESS_RESULT": ["assessment eligibility", "identity/provenance", "effect settlement", "budget"],
         "APPLY_GPT_DECISION": ["review/readiness", "assessment eligibility", "pending Decision"],
@@ -470,7 +472,7 @@ def main() -> None:
         "transition-test-traceability.json",
         {
             "inventory_version": "phase-0.v1",
-            "status": "complete for all 16 canonical commands: handler, guard family, and named invariant test are present",
+            "status": "complete for all 17 canonical commands: handler, guard family, and named invariant test are present",
             "transitions": [
                 {
                     "command": command,

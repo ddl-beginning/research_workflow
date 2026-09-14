@@ -33,12 +33,13 @@ DOMAIN_SCHEMA_ROOTS = (
     "decision",
     "dependency",
 )
-SHARED_SUPPORT_SCHEMA_ROOTS = ("command_envelope", "operation_envelope", "evidence_manifest")
+SHARED_SUPPORT_SCHEMA_ROOTS = ("command_envelope", "operation_envelope", "evidence_manifest", "provider_handoff_manifest")
 STAGE_STATES = ("PLANNED", "ACTIVE", "READY", "CLOSED", "STOPPED")
 PUBLIC_COMMANDS = (
     "REGISTER_STAGE",
     "START",
     "REQUEST_EXECUTION",
+    "RESOLVE_LEGACY_ORPHAN",
     "RECORD_OBSERVATION",
     "ASSESS_RESULT",
     "APPLY_GPT_DECISION",
@@ -75,6 +76,11 @@ REPLAN_SUBTYPES = ("ENGINEERING_FIX", "NEXT_ITERATION", "BASELINE_CHANGE")
 DECISION_ACTORS = ("HUMAN", "GPT")
 DECISION_BOUNDARIES = ("REQUIREMENT", "DESIGN", "STAGE_PLANNING", "TECHNICAL_REVIEW")
 ASSESSMENT_VERDICTS = ("ADMISSIBLE", "REJECTED", "INSUFFICIENT")
+PROVIDER_HANDOFF_INVARIANT_VERSION = "provider-handoff-v1"
+PROVIDER_HANDOFF_DISPATCH_STATES = ("PREPARED", "DISPATCHED", "RECEIPT_OBSERVED")
+_HANDOFF_SENSITIVE_KEY_PARTS = (
+    "authorization", "cookie", "credential", "password", "private", "secret", "session", "token",
+)
 
 _TYPED_FAILURE_SCHEMA = {
     "type": "object",
@@ -284,6 +290,39 @@ def validate_execution_attempt(value: Mapping[str, Any]) -> dict[str, Any]:
     _text(provenance.get("provider"), "provenance.provider")
     _text(provenance.get("engine_digest"), "provenance.engine_digest")
     return attempt
+
+
+def _reject_handoff_secrets(value: Any, path: str = "reconstructible_request_descriptor") -> None:
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            lowered = str(key).lower()
+            if any(part in lowered for part in _HANDOFF_SENSITIVE_KEY_PARTS):
+                _fail(f"{path}.{key}", "credential or private session material is not allowed")
+            _reject_handoff_secrets(item, f"{path}.{key}")
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            _reject_handoff_secrets(item, f"{path}[{index}]")
+
+
+def validate_provider_handoff_manifest(value: Mapping[str, Any]) -> dict[str, Any]:
+    manifest = _schema(value, "provider_handoff_manifest")
+    for field in (
+        "workflow_operation_id", "stage_id", "iteration_id", "attempt_id",
+        "provider_request_identity", "request_digest", "idempotency_key", "reconciliation_identity",
+    ):
+        _digest(manifest[field], field)
+    for field in ("provider_owner", "provider_route"):
+        _text(manifest[field], field)
+    _one_of(manifest["dispatch_state"], "dispatch_state", PROVIDER_HANDOFF_DISPATCH_STATES)
+    descriptor = _mapping(manifest["reconstructible_request_descriptor"], "reconstructible_request_descriptor")
+    _reject_handoff_secrets(descriptor)
+    if descriptor.get("schema_version") != "request_descriptor.v1":
+        _fail("reconstructible_request_descriptor.schema_version", "must be request_descriptor.v1")
+    if descriptor.get("request_digest") != manifest["request_digest"]:
+        _fail("reconstructible_request_descriptor.request_digest", "must match request_digest")
+    if "request" not in descriptor or not isinstance(descriptor["request"], Mapping):
+        _fail("reconstructible_request_descriptor.request", "must contain the bounded request descriptor")
+    return {**manifest, "reconstructible_request_descriptor": descriptor}
 
 
 def validate_typed_failure(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -611,6 +650,16 @@ def validate_operation_envelope(value: Mapping[str, Any]) -> dict[str, Any]:
     for field in ("query_by_operation_id", "idempotent_submit", "fence", "prove_not_sent"):
         _bool(capabilities.get(field), f"capability_manifest.{field}")
     _one_of(envelope["status"], "status", ("INTENT", "RECEIPT_OBSERVED", "SETTLED", "BLOCKED"))
+    invariant_version = envelope.get("handoff_invariant_version")
+    handoff = envelope.get("provider_handoff_manifest")
+    if invariant_version is not None:
+        if invariant_version != PROVIDER_HANDOFF_INVARIANT_VERSION:
+            _fail("handoff_invariant_version", "unsupported provider handoff invariant")
+        if not isinstance(handoff, Mapping):
+            _fail("provider_handoff_manifest", "required for post-invariant operations")
+        validate_provider_handoff_manifest(handoff)
+    elif handoff is not None:
+        _fail("handoff_invariant_version", "required when provider_handoff_manifest is present")
     if envelope["status"] == "SETTLED" and envelope["effect_state"] != "SETTLED":
         _fail("status", "SETTLED requires a proven SETTLED effect state")
     if envelope["effect_state"] in {"UNKNOWN", "CONFLICT"} and envelope["status"] != "BLOCKED":
@@ -654,4 +703,5 @@ __all__ = [
     "validate_evidence_manifest", "validate_execution_attempt", "validate_operation_envelope",
     "validate_provider_observation", "validate_semantic_iteration", "validate_stage",
     "validate_stage_assessment", "validate_typed_failure", "validate_typed_replan",
+    "validate_provider_handoff_manifest", "PROVIDER_HANDOFF_INVARIANT_VERSION",
 ]

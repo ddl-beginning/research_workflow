@@ -52,6 +52,12 @@ _STAGE_ACTION_HANDSHAKE = {
         "canonical_required": True,
         "canonical_source": "resolve_canonical_stage(stage_id)",
     },
+    "RESOLVE_LEGACY_ORPHAN": {
+        "wire_action": "RESOLVE_LEGACY_ORPHAN",
+        "stage_location": "request.stage",
+        "canonical_required": True,
+        "canonical_source": "resolve_canonical_stage(stage_id)",
+    },
     "OBSERVE_RESULT": {
         "wire_action": "RECORD_OBSERVATION",
         "stage_location": "request.stage",

@@ -439,7 +439,35 @@ def run_installation_validation(args: argparse.Namespace) -> dict[str, Any]:
         started = client.call("workflow_run", {"workspace": str(project), "request": {"operation": "COMMAND", "command": "START", "subject_id": STAGE_ID, "payload": {}, "command_id": "release-validation-start-v1"}})
         if stage_from_view(started).get("status") != "ACTIVE":
             raise ValidationFailure("START did not produce ACTIVE")
-        requested = client.call("workflow_run", {"workspace": str(project), "request": {"operation": "COMMAND", "command": "REQUEST_EXECUTION", "subject_id": STAGE_ID, "payload": {"request": {"objective": OBJECTIVE, "allowed_paths": ["src"], "protected_paths": PROTECTED_PATHS, "required_test_command": TEST_COMMAND}, "provenance": {"provider": "openai-codex", "engine_digest": source_commit}, "purpose": "DOMAIN", "capability_manifest": {"query_by_operation_id": False, "idempotent_submit": False, "fence": False, "prove_not_sent": False}}, "command_id": "release-validation-request-v1"}})
+        execution_request = {"objective": OBJECTIVE, "allowed_paths": ["src"], "protected_paths": PROTECTED_PATHS, "required_test_command": TEST_COMMAND}
+        execution_command_id = "release-validation-request-v1"
+        execution_request_id = "request-release-validation-v1"
+        execution_attempt_id = "attempt-release-validation-v1"
+        execution_operation_id = "operation-release-validation-v1"
+        execution_iteration_id = stage_from_view(started)["current_iteration_id"]
+        execution_request_digest = sha256_json(execution_request)
+        provider_handoff_manifest = {
+            "workflow_operation_id": execution_operation_id,
+            "stage_id": STAGE_ID,
+            "iteration_id": execution_iteration_id,
+            "attempt_id": execution_attempt_id,
+            "provider_owner": "openai-codex",
+            "provider_route": "openai-codex",
+            "provider_request_identity": execution_request_id,
+            "request_digest": execution_request_digest,
+            "reconstructible_request_descriptor": {
+                "schema_version": "request_descriptor.v1",
+                "operation": "REQUEST_EXECUTION",
+                "purpose": "DOMAIN",
+                "request_digest": execution_request_digest,
+                "request": execution_request,
+                "provider_args": {"provider_owner": "openai-codex", "provider_route": "openai-codex", "provider_request_identity": execution_request_id},
+            },
+            "idempotency_key": "idempotency-release-validation-v1",
+            "reconciliation_identity": "reconcile-release-validation-v1",
+            "dispatch_state": "PREPARED",
+        }
+        requested = client.call("workflow_run", {"workspace": str(project), "request": {"operation": "COMMAND", "command": "REQUEST_EXECUTION", "subject_id": STAGE_ID, "payload": {"request": execution_request, "request_id": execution_request_id, "attempt_id": execution_attempt_id, "operation_id": execution_operation_id, "provider_handoff_manifest": provider_handoff_manifest, "provenance": {"provider": "openai-codex", "engine_digest": source_commit}, "purpose": "DOMAIN", "capability_manifest": {"query_by_operation_id": False, "idempotent_submit": False, "fence": False, "prove_not_sent": False}}, "command_id": execution_command_id}})
         attempt = requested.get("command_result", {}).get("attempt")
         if not isinstance(attempt, Mapping):
             raise ValidationFailure("REQUEST_EXECUTION did not return the committed attempt")

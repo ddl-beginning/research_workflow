@@ -39,7 +39,7 @@ from src.portable_startup import (
     reset_machine_config,
     secret_scan_paths,
 )
-from src.product_workflow_runtime import initialize_product_runtime
+from src.product_workflow_runtime import ProductWorkflowRuntime, initialize_product_runtime
 from src.project_intake import IntakeMode, ProjectRequirementsIntake
 from src.runtime_composition import RuntimeCompositionError, load_runtime_composition_config
 from src.workflow_runtime import WorkflowRuntimeError
@@ -363,9 +363,20 @@ def _resume(args: argparse.Namespace, workspace: Path) -> dict[str, Any]:
         raise CommandError("SETUP_REQUIRED", "run workflow setup before resuming this project")
     profile = persist_profile(workspace)
     initialized = initialize_product_runtime(workspace, config_path=config_path)
+    config = load_runtime_composition_config(workspace, config_path=config_path)
+    resumed = ProductWorkflowRuntime(workspace, config=config).resume()
     summary = project_brief_summary(workspace) or {}
     registry = record_workspace(paths, workspace, str(summary.get("project_id")))
-    result = {"schema_version": "workflow_resume.v1", "operation": "resume", "ready": True, "profile": profile, "registry": registry, **initialized}
+    result = {
+        "schema_version": "workflow_resume.v1",
+        "operation": "resume",
+        "ready": True,
+        "profile": profile,
+        "registry": registry,
+        **initialized,
+        "canonical": resumed.get("canonical", initialized.get("canonical")),
+        **{key: resumed[key] for key in ("legacy_resolution", "old_operation_preserved", "old_operation_redispatched", "side_effect_audit", "self_repair") if key in resumed},
+    }
     presentation = build_human_presentation(canonical_state=result.get("canonical"), artifact_root=workspace)
     return {"human_summary": presentation["human_summary"], "machine_details": presentation["machine_details"], "presentation": presentation, **result}
 
