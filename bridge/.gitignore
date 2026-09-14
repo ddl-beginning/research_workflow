@@ -1,0 +1,11 @@
+node_modules/
+.auth/
+.consultations/
+*.auth.json
+storage-state*.json
+playwright-report/
+test-results/
+*.log
+.env
+.env.*
+!.env.example

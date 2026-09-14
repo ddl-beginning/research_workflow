@@ -55,19 +55,19 @@ Safe recovery: use `codex login` or the visible browser's manual login flow.
 Never put the credential, cookie, token, or one-time code in a file or prompt.
 Human action is required for account authentication.
 
-## Browser Bridge unavailable (BRIDGE_CONFIGURATION_REQUIRED / STANDARD_MODEL_UNAVAILABLE)
+## Browser Bridge unavailable (BRIDGE_CONFIGURATION_REQUIRED / STANDARD_MODEL_UNAVAILABLE / BRIDGE_DEPENDENCIES_MISSING / BRIDGE_VERSION_MISMATCH)
 
-Meaning: `scripts/consult-pack.mjs`, Node, profile, or the explicit transport
-scope cannot be found.
+Meaning: the packaged Bridge source, its npm dependencies, version identity,
+Node, profile, or the explicit transport scope is not ready.
 
-Safe diagnosis: check the configured `bridge.root`, `profile_dir`,
-`node_executable`, and `transport`; run `node --version` and
-`Test-Path <bridge>\scripts\consult-pack.mjs`.
+Safe diagnosis: run `workflow.exe setup` and then
+`workflow.exe doctor --probe-browser`. The machine report includes the expected
+and actual Bridge identity.
 
-Safe recovery: run `npm ci` in the separate bridge checkout and repair the
-machine-local paths. Do not copy the bridge profile into the Product or
-project. Human action is required if the browser needs login or a project URL
-must be selected.
+Safe recovery: rerun `workflow.exe setup`; it reprovisions the single
+machine-local Bridge root from `bridge/`. Do not create a second Bridge copy or
+copy the browser profile into the Product or project. Human action is required
+only if the browser needs normal login or a project URL must be selected.
 
 ## Browser probe could not create a fresh conversation (GPT_BROWSER_PROBE_FAILED)
 
@@ -87,9 +87,9 @@ the machine config.
 Meaning: a declared attachment was not ready in the browser, so the prompt was
 not sent (`request_count=0`).
 
-Safe diagnosis: inspect the bounded bridge receipt and confirm the attachment
-path, size, and upload status. Do not retry blindly when the receipt says a
-request effect is unresolved.
+Safe diagnosis: inspect the bounded Bridge receipt and confirm the attachment
+path, size, basename, checkpoint, and upload status. `ATTACHMENT_UPLOAD_FAILED`
+and `ATTACHMENT_NOT_READY` both mean the prompt was not sent.
 
 Safe recovery: fix the local attachment or browser composer state, create a
 deliberately revised packet, and keep the failed receipt. Human action is

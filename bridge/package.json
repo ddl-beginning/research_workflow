@@ -1,0 +1,22 @@
+{
+  "name": "chatgpt-browser-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Minimal local Playwright bridge for an explicitly authorized ChatGPT browser profile",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "consult": "node scripts/consult.mjs",
+    "smoke": "node scripts/smoke-test.mjs",
+    "context-smoke": "node scripts/context-pack-smoke.mjs",
+    "mcp": "node src/mcp-server.mjs",
+    "test": "node --test test/*.test.mjs",
+    "check": "node --check src/bridge.mjs && node --check src/chatgpt-ui.mjs && node --check src/mcp-server.mjs && node --check src/context-pack.mjs && node --check src/dialogue-policy.mjs && node --check scripts/consult.mjs && node --check scripts/smoke-test.mjs && node --check scripts/consult-pack.mjs && node --check scripts/context-pack-smoke.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "playwright": "1.62.1"
+  }
+}

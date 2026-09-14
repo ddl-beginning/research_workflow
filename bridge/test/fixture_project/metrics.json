@@ -1,0 +1,15 @@
+{
+  "boundary_iou": {
+    "before": 0.84,
+    "after": 0.79
+  },
+  "boundary_f1": {
+    "before": 0.91,
+    "after": 0.86
+  },
+  "speckle_components": {
+    "before": 37,
+    "after": 8
+  },
+  "review_region": "upper-right thin boundary"
+}

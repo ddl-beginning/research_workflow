@@ -16,7 +16,7 @@ is only for tests.
 ## Install the engine
 
 ```powershell
-git clone --branch workflow-v2.1-stable <PRODUCT_REPOSITORY_URL> C:\work\workflow-v2-product
+git clone --branch workflow-v2.1.1-stable <PRODUCT_REPOSITORY_URL> C:\work\workflow-v2-product
 Set-Location C:\work\workflow-v2-product
 .\install.ps1
 ```
@@ -24,18 +24,13 @@ Set-Location C:\work\workflow-v2-product
 The equivalent command is `python -m pip install -e .`. The package exposes
 both `workflow` and `research-workflow` console commands.
 
-## Configure the separate Browser Bridge
+## Browser Bridge provisioning
 
-Keep Browser Bridge outside the Workflow and project repositories:
-
-```powershell
-git clone <BROWSER_BRIDGE_REPOSITORY_URL> C:\work\chatgpt_browser_bridge
-Set-Location C:\work\chatgpt_browser_bridge
-npm ci
-```
-
-The default setup discovery looks for a sibling checkout. If it is elsewhere,
-pass `--bridge-root C:\path\to\chatgpt_browser_bridge` to `workflow.exe setup`.
+The release checkout already contains the versioned Bridge source under
+`bridge/`. You do not clone, copy, or configure another Bridge directory.
+`workflow.exe setup` copies only the source/package files to the machine-local
+provision root, runs `npm ci`, verifies the Bridge version and source digest,
+and creates the runtime binding. `node_modules` is never committed.
 
 ## First-run setup
 
@@ -48,8 +43,9 @@ Setup creates the non-secret machine config at
 `%LOCALAPPDATA%\ResearchWorkflow\product-v2-runtime.json`, a regenerable
 workspace registry, and a dedicated browser profile at
 `%LOCALAPPDATA%\ResearchWorkflow\browser-profile` when no explicit profile is
-already configured. It registers the Product MCP entry and installs the thin
-`workflow` launcher skill in the Codex user skill directory.
+already configured. It provisions the packaged Browser Bridge, registers the
+Product MCP entry, and installs the thin `workflow` launcher skill in the Codex
+user skill directory.
 
 If setup reports `AUTH_REQUIRED`, use the official flows:
 
@@ -100,4 +96,5 @@ workflow.exe setup --reset-machine-config
 This removes only the machine-local runtime config. It does not delete a
 project brief, journal, history, browser profile, or Codex login. Authentication
 must be performed independently on each computer; engine portability never
-means copying authentication state.
+means copying authentication state. Never copy cookies, tokens, or a browser
+profile.

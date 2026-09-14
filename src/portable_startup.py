@@ -29,8 +29,22 @@ PRODUCT_VERSION = "2.1"
 RUNTIME_CONFIG_FILENAME = "product-v2-runtime.json"
 WORKSPACE_REGISTRY_FILENAME = "workspace-registry.json"
 HEALTH_FILENAME = "health.json"
+BRIDGE_INSTALL_DIRNAME = "bridge"
+BRIDGE_ENTRYPOINT = "scripts/consult-pack.mjs"
 COOKIE_EXPORT_FORBIDDEN = True
 HEALTH_PROMPT = "Reply with exactly: WORKFLOW_HEALTH_OK"
+
+_BRIDGE_RUNTIME_DIRS = frozenset(
+    {
+        ".auth",
+        ".consultations",
+        ".diagnostics",
+        ".git",
+        "node_modules",
+        "playwright-report",
+        "test-results",
+    }
+)
 
 _SENSITIVE_KEY_MARKERS = (
     "api_key",
@@ -109,6 +123,132 @@ def machine_paths(machine_root: str | os.PathLike[str] | None = None) -> Machine
     )
 
 
+def _bridge_source_files(root: Path) -> list[Path]:
+    files: list[Path] = []
+    for candidate in root.rglob("*"):
+        if not candidate.is_file():
+            continue
+        relative = candidate.relative_to(root)
+        if any(part in _BRIDGE_RUNTIME_DIRS for part in relative.parts):
+            continue
+        if candidate.name in {".env", ".env.example"} or candidate.name.startswith(".env."):
+            continue
+        if candidate.suffix == ".log" or candidate.name.endswith(".auth.json"):
+            continue
+        if candidate.name.startswith("storage-state"):
+            continue
+        files.append(candidate)
+    return sorted(files, key=lambda item: item.relative_to(root).as_posix())
+
+
+def _digest_files(root: Path, files: Sequence[Path]) -> str:
+    digest = hashlib.sha256()
+    for item in files:
+        relative = item.relative_to(root).as_posix()
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(item.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def bridge_source_identity(bridge_root: str | os.PathLike[str]) -> dict[str, Any]:
+    """Return the bounded, reproducible identity of one Bridge source tree."""
+
+    root = Path(bridge_root).expanduser().resolve()
+    package_path = root / "package.json"
+    lock_path = root / "package-lock.json"
+    entrypoint = root / BRIDGE_ENTRYPOINT
+    if not root.is_dir() or not package_path.is_file() or not lock_path.is_file() or not entrypoint.is_file():
+        raise StartupError("BRIDGE_SOURCE_INVALID", "packaged Browser Bridge source is incomplete")
+    try:
+        package = json.loads(package_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise StartupError("BRIDGE_SOURCE_INVALID", "Browser Bridge package metadata is unreadable") from exc
+    if not isinstance(package, Mapping) or package.get("name") != "chatgpt-browser-bridge":
+        raise StartupError("BRIDGE_SOURCE_INVALID", "Browser Bridge package name is invalid")
+    version = package.get("version")
+    dependencies = package.get("dependencies")
+    if not isinstance(version, str) or not version.strip() or not isinstance(dependencies, Mapping):
+        raise StartupError("BRIDGE_SOURCE_INVALID", "Browser Bridge package metadata is incomplete")
+    files = _bridge_source_files(root)
+    return {
+        "version": version.strip(),
+        "source_digest": _digest_files(root, files),
+        "dependency_lock_digest": hashlib.sha256(lock_path.read_bytes()).hexdigest(),
+        "entrypoint": BRIDGE_ENTRYPOINT,
+        "dependencies": {str(key): str(value) for key, value in sorted(dependencies.items(), key=lambda pair: str(pair[0]))},
+    }
+
+
+def provision_bridge(
+    paths: MachinePaths,
+    source_root: str | os.PathLike[str],
+    *,
+    node_executable: str = "node",
+) -> tuple[Path, dict[str, Any], bool]:
+    """Copy packaged Bridge source and install its lockfile dependencies.
+
+    The installed tree is machine-local and deliberately keeps auth/profile
+    state outside the versioned source boundary. Re-running setup reuses the
+    same provision root and does not create another Bridge copy.
+    """
+
+    source = Path(source_root).expanduser().resolve(strict=True)
+    identity = bridge_source_identity(source)
+    target = paths.root / BRIDGE_INSTALL_DIRNAME
+    previous_identity: dict[str, Any] | None = None
+    try:
+        previous_identity = bridge_source_identity(target)
+    except (OSError, RuntimeError, StartupError):
+        previous_identity = None
+    previous_dependencies_installed = (
+        (target / "node_modules" / "playwright").is_dir()
+        and (target / "node_modules" / "@modelcontextprotocol" / "sdk").is_dir()
+    )
+    changed = previous_identity != identity or not previous_dependencies_installed
+    target.mkdir(parents=True, exist_ok=True)
+    for item in _bridge_source_files(source):
+        relative = item.relative_to(source)
+        destination = target / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(item, destination)
+    target_identity = bridge_source_identity(target)
+    if target_identity["source_digest"] != identity["source_digest"]:
+        raise StartupError("BRIDGE_PROVISION_FAILED", "provisioned Browser Bridge source digest does not match packaged source")
+    node = shutil.which(node_executable) or (str(node_executable) if Path(str(node_executable)).is_file() else None)
+    if not node:
+        raise StartupError("NODE_NOT_FOUND", "Node.js was not found")
+    npm = shutil.which("npm")
+    if not npm:
+        raise StartupError("NPM_NOT_FOUND", "npm was not found")
+    dependencies_installed = (target / "node_modules" / "playwright").is_dir() and (target / "node_modules" / "@modelcontextprotocol" / "sdk").is_dir()
+    if not dependencies_installed:
+        try:
+            completed = subprocess.run(
+                [npm, "ci", "--no-audit", "--no-fund"],
+                cwd=str(target),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=900,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise StartupError("BRIDGE_DEPENDENCY_INSTALL_FAILED", "Browser Bridge dependencies could not be installed") from exc
+        if completed.returncode != 0:
+            raise StartupError(
+                "BRIDGE_DEPENDENCY_INSTALL_FAILED",
+                "Browser Bridge dependencies could not be installed",
+                details={"returncode": int(completed.returncode)},
+            )
+        dependencies_installed = True
+    if not dependencies_installed:
+        raise StartupError("BRIDGE_DEPENDENCY_INSTALL_FAILED", "Browser Bridge dependencies are incomplete")
+    return target, target_identity, changed
+
+
 def _atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
@@ -169,7 +309,9 @@ def discover_bridge_root(
             candidates.append(Path(value).expanduser())
     if product_root:
         root = Path(product_root).expanduser().resolve()
-        candidates.extend((root.parent / "chatgpt_browser_bridge", root / "chatgpt_browser_bridge"))
+        # A release checkout owns its packaged Bridge. The historical
+        # sibling-directory locations remain a compatibility fallback only.
+        candidates.extend((root / "bridge", root.parent / "chatgpt_browser_bridge", root / "chatgpt_browser_bridge"))
     cwd = Path.cwd().resolve()
     candidates.extend((cwd / "chatgpt_browser_bridge", cwd.parent / "chatgpt_browser_bridge"))
     for candidate in candidates:
@@ -192,6 +334,15 @@ def default_runtime_config(
     project_url: str | None = None,
 ) -> dict[str, Any]:
     profile = (browser_profile or paths.browser_profile).resolve()
+    identity: dict[str, Any] = {}
+    if bridge_root is not None:
+        try:
+            identity = bridge_source_identity(bridge_root)
+        except StartupError:
+            # Test seams and legacy external bridges may expose only the
+            # consult script. The strict identity gate is applied whenever a
+            # packaged source is provisioned by ``workflow setup``.
+            identity = {}
     return {
         "schema_version": "runtime_composition.v1",
         "lifecycle_version": "v2",
@@ -210,6 +361,11 @@ def default_runtime_config(
             "root": bridge_root.as_posix() if bridge_root else None,
             "profile_dir": profile.as_posix(),
             "node_executable": node_executable,
+            "entrypoint": identity.get("entrypoint", BRIDGE_ENTRYPOINT),
+            "version": identity.get("version"),
+            "source_digest": identity.get("source_digest"),
+            "dependency_lock_digest": identity.get("dependency_lock_digest"),
+            "source_mode": "packaged" if identity else "external",
             "transport": "homepage_fallback" if project_url is None else None,
             "project_url": project_url,
         },
@@ -406,6 +562,8 @@ def secret_scan_paths(paths: Sequence[Path]) -> dict[str, Any]:
 
 
 __all__ = [
+    "BRIDGE_ENTRYPOINT",
+    "BRIDGE_INSTALL_DIRNAME",
     "BRIDGE_ROOT_ENV",
     "COOKIE_EXPORT_FORBIDDEN",
     "HEALTH_PROMPT",
@@ -415,6 +573,7 @@ __all__ = [
     "ProbeResult",
     "StartupError",
     "default_runtime_config",
+    "bridge_source_identity",
     "discover_bridge_root",
     "ensure_machine_config",
     "ensure_machine_directories",
@@ -422,6 +581,7 @@ __all__ = [
     "load_machine_config",
     "machine_paths",
     "persist_profile",
+    "provision_bridge",
     "probe_browser",
     "project_brief_summary",
     "project_identity_present",

@@ -25,6 +25,7 @@ from src.portable_startup import (
     PRODUCT_VERSION,
     MachinePaths,
     StartupError,
+    bridge_source_identity,
     discover_bridge_root,
     ensure_machine_config,
     ensure_machine_directories,
@@ -33,6 +34,7 @@ from src.portable_startup import (
     machine_paths,
     persist_profile,
     probe_browser,
+    provision_bridge,
     project_brief_summary,
     project_identity_present,
     record_workspace,
@@ -84,8 +86,13 @@ def _runtime_config_path(paths: MachinePaths, args: argparse.Namespace) -> Path:
     return Path(args.runtime_config).expanduser().resolve() if args.runtime_config else paths.config
 
 
-def _config_for_setup(paths: MachinePaths, args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
-    bridge_root = discover_bridge_root(
+def _config_for_setup(
+    paths: MachinePaths,
+    args: argparse.Namespace,
+    *,
+    bridge_root: Path | None = None,
+) -> tuple[dict[str, Any], bool]:
+    bridge_root = bridge_root or discover_bridge_root(
         args.bridge_root,
         product_root=ROOT,
         configured=None,
@@ -145,10 +152,22 @@ def _bridge_check(config: Mapping[str, Any] | None) -> dict[str, Any]:
         return {"status": "FAIL", "code": "BRIDGE_CONFIGURATION_REQUIRED", "detail": "Browser Bridge is not configured"}
     if root is None or not (root / "scripts" / "consult-pack.mjs").is_file():
         return {"status": "FAIL", "code": "BRIDGE_SCRIPT_MISSING", "detail": "Browser Bridge checkout is missing consult-pack.mjs"}
+    if (root / "package.json").is_file() and not (root / "node_modules" / "playwright").is_dir():
+        return {"status": "FAIL", "code": "BRIDGE_DEPENDENCIES_MISSING", "detail": "Browser Bridge npm dependencies are not installed"}
     if not profile or not profile.is_dir():
         return {"status": "FAIL", "code": "BROWSER_PROFILE_REQUIRED", "detail": "dedicated browser profile is missing"}
     if not (shutil.which(node) or Path(node).is_file()):
         return {"status": "FAIL", "code": "NODE_NOT_FOUND", "detail": "Node.js was not found"}
+    expected_version = bridge.get("version")
+    expected_digest = bridge.get("source_digest")
+    if expected_version or expected_digest:
+        try:
+            actual = bridge_source_identity(root)
+        except StartupError:
+            return {"status": "FAIL", "code": "BRIDGE_IDENTITY_INVALID", "detail": "Browser Bridge identity could not be verified"}
+        if expected_version != actual.get("version") or expected_digest != actual.get("source_digest"):
+            return {"status": "FAIL", "code": "BRIDGE_VERSION_MISMATCH", "detail": "Browser Bridge source identity does not match setup"}
+        return {"status": "PASS", "code": "OK", "detail": f"Browser Bridge {actual['version']} is provisioned and compatible", "version": actual["version"], "source_digest": actual["source_digest"]}
     return {"status": "PASS", "code": "OK", "detail": "Browser Bridge and dedicated profile are configured"}
 
 
@@ -244,7 +263,25 @@ def _setup(args: argparse.Namespace, workspace: Path) -> dict[str, Any]:
     if args.reset_machine_config:
         reset_machine_config(paths)
     ensure_machine_directories(paths)
-    config, config_changed = _config_for_setup(paths, args)
+    packaged_bridge = discover_bridge_root(
+        args.bridge_root,
+        product_root=ROOT,
+        configured=None,
+    )
+    if packaged_bridge is None:
+        raise CommandError(
+            "BRIDGE_SOURCE_NOT_FOUND",
+            "versioned Browser Bridge source was not found in this Workflow checkout",
+        )
+    try:
+        provisioned_bridge, bridge_identity, bridge_changed = provision_bridge(
+            paths,
+            packaged_bridge,
+            node_executable=args.node_executable,
+        )
+    except StartupError as exc:
+        raise CommandError(exc.code, str(exc), details=exc.details) from exc
+    config, config_changed = _config_for_setup(paths, args, bridge_root=provisioned_bridge)
     config_paths, selected_config = _machine_config_for(paths, args)
     if selected_config is None:
         selected_config = config
@@ -263,6 +300,12 @@ def _setup(args: argparse.Namespace, workspace: Path) -> dict[str, Any]:
     step("machine_config", "PASS", "OK", f"{'created' if config_changed else 'reused'} {config_paths.config.as_posix()}")
     bridge = _bridge_check(selected_config)
     step("browser_bridge", bridge["status"], bridge["code"], bridge["detail"])
+    step(
+        "bridge_provision",
+        "PASS" if bridge_changed else "PASS",
+        "OK",
+        f"Browser Bridge {bridge_identity['version']} provisioned at {provisioned_bridge.as_posix()}",
+    )
     profile_dir = selected_config.get("bridge", {}).get("profile_dir") if isinstance(selected_config.get("bridge"), Mapping) else None
     if isinstance(profile_dir, str):
         Path(profile_dir).expanduser().mkdir(parents=True, exist_ok=True)

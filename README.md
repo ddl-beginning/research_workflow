@@ -13,6 +13,11 @@ On Windows, from a clean checkout:
 workflow.exe setup
 ```
 
+The checkout contains the versioned Browser Bridge source. `workflow.exe setup`
+provisions its npm dependencies into `%LOCALAPPDATA%\ResearchWorkflow\bridge`;
+no separate Bridge checkout or manual copy is required. Workflow runtime code
+uses the Python standard library. `requirements-dev.txt` is only for tests.
+
 The equivalent packaging command is:
 
 ```powershell
@@ -21,9 +26,10 @@ workflow.exe setup
 ```
 
 `workflow.exe setup` checks Python, Node.js, Codex, the saved ChatGPT login, the
-separate Browser Bridge, the machine-local runtime config, the dedicated
-browser profile, MCP registration, and the final doctor report. It may ask you
-to complete a normal browser login. It never reads or exports browser cookies.
+packaged Browser Bridge version, its npm dependencies, the machine-local
+runtime config, the dedicated browser profile, MCP registration, and the final
+doctor report. It may ask you to complete a normal browser login. It never
+reads or exports browser cookies.
 
 In Command Prompt, `workflow` is the short command. Windows PowerShell
 reserves the bare word `workflow`, so use `workflow.exe` or the equivalent
@@ -81,7 +87,8 @@ workflow.exe doctor --probe-browser
 
 Never export, copy, paste, encode, or commit cookies, browser storage,
 passwords, access tokens, or session tokens. Authentication is intentionally
-machine-local and must be repeated on a different computer.
+machine-local and must be completed normally on a different computer. The
+Bridge source and dependencies are portable; the browser profile is not.
 
 ## Useful commands
 
@@ -102,9 +109,10 @@ profile state.
 
 ```text
 Workflow Engine (this repository)
+  → Versioned Browser Bridge source (bridge/)
   → Project workspace (.research/PROJECT_BRIEF.json, .workflow-v2/journal.json)
   → Machine-local runtime (%LOCALAPPDATA%/ResearchWorkflow)
-  → External services (Codex CLI, ChatGPT auth, Browser Bridge)
+  → External services (Codex CLI, ChatGPT Web)
 ```
 
 The existing V2 `StageController` remains the sole lifecycle authority. The

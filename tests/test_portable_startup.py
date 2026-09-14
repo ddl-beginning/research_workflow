@@ -8,15 +8,18 @@ from types import SimpleNamespace
 
 import pytest
 
+from src import portable_startup
 from scripts import workflow
 from src.execution_profile import EXECUTION_PROFILE_NAME, ensure_execution_profile
 from src.portable_startup import (
     HEALTH_PROMPT,
+    bridge_source_identity,
     default_runtime_config,
     ensure_machine_config,
     ensure_machine_directories,
     machine_paths,
     probe_browser,
+    provision_bridge,
     secret_scan_paths,
 )
 from src.project_intake import IntakeMode, ProjectRequirementsIntake
@@ -46,6 +49,60 @@ def test_machine_config_is_portable_and_rejects_secret_fields(tmp_path: Path):
     with pytest.raises(Exception) as caught:
         ensure_machine_config(paths, bridge_root=bridge)
     assert getattr(caught.value, "code", None) == "MACHINE_CONFIG_SECRET"
+
+
+def test_packaged_bridge_identity_excludes_machine_runtime(tmp_path: Path):
+    bridge = tmp_path / "bridge"
+    (bridge / "scripts").mkdir(parents=True)
+    (bridge / "src").mkdir()
+    (bridge / "package.json").write_text(
+        json.dumps({"name": "chatgpt-browser-bridge", "version": "9.9.9", "dependencies": {"playwright": "1.0.0"}}),
+        encoding="utf-8",
+    )
+    (bridge / "package-lock.json").write_text("{}\n", encoding="utf-8")
+    (bridge / "scripts" / "consult-pack.mjs").write_text("// entry\n", encoding="utf-8")
+    (bridge / "src" / "bridge.mjs").write_text("// source\n", encoding="utf-8")
+    (bridge / "node_modules").mkdir()
+    (bridge / "node_modules" / "secret.txt").write_text("machine-only\n", encoding="utf-8")
+    first = bridge_source_identity(bridge)
+    (bridge / "node_modules" / "secret.txt").write_text("changed-machine-only\n", encoding="utf-8")
+    second = bridge_source_identity(bridge)
+
+    assert first == second
+    assert first["version"] == "9.9.9"
+    assert first["entrypoint"] == "scripts/consult-pack.mjs"
+
+
+def test_setup_provisions_one_bridge_root_and_is_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    source = tmp_path / "packaged-bridge"
+    (source / "scripts").mkdir(parents=True)
+    (source / "package.json").write_text(
+        json.dumps({"name": "chatgpt-browser-bridge", "version": "1.2.3", "dependencies": {"playwright": "1.0.0"}}),
+        encoding="utf-8",
+    )
+    (source / "package-lock.json").write_text("{}\n", encoding="utf-8")
+    (source / "scripts" / "consult-pack.mjs").write_text("// entry\n", encoding="utf-8")
+    paths = machine_paths(tmp_path / "machine")
+    ensure_machine_directories(paths)
+    npm_calls: list[Path] = []
+
+    def fake_run(argv, *, cwd, **kwargs):
+        npm_calls.append(Path(cwd))
+        target = Path(cwd)
+        (target / "node_modules" / "playwright").mkdir(parents=True)
+        (target / "node_modules" / "@modelcontextprotocol" / "sdk").mkdir(parents=True)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(portable_startup.shutil, "which", lambda value: "node.exe" if value in {"node", "node.exe"} else "npm.exe")
+    monkeypatch.setattr(portable_startup.subprocess, "run", fake_run)
+    first_root, first_identity, first_changed = provision_bridge(paths, source)
+    second_root, second_identity, second_changed = provision_bridge(paths, source)
+
+    assert first_root == second_root == paths.root / "bridge"
+    assert first_identity == second_identity
+    assert first_changed is True and second_changed is False
+    assert npm_calls == [paths.root / "bridge"]
+    assert (first_root / "node_modules" / "playwright").is_dir()
 
 
 def test_profile_is_persisted_in_canonical_project_brief(tmp_path: Path):

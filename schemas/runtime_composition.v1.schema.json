@@ -42,7 +42,12 @@
         "enabled": {"type": "boolean"},
         "root": {"type": ["string", "null"], "minLength": 1},
         "node_executable": {"type": "string", "minLength": 1},
-        "project_url": {"type": ["string", "null"], "minLength": 1}
+        "project_url": {"type": ["string", "null"], "minLength": 1},
+        "entrypoint": {"type": "string", "minLength": 1},
+        "version": {"type": ["string", "null"], "minLength": 1},
+        "source_digest": {"type": ["string", "null"], "minLength": 1},
+        "dependency_lock_digest": {"type": ["string", "null"], "minLength": 1},
+        "source_mode": {"type": "string", "enum": ["packaged", "external"]}
       }
     }
   }

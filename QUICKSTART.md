@@ -1,6 +1,21 @@
 # Workflow V2.1 Quickstart
 
-The machine must have completed [INSTALL.md](INSTALL.md) first.
+The machine must have completed [INSTALL.md](INSTALL.md) first. A release
+checkout includes the Browser Bridge; setup provisions it automatically.
+
+## Another computer
+
+```powershell
+git clone --branch workflow-v2.1.1-stable <PRODUCT_REPOSITORY_URL> C:\work\workflow-v2-product
+Set-Location C:\work\workflow-v2-product
+.\install.ps1
+workflow.exe setup
+workflow.exe doctor --probe-browser
+```
+
+Sign in normally to Codex and, if requested, to ChatGPT Web in the visible
+dedicated browser profile. Do not copy cookies, profile files, tokens, or
+runtime config.
 
 ## New project
 

@@ -14,3 +14,11 @@ workspace-registry.json
 health.json
 cookies*.json
 storage-state*.json
+bridge/node_modules/
+bridge/.auth/
+bridge/.consultations/
+bridge/.diagnostics/
+bridge/playwright-report/
+bridge/test-results/
+bridge/*.auth.json
+bridge/*.log
