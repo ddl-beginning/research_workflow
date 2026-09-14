@@ -445,7 +445,7 @@ class ProductWorkflowRuntime:
                 "presentation": presentation,
                 "schema_version": "product_workflow_result.v1", "lifecycle_version": "v2",
                 "workspace_root": str(self.root), "project_id": brief["project_id"],
-                "brief_state": brief["state"], **projection, "next_tool": "workflow_answer" if projection["next_actor"] == "Human" else "workflow_run",
+                "brief_state": brief["state"], "canonical": projection, **projection, "next_tool": "workflow_answer" if projection["next_actor"] == "Human" else "workflow_run",
                 "question_id": None, **extra}
 
     def status(self) -> dict[str, Any]:
