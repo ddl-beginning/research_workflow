@@ -11,6 +11,7 @@ import json
 import os
 import shutil
 import copy
+from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
 from typing import Any, Mapping
@@ -24,13 +25,19 @@ from .contract_handshake import (
     stage_identity_digest,
 )
 from .contracts import ContractValidationError, canonical_json, sha256_json
+from .executor import ExecutionRequest, ExecutionResult
 from .openai_codex_executor import OpenAICodexExecutor
 from .project_intake import ProjectIntakeError, ProjectRequirementsIntake
 from .runtime_composition import RuntimeCompositionConfig, load_runtime_composition_config
 from .stage_integration import StageIntegrationError, parse_dialogue_decision, subprocess_bridge_runner
 from .workflow_runtime import WorkflowRuntimeError
 from .human_summary import build_human_presentation
-from .workflow_v2_contracts import PUBLIC_COMMANDS, validate_stage
+from .workflow_v2_contracts import (
+    PUBLIC_COMMANDS,
+    assess_observation,
+    classify_blocker,
+    validate_stage,
+)
 from .workflow_v2_controller import StageController, WorkflowV2ControllerError, build_provider_handoff_manifest
 
 
@@ -96,6 +103,10 @@ def _journal_path(root: Path, config: RuntimeCompositionConfig) -> Path:
     if path == ".research/stage-state.json":
         path = ".workflow-v2/journal.json"
     return _inside(root, path)
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def _controller(root: Path, config: RuntimeCompositionConfig) -> StageController:
@@ -452,8 +463,468 @@ class ProductWorkflowRuntime:
     def status(self) -> dict[str, Any]:
         return self._view()
 
+    def _maintenance_context(self) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any] | None] | None:
+        """Return the current rejected result and its bound provider facts."""
+
+        projection = self.controller.resume_projection()
+        stage = projection.get("stage")
+        if not isinstance(stage, Mapping):
+            return None
+        assessment_id = stage.get("current_assessment_id")
+        state = self.controller.state
+        assessment = state.get("assessments", {}).get(assessment_id)
+        if not isinstance(assessment, Mapping):
+            return None
+        observation = next(
+            (item for item in state.get("observations", {}).values()
+             if item.get("stage_id") == stage.get("stage_id")
+             and item.get("attempt_id") == assessment.get("attempt_id")
+             and item.get("provider_result_digest") == assessment.get("provider_result_digest")),
+            None,
+        )
+        if not isinstance(observation, Mapping):
+            return None
+        resolved = [
+            item for item in state.get("decisions", {}).values()
+            if item.get("actor_kind") == "GPT" and item.get("boundary") == "TECHNICAL_REVIEW"
+            and item.get("subject_id") == assessment_id and item.get("resolution") is not None
+        ]
+        is_preserved_blocked = any(item.get("resolution") == "BLOCKED" for item in resolved)
+        is_unreviewed_technical_failure = isinstance(observation.get("failure"), Mapping)
+        if not is_preserved_blocked and not is_unreviewed_technical_failure:
+            return None
+        operation = next(
+            (item for item in state.get("operations", {}).values()
+             if item.get("subject_id") == assessment.get("attempt_id")),
+            None,
+        )
+        return dict(stage), dict(assessment), dict(observation), dict(operation) if isinstance(operation, Mapping) else None
+
+    def _maintenance_blocker(self, context: tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any] | None]) -> dict[str, Any]:
+        stage, assessment, observation, operation = context
+        failure = observation.get("failure") if isinstance(observation.get("failure"), Mapping) else None
+        missing_owner = assessment.get("missing_thing_owner") or observation.get("missing_thing_owner")
+        derived = classify_blocker(
+            assessment=assessment,
+            observation=observation,
+            failure=failure,
+            missing_thing_owner=missing_owner,
+            evidence_refs=[observation.get("evidence_manifest_digest")],
+        )
+        operation_id = operation.get("operation_id") if operation else derived.get("operation_id")
+        blocker_id = "blocker-" + sha256_json({
+            "stage_id": stage["stage_id"],
+            "assessment_id": assessment["assessment_id"],
+            "failure_signature": derived["failure_signature"],
+        })
+        now = _utc_now()
+        return {
+            "blocker_id": blocker_id,
+            "project_id": stage["project_id"],
+            "stage_id": stage["stage_id"],
+            "assessment_id": assessment["assessment_id"],
+            "revision": self.controller.revision,
+            "failure_class": derived["failure_class"],
+            "failure_code": derived["failure_code"],
+            "failure_signature": derived["failure_signature"],
+            "evidence_refs": derived["evidence_refs"],
+            "recoverability": derived["recoverability"],
+            "origin": "RESUME_REASSESSMENT",
+            "created_at": now,
+            "last_validated_at": now,
+            "resolved_at": None,
+            "missing_thing_owner": missing_owner,
+            "operation_id": operation_id,
+            "recommended_action": derived["recommended_action"],
+        }
+
+    @staticmethod
+    def _bounded_result(result: Mapping[str, Any]) -> dict[str, Any]:
+        """Keep provider claims small before they become journal evidence."""
+
+        return {
+            key: copy.deepcopy(result.get(key))
+            for key in ("status", "summary", "changed_files", "tests", "problems_discovered", "execution_failure")
+            if key in result
+        }
+
+    def _maintenance_request(self, context: tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any] | None], *, suffix: str) -> dict[str, Any]:
+        stage, assessment, _observation, operation = context
+        descriptor = (operation or {}).get("provider_handoff_manifest", {}).get("reconstructible_request_descriptor", {})
+        original = descriptor.get("request", {}) if isinstance(descriptor, Mapping) else {}
+        request = copy.deepcopy(dict(original)) if isinstance(original, Mapping) else {}
+        state = self.controller.state
+        iteration = state.get("iterations", {}).get(stage.get("current_iteration_id"), {})
+        attempt_index = len([item for item in state.get("attempts", {}).values() if item.get("stage_id") == stage["stage_id"]]) + 1
+        request_id = "request-maintenance-" + suffix
+        required_path = request.get("required_changed_path") or request.get("execution_receipt_path")
+        if not isinstance(required_path, str) or not required_path.strip():
+            required_path = ".tmp/workflow-v2-maintenance-result.json"
+        allowed_paths = request.get("allowed_paths")
+        if not isinstance(allowed_paths, list) or not allowed_paths:
+            allowed_paths = [required_path.split("/", 1)[0]]
+        protected_paths = request.get("protected_paths")
+        if not isinstance(protected_paths, list):
+            protected_paths = [".git", ".workflow-v2", ".research", ".consultations"]
+        request.update({
+            "request_id": request_id,
+            "task_id": request_id,
+            "plan_id": request.get("plan_id") or "plan-" + stage["objective_fingerprint"],
+            "stage_id": stage["stage_id"],
+            "objective": (
+                str(request.get("objective") or stage["target_identity"])
+                + " Resume only the bounded stage-owned generation or evidence-producing route needed by the current objective."
+            ),
+            "iteration_index": int(iteration.get("index", 1)),
+            "attempt_index": attempt_index,
+            "allowed_paths": allowed_paths,
+            "protected_paths": protected_paths,
+            "required_changed_path": required_path,
+            "execution_receipt_path": required_path,
+            "action_map": {
+                "schema_version": "action_map.v1",
+                "validated": True,
+                "execute": True,
+                "actions": ["bounded_stage_owned_recovery"],
+                "authority": "WORKFLOW_CONTROLLER",
+            },
+            "maintenance_recovery": True,
+            "maintenance_instruction": (
+                "If a required stage-owned generated input or artifact is absent, start its bounded generation within the declared allowed scope and record only a generation-start/result marker. "
+                "Do not modify source, configuration, tests, benchmark, workflow state, or existing evidence. Do not infer scientific success from a marker."
+            ),
+        })
+        return request
+
+    def _maintenance_provider(self) -> Any:
+        injected = self.maintenance_capability
+        if injected is not None and callable(getattr(injected, "execute", None)):
+            return injected
+        return OpenAICodexExecutor(
+            codex_executable=self.config.codex_executable,
+            workspace_root=str(self.root),
+            preferred_model=self.config.preferred_model,
+            fallback_model=self.config.fallback_model,
+            auth_mode=self.config.auth_mode,
+            timeout_seconds=self.config.timeout_seconds,
+            artifact_dir=self.config.artifact_dir,
+        )
+
+    def _execute_maintenance_provider(self, context: tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any] | None], *, reason: str, suffix: str) -> dict[str, Any]:
+        stage, _assessment, _observation, _operation = context
+        request = self._maintenance_request(context, suffix=suffix)
+        submitted = self.controller.request_execution(
+            stage["stage_id"], request=request, reason=reason,
+            request_id=request["request_id"], attempt_id="attempt-maintenance-" + suffix,
+            operation_id="operation-maintenance-" + suffix,
+            purpose=stage["purpose"],
+            provenance={"provider": "openai-codex", "engine_digest": "engine-v2.1.3-maintenance"},
+            command_id="command-maintenance-execution-" + suffix,
+        )
+        attempt = submitted["attempt"]
+        operation = submitted["operation"]
+        try:
+            execution_request = ExecutionRequest.from_stage_request(
+                request,
+                plan_id=request["plan_id"],
+                task_id=request["task_id"],
+                required_capabilities=stage.get("required_capabilities", ()),
+                preferred_provider=self.config.preferred_provider,
+                action_map=request["action_map"],
+                workspace_root=str(self.root),
+                metadata={
+                    "executor_request_id": request["request_id"],
+                    "operation_id": operation["operation_id"],
+                    "required_test_command": request.get("required_test_command"),
+                    "required_changed_path": request.get("required_changed_path"),
+                    "execution_receipt_path": request.get("execution_receipt_path"),
+                    "fallback_model": self.config.fallback_model,
+                    "execution_profile": "STANDARD",
+                },
+            )
+            provider_result = self._maintenance_provider().execute(execution_request)
+            if isinstance(provider_result, ExecutionResult):
+                result = provider_result
+            elif isinstance(provider_result, Mapping):
+                result = ExecutionResult(provider_id="openai-codex", result=provider_result, evidence={})
+            else:
+                raise ContractValidationError("maintenance provider returned an invalid result")
+            result_payload = result.to_stage_result()
+            provider_id = result.provider_id
+            evidence = result.evidence
+        except Exception as exc:
+            # The attempt is already intent-committed.  Convert provider-side
+            # exceptions into a settled, typed observation so resume never
+            # relays the exception to Human or leaves an unclassified intent.
+            provider_id = "openai-codex"
+            result_payload = {
+                "schema_version": "codex_result.v1",
+                "plan_id": request["plan_id"], "stage_id": stage["stage_id"], "task_id": request["task_id"],
+                "iteration_index": request["iteration_index"], "status": "ERROR",
+                "summary": "Bounded maintenance provider invocation failed before evidence completion.",
+                "changed_files": [], "tests": [], "measurements": {}, "evidence_refs": [],
+                "review_artifacts": [], "problems_discovered": [type(exc).__name__],
+                "abstraction_layer": "openai-codex", "stage_ready": False,
+                "user_visible_failure": True, "human_gate_required": False,
+                "decision_reason": "Controller will classify and escalate the provider failure.",
+                "stop_reason": "maintenance_provider_exception",
+                "execution_failure": {"kind": "PROVIDER_FAILURE", "code": type(exc).__name__, "retryable": True, "reason": str(exc)[:256]},
+            }
+            evidence = {"provider_exception": type(exc).__name__}
+        result_digest = "provider-result-" + sha256_json(result_payload)
+        required_path = request["required_changed_path"].replace("\\", "/")
+        raw_changed = result_payload.get("changed_files", [])
+        changed = [str(item).replace("\\", "/") for item in raw_changed if isinstance(item, str)] if isinstance(raw_changed, list) else []
+        allowed = [str(item).replace("\\", "/").rstrip("/") for item in request["allowed_paths"]]
+        scope_violation = [path for path in changed if not any(path == scope or path.startswith(scope + "/") for scope in allowed)]
+        changed = [path for path in changed if path not in scope_violation]
+        required_file = _inside(self.root, required_path)
+        if required_file.is_file() and required_path not in changed:
+            changed.append(required_path)
+        inventory = [{"path": path, "sha256": "artifact-" + sha256_json({"path": path, "result": result_digest})} for path in sorted(set(changed))]
+        complete = required_file.is_file() and not scope_violation
+        manifest_body = {
+            "schema_version": "evidence_manifest.v2", "stage_id": stage["stage_id"], "attempt_id": attempt["attempt_id"],
+            "required_artifact_paths": [required_path], "changed_paths": sorted(set(changed)),
+            "allowed_paths": allowed, "protected_paths": request["protected_paths"], "path_inventory": inventory, "complete": complete,
+        }
+        manifest = {"manifest_id": "manifest-" + sha256_json(manifest_body), **manifest_body}
+        failure_data = result_payload.get("execution_failure") if isinstance(result_payload.get("execution_failure"), Mapping) else None
+        terminal = "SUCCEEDED" if result_payload.get("status") == "SUCCEEDED" and not scope_violation else ("ERROR" if result_payload.get("status") == "ERROR" else "FAILED")
+        failure = None
+        if terminal != "SUCCEEDED":
+            failure_code = str((failure_data or {}).get("code") or ("SCOPE_VIOLATION" if scope_violation else "PROVIDER_RESULT_FAILED"))
+            declared_class = str(
+                (failure_data or {}).get("failure_class")
+                or (failure_data or {}).get("kind")
+                or ""
+            ).upper()
+            if "TRANSPORT" in declared_class or "TRANSPORT" in failure_code.upper():
+                failure_class = "TRANSPORT_FAILURE"
+            elif declared_class == "SCIENTIFIC_BLOCKER" and result_payload.get("human_gate_required") is True:
+                failure_class = "SCIENTIFIC_BLOCKER"
+            else:
+                # A provider's bare BLOCKED/ERROR token is an execution
+                # outcome, not scientific evidence. It must remain a typed
+                # technical failure until a reviewer proves otherwise.
+                failure_class = "PROVIDER_FAILURE"
+            failure = {
+                "schema_version": "typed_failure.v2", "failure_class": failure_class, "code": failure_code[:128],
+                "operation_id": operation["operation_id"], "retryability": "RETRYABLE" if bool((failure_data or {}).get("retryable", True)) else "NON_RETRYABLE",
+                "effect_state": "SETTLED", "evidence_refs": ["evidence-" + sha256_json({"result": result_digest})], "authority": "CONTROLLER_POLICY",
+            }
+        observation = {
+            "schema_version": "provider_observation.v2", "stage_id": stage["stage_id"],
+            "objective_identity": stage["objective_fingerprint"], "iteration_id": attempt["iteration_id"], "attempt_id": attempt["attempt_id"],
+            "provider_operation_id": operation["operation_id"], "result_identity": result_digest,
+            "provider_result_digest": result_digest, "evidence_manifest_digest": manifest["manifest_id"],
+            "provider_terminal_status": terminal, "raw_provider_claim": self._bounded_result(result_payload),
+            "provenance": {"provider": provider_id, "engine_digest": "engine-v2.1.3-maintenance", "evidence": copy.deepcopy(dict(evidence))},
+            "failure": failure, "outputs": {"required_artifact_paths": [required_path], "scope_violation": scope_violation}, "immutable": True,
+        }
+        observation["observation_id"] = "pending"
+        from .workflow_v2_contracts import observation_identity
+        observation["observation_id"] = observation_identity(observation)
+        observed = self.controller.record_observation(
+            stage["stage_id"], observation, effect_state="SETTLED", command_id="command-maintenance-observation-" + suffix,
+        )
+        checked_assessment = assess_observation(
+            observation, manifest, baseline_digest=stage["baseline_digest"],
+            validator_code_digest=_assessment.get("validator_code_digest") if isinstance(_assessment, Mapping) else "validator-maintenance-v213",
+            validation_contract_revision="admission.v2-maintenance",
+            checks={"provider_status": terminal, "required_artifact": "PASS" if complete else "MISSING", "scope": "FAIL" if scope_violation else "PASS"},
+        )
+        assessed = self.controller.assess_result(stage["stage_id"], checked_assessment, command_id="command-maintenance-assessment-" + suffix)
+        return {
+            "request": request, "attempt": attempt, "operation": operation,
+            "provider_result": self._bounded_result(result_payload), "observation": observed.get("observation", observation),
+            "assessment": assessed.get("assessment", checked_assessment), "manifest": manifest,
+            "provider_id": provider_id, "scope_violation": scope_violation,
+            "generation_started": bool(required_file.is_file()),
+        }
+
+    def _technical_review_decision(self, context: tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any] | None], blocker: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        stage, assessment, observation, _operation = context
+        state = self.controller.state
+        prior_admissible = next(
+            (
+                item for item in reversed(list(state.get("assessments", {}).values()))
+                if item.get("stage_id") == stage["stage_id"]
+                and item.get("verdict") == "ADMISSIBLE"
+                and item.get("assessment_id") != assessment["assessment_id"]
+            ),
+            None,
+        )
+        attempted_recovery = [
+            {
+                "attempt_id": item.get("attempt_id"),
+                "status": item.get("status"),
+                "effect_state": item.get("effect_state"),
+            }
+            for item in state.get("attempts", {}).values()
+            if item.get("stage_id") == stage["stage_id"]
+        ]
+        operation = next(
+            (
+                item for item in state.get("operations", {}).values()
+                if item.get("subject_id") == assessment.get("attempt_id")
+            ),
+            None,
+        )
+        pack = {
+            "pack_sha256": sha256_json({"stage": stage["stage_id"], "assessment": assessment["assessment_id"], "blocker": blocker["failure_signature"]}),
+            "purpose": "TECHNICAL_ESCALATION_REVIEW",
+            "PROJECT_ID": stage["project_id"],
+            "STAGE_ID": stage["stage_id"],
+            "OBJECTIVE_IDENTITY": stage["objective_fingerprint"],
+            "STAGE_GOAL": stage["target_identity"],
+            "ASSESSMENT_ID": assessment["assessment_id"],
+            "OBSERVATION_ID": observation["observation_id"],
+            "last_successful_state": {
+                "assessment_id": prior_admissible.get("assessment_id") if isinstance(prior_admissible, Mapping) else None,
+                "verdict": prior_admissible.get("verdict") if isinstance(prior_admissible, Mapping) else None,
+            },
+            "current_blocker": dict(blocker),
+            "failure_signature": blocker["failure_signature"],
+            "current_evidence": {
+                "observation_id": observation["observation_id"],
+                "evidence_manifest_digest": observation.get("evidence_manifest_digest"),
+                "provider_result_digest": observation.get("provider_result_digest"),
+                "outputs": copy.deepcopy(observation.get("outputs", {})),
+            },
+            "attempted_recovery": attempted_recovery,
+            "recovery_results": copy.deepcopy(observation.get("raw_provider_claim", {})),
+            "constraints": {
+                "allowed_paths": copy.deepcopy(operation.get("provider_handoff_manifest", {}).get("allowed_paths", [])) if isinstance(operation, Mapping) else [],
+                "protected_paths": copy.deepcopy(operation.get("provider_handoff_manifest", {}).get("protected_paths", [])) if isinstance(operation, Mapping) else [],
+                "attempt_budget": copy.deepcopy(stage.get("budgets", {})),
+            },
+            "available_capabilities": copy.deepcopy(stage.get("required_capabilities", [])),
+            "current_implementation_refs": copy.deepcopy(observation.get("outputs", {}).get("changed_paths", [])) if isinstance(observation.get("outputs"), Mapping) else [],
+            "relevant_artifacts": copy.deepcopy(observation.get("outputs", {}).get("required_artifact_paths", [])) if isinstance(observation.get("outputs"), Mapping) else [],
+            "accepted_baseline": stage.get("baseline_digest"),
+        }
+        prompt = (
+            "Perform one bounded technical recovery review for the current Workflow Stage. "
+            "Use only the packet identities and evidence. Decide whether a legal technical route remains. "
+            "Return exactly one marker: WORKFLOW_DECISION: CONTINUE, REPLAN, STAGE_READY, HUMAN_GATE, or BLOCKED. "
+            "CONTINUE and REPLAN must be applied automatically when legal; HUMAN_GATE requires QUESTION_FOR_HUMAN, WHY_AI_CANNOT_DECIDE, OPTIONS, CONSEQUENCE, HUMAN_DECISION_REQUIRED. "
+            "Do not claim scientific success without evidence.\n" + json.dumps({"blocker": dict(blocker), "packet": pack}, ensure_ascii=False, sort_keys=True)
+        )
+        consulted = self._consult({"context_pack": pack, "prompt": prompt, "objective_identity": stage["objective_fingerprint"]}, purpose="TECHNICAL_ESCALATION_REVIEW")
+        decision = {
+            "schema_version": "decision.v2", "decision_id": "decision-maintenance-gpt-" + sha256_json({"assessment": assessment["assessment_id"], "response": consulted["response_digest"]}),
+            "actor_kind": "GPT", "boundary": "TECHNICAL_REVIEW", "subject_id": assessment["assessment_id"],
+            "objective_identity": stage["objective_fingerprint"], "subject_type": "BLOCKER_REASSESSMENT",
+            "subject_digest": assessment["assessment_id"], "subject_version": 1,
+            "allowed_choices": ["CONTINUE", "REPLAN:ENGINEERING_FIX", "REPLAN:NEXT_ITERATION", "REPLAN:BASELINE_CHANGE", "STAGE_READY", "HUMAN_GATE", "BLOCKED"],
+            "requested_action": "APPLY_GPT_DECISION", "provenance": {
+                "request_count": consulted["request_count"], "conversation_id": consulted["conversation_id"],
+                "response_digest": consulted["response_digest"], "packet_digest": consulted["packet_digest"],
+            }, "supersedes": None,
+        }
+        return consulted, decision
+
+    def _resume_blocked_maintenance(self, context: tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any] | None], *, inherited: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        stage, assessment, observation, _operation = context
+        blocker = self._maintenance_blocker(context)
+        action = blocker["recommended_action"]
+        state = self.controller.state
+        preserved_blocked = any(
+            item.get("actor_kind") == "GPT" and item.get("boundary") == "TECHNICAL_REVIEW"
+            and item.get("subject_id") == assessment["assessment_id"] and item.get("resolution") == "BLOCKED"
+            for item in state.get("decisions", {}).values()
+        )
+        suffix = sha256_json({"blocker": blocker["blocker_id"], "revision": self.controller.revision})[:32]
+        maintenance: dict[str, Any] = {"blocker_classification": blocker, "human_intervention_count": 0, **(dict(inherited) if isinstance(inherited, Mapping) else {})}
+        if action == "WORK_REMAINING":
+            revalidated = None
+            if preserved_blocked:
+                revalidated = self.controller.revalidate_blocker(
+                    stage["stage_id"], blocker_record=blocker, blocker_still_true="NO",
+                    released_attempt_id=self.controller.state["stage_runtime"][stage["stage_id"]].get("current_attempt_id"),
+                    revalidation_id="blocker-revalidation-" + suffix,
+                    command_id="command-maintenance-revalidate-" + suffix,
+                )
+            executed = self._execute_maintenance_provider(
+                context, reason="CONTINUE", suffix=suffix,
+            )
+            maintenance.update({
+                "resume_blocker_revalidation": revalidated.get("revalidation"),
+                "technical_recovery": {"status": "PASS", "route": "WORK_REMAINING", "provider": executed["provider_id"]},
+                "provider_execution": executed,
+                "stage_owned_output_missing": True,
+                "generation_started": executed["generation_started"],
+                "gpt_technical_escalation": {"status": "NOT_REQUIRED", "reason": "stage-owned work remains"},
+            })
+            return self._view(**maintenance)
+        consulted, decision = self._technical_review_decision(context, blocker)
+        choice = consulted["decision"]
+        if choice in {"CONTINUE", "REPLAN"}:
+            revalidated = None
+            if preserved_blocked:
+                revalidated = self.controller.revalidate_blocker(
+                    stage["stage_id"], blocker_record=blocker, blocker_still_true="NO",
+                    released_attempt_id=self.controller.state["stage_runtime"][stage["stage_id"]].get("current_attempt_id"),
+                    revalidation_id="blocker-revalidation-" + suffix,
+                    command_id="command-maintenance-revalidate-" + suffix,
+                )
+            apply_kwargs: dict[str, Any] = {}
+            if choice == "REPLAN":
+                apply_kwargs.update({"replan_subtype": "ENGINEERING_FIX", "technical_change_digest": "change-" + blocker["failure_signature"]})
+            applied = self.controller.apply_gpt_decision(
+                stage["stage_id"], decision, choice=choice, command_id="command-maintenance-gpt-apply-" + suffix, **apply_kwargs,
+            )
+            executed = None
+            try:
+                executed = self._execute_maintenance_provider(context, reason="ENGINEERING_FIX" if choice == "REPLAN" else "CONTINUE", suffix=suffix)
+            except WorkflowRuntimeError as exc:
+                # A technical review may be valid while the bounded attempt
+                # budget is already exhausted.  Keep the applied decision and
+                # expose the controller's typed limit without relaying it as a
+                # new Human decision.
+                maintenance["provider_execution_error"] = {"code": exc.code, "message": str(exc)[:256]}
+            maintenance.update({
+                "resume_blocker_revalidation": revalidated.get("revalidation") if revalidated else None,
+                "technical_gpt_escalation": {"status": "PASS", "decision": choice, "consultation_id": consulted["consultation_id"]},
+                "gpt_decision_applied": applied.get("decision"), "provider_execution": executed,
+                "technical_recovery": {"status": "PASS" if executed else "BOUNDED_LIMIT", "route": choice},
+                "generation_started": executed["generation_started"] if executed else False,
+            })
+            return self._view(**maintenance)
+        revalidated = None
+        if preserved_blocked:
+            revalidated = self.controller.revalidate_blocker(
+                stage["stage_id"], blocker_record=blocker, blocker_still_true="YES",
+                revalidation_id="blocker-revalidation-" + suffix,
+                command_id="command-maintenance-revalidate-" + suffix,
+            )
+        if choice == "HUMAN_GATE":
+            # The bridge returns only the closed decision marker.  Without the
+            # required explanation fields it is not legal to emit a gate.
+            maintenance["technical_gpt_escalation"] = {"status": "INVALID_HUMAN_GATE", "consultation_id": consulted["consultation_id"]}
+        elif choice == "BLOCKED":
+            blocked_validation = {
+                "blocker_still_true": "YES", "auto_recovery_exhausted": True,
+                "gpt_technical_escalation_completed": True, "no_legal_automated_next_action": True,
+            }
+            applied = self.controller.apply_gpt_decision(
+                stage["stage_id"], decision, choice="BLOCKED", strict_blocked_validation=True,
+                blocked_validation=blocked_validation, command_id="command-maintenance-gpt-apply-" + suffix,
+            )
+            maintenance["gpt_decision_applied"] = applied.get("decision")
+            maintenance["blocked_validation"] = blocked_validation
+            maintenance["technical_gpt_escalation"] = {"status": "PASS", "decision": "BLOCKED", "consultation_id": consulted["consultation_id"]}
+        else:
+            maintenance["technical_gpt_escalation"] = {"status": "INVALID_STAGE_READY", "consultation_id": consulted["consultation_id"]}
+        maintenance["resume_blocker_revalidation"] = revalidated.get("revalidation") if revalidated else None
+        maintenance["technical_recovery"] = {"status": "BLOCKED", "route": choice}
+        return self._view(**maintenance)
+
+    @_boundary
     def resume(self) -> dict[str, Any]:
         projection = self.controller.resume_projection()
+        inherited: dict[str, Any] = {}
         if projection.get("next_action") == "RESOLVE_LEGACY_ORPHAN":
             stage = projection.get("stage", {})
             operation_id = stage.get("in_flight_operation_id")
@@ -467,19 +938,23 @@ class ProductWorkflowRuntime:
                         side_effect_audit=audit,
                         command_id="command-legacy-orphan-resolution-" + operation_id[-32:],
                     )
+                    inherited = {
+                        "legacy_resolution": resolution.get("legacy_resolution"),
+                        "old_operation_preserved": True,
+                        "old_operation_redispatched": False,
+                        "side_effect_audit": audit,
+                        "self_repair": {"status": "PASS", "human_intervention_count": 0},
+                    }
+                else:
                     return self._view(
-                        legacy_resolution=resolution.get("legacy_resolution"),
-                        old_operation_preserved=True,
-                        old_operation_redispatched=False,
+                        legacy_resolution={"status": "REQUIRES_BOUNDED_AUDIT", "operation_id": operation_id},
                         side_effect_audit=audit,
-                        self_repair={"status": "PASS", "human_intervention_count": 0},
+                        self_repair={"status": "NOT_SAFE_TO_ABANDON", "human_intervention_count": 0},
                     )
-                return self._view(
-                    legacy_resolution={"status": "REQUIRES_BOUNDED_AUDIT", "operation_id": operation_id},
-                    side_effect_audit=audit,
-                    self_repair={"status": "NOT_SAFE_TO_ABANDON", "human_intervention_count": 0},
-                )
-        return self._view()
+        context = self._maintenance_context()
+        if context is not None:
+            return self._resume_blocked_maintenance(context, inherited=inherited)
+        return self._view(**inherited)
 
     @_boundary
     def start(self, **kwargs: Any) -> dict[str, Any]:

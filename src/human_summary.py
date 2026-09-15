@@ -212,7 +212,7 @@ def _presentation_status(metadata: Mapping[str, Any], sources: Sequence[Mapping[
     pending = _first(sources, "pending_human_gate", "pending_decisions", "human_gate_required")
     if normalized_decision == "HUMAN_GATE" or pending:
         return "HUMAN_GATE"
-    if next_action in {"WAIT", "BLOCKED"}:
+    if next_action == "BLOCKED":
         return "BLOCKED"
     return "CONTINUE"
 

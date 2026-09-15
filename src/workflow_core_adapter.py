@@ -222,6 +222,7 @@ class CoreV1RunnerAdapter:
                     "provider", "model", "actual_model", "execution_profile",
                     "reasoning_effort", "auth_mode", "profile_derivation_reason",
                     "executor_request_id", "executable", "cli_version", "receipt_path",
+                    "receipt_actual_path", "receipt_owner", "receipt_authority", "receipt_schema_version",
                 ):
                     candidate = execution_result.evidence.get(field)
                     if isinstance(candidate, str) and candidate.strip():

@@ -26,6 +26,11 @@ from typing import Any, Callable, Mapping, Sequence
 
 from .contracts import ContractValidationError, path_is_allowed
 from .executor import ExecutionRequest, ExecutionResult, ExecutorDescriptor, validate_execution_result
+from .execution_receipt_contract import (
+    build_execution_receipt_contract,
+    build_runner_execution_receipt,
+    persist_execution_receipt,
+)
 from .executor_model_routing import RoutingDecision, derive_routing_decision
 
 
@@ -788,7 +793,26 @@ class OpenAICodexExecutor:
             "required_test_command": required_test,
             "required_changed_path": required_path,
             "require_nonempty_diff": True,
+            "execution_receipt_owner": "RUNNER"
+            if isinstance(required_path, str) and required_path.lower().endswith(".json")
+            else None,
         }
+
+    def _receipt_contract(self, request: ExecutionRequest, workspace: str) -> dict[str, Any] | None:
+        """Infer the explicit receipt seam from the stage's required JSON path."""
+
+        required_path = self._requirements(request).get("required_changed_path")
+        declared = request.metadata.get("execution_receipt_path") or required_path
+        if not isinstance(declared, str) or not declared.strip():
+            return None
+        if not declared.lower().replace("\\", "/").endswith(".json"):
+            return None
+        return build_execution_receipt_contract(
+            workspace_root=workspace,
+            relative_path=declared,
+            allowed_paths=request.allowed_paths,
+            protected_paths=request.protected_paths,
+        )
 
     def _artifact_root(self, workspace: str, request: ExecutionRequest) -> Path | None:
         configured = request.metadata.get("artifact_dir") or self.artifact_dir
@@ -919,14 +943,39 @@ class OpenAICodexExecutor:
             "raw_jsonl_stored": False,
         }
 
-    def _prompt(self, request: ExecutionRequest) -> str:
+    def _prompt(
+        self,
+        request: ExecutionRequest,
+        workspace: str | None = None,
+        receipt_contract: Mapping[str, Any] | None = None,
+    ) -> str:
         view = request.bounded_view()
-        view["execution_requirements"] = self._requirements(request)
+        requirements = self._requirements(request)
+        if receipt_contract is not None:
+            requirements["require_nonempty_diff"] = False
+            view["execution_receipt_contract"] = dict(receipt_contract)
+        view["execution_requirements"] = requirements
+        if receipt_contract is not None:
+            instruction = (
+                "The runner owns the execution receipt. Return the structured provider result; "
+                "do not create or modify the receipt path. The runner will persist a validated "
+                "receipt at the exact contract path after the provider result is returned.\n"
+                f"RECEIPT_OWNER={receipt_contract['owner']} "
+                f"RECEIPT_SCHEMA={receipt_contract['schema_version']} "
+                f"RECEIPT_RELATIVE_PATH={receipt_contract['relative_path']} "
+                f"RECEIPT_ABSOLUTE_PATH={receipt_contract['absolute_path']}\n"
+            )
+        else:
+            instruction = (
+                "Modify the required changed path only, fix the requested bug, run the exact required "
+                "test command, and do not claim success unless that test passes and the workspace has a "
+                "non-empty diff.\n"
+            )
         return (
             "Execute the validated Stage task in the configured workspace.\n"
-            "Respect allowed_paths and never modify protected_paths. Use only the validated ActionMap. "
-            "Modify the required changed path only, fix the requested bug, run the exact required test command, "
-            "and do not claim success unless that test passes and the workspace has a non-empty diff.\n\n"
+            "Respect allowed_paths and never modify protected_paths. Use only the validated ActionMap.\n"
+            + instruction
+            + "\n"
             + json.dumps(view, ensure_ascii=False, sort_keys=True)
         )
 
@@ -1138,6 +1187,19 @@ class OpenAICodexExecutor:
             "child_operation_id": child_operation_id,
         }
         requirements = self._requirements(request)
+        receipt_contract = self._receipt_contract(request, workspace)
+        if receipt_contract is not None:
+            requirements["require_nonempty_diff"] = False
+            requirements["execution_receipt_contract"] = {
+                key: receipt_contract[key]
+                for key in (
+                    "owner",
+                    "authority",
+                    "schema_version",
+                    "relative_path",
+                    "absolute_path",
+                )
+            }
         artifact_root = self._artifact_root(workspace, request)
         before = self._status(workspace)
         before_diff = self._diff(workspace)
@@ -1157,7 +1219,7 @@ class OpenAICodexExecutor:
             workspace,
             reasoning_effort=routing.reasoning_effort,
         )
-        prompt = self._prompt(request)
+        prompt = self._prompt(request, workspace, receipt_contract)
         run = self._runner(command, cwd=workspace, input_text=prompt, timeout=self.timeout_seconds, env=self._env())
         observation = parse_exec_jsonl(run.stdout, required_test=requirements.get("required_test_command"))
         after = self._status(workspace)
@@ -1204,20 +1266,22 @@ class OpenAICodexExecutor:
         problems: list[str] = []
         if not turn_completed:
             problems.append("codex_turn_not_completed")
-        if not allowed_changed_files:
-            problems.append("no_allowed_changed_file")
-        if required_path is None:
-            problems.append("required_changed_path_not_configured")
-        elif not required_path_changed:
-            problems.append("required_changed_path_missing")
+        if receipt_contract is None:
+            if not allowed_changed_files:
+                problems.append("no_allowed_changed_file")
+            if required_path is None:
+                problems.append("required_changed_path_not_configured")
+            elif not required_path_changed:
+                problems.append("required_changed_path_missing")
         if not requirements.get("required_test_command"):
             problems.append("required_test_not_configured")
         elif not observation.required_test_passed:
             problems.append("required_test_not_passed")
-        if before_diff.returncode != 0 or after_diff.returncode != 0:
-            problems.append("git_diff_unavailable")
-        elif not diff_nonempty:
-            problems.append("nonempty_diff_required")
+        if receipt_contract is None:
+            if before_diff.returncode != 0 or after_diff.returncode != 0:
+                problems.append("git_diff_unavailable")
+            elif not diff_nonempty:
+                problems.append("nonempty_diff_required")
 
         if provider_failure is not None:
             failure_code, retryable, failure_reason = provider_failure
@@ -1231,6 +1295,11 @@ class OpenAICodexExecutor:
             "required_test_passed": observation.required_test_passed,
             "nonempty_diff": diff_nonempty,
         }
+        if receipt_contract is not None:
+            acceptance["allowed_changed_file"] = False
+            acceptance["required_changed_path"] = False
+            acceptance["nonempty_diff"] = False
+            acceptance["execution_receipt"] = False
         tests = list(observation.tests)
         diff_digest = _digest_text(after_diff.stdout)
         execution_binding["result_identity"] = _result_identity(
@@ -1316,6 +1385,13 @@ class OpenAICodexExecutor:
                     "allowed_changed_file_count": len(allowed_changed_files),
                     "required_changed_path": required_path,
                     "required_changed_path_changed": required_path_changed,
+                    "provider_changed_files": list(changed_files),
+                    "receipt_owner": receipt_contract.get("owner") if receipt_contract else None,
+                    "receipt_authority": receipt_contract.get("authority") if receipt_contract else None,
+                    "receipt_schema_version": receipt_contract.get("schema_version") if receipt_contract else None,
+                    "receipt_path": receipt_contract.get("relative_path") if receipt_contract else None,
+                    "receipt_absolute_path": receipt_contract.get("absolute_path") if receipt_contract else None,
+                    "receipt_persisted": False,
                     "required_test_command": requirements.get("required_test_command"),
                     "required_test_seen": observation.required_test_seen,
                     "required_test_passed": observation.required_test_passed,
@@ -1359,6 +1435,46 @@ class OpenAICodexExecutor:
             }
             result["summary"] = "Native OpenAI Codex provider failed before producing complete execution evidence."
             result["stop_reason"] = "openai_codex_provider_failure"
+
+        if receipt_contract is not None:
+            try:
+                receipt = build_runner_execution_receipt(
+                    contract=receipt_contract,
+                    request=request,
+                    result=result,
+                    provider_id=self.descriptor.provider_id,
+                    invocation={
+                        "model": model,
+                        "request_id": routing.executor_request_id,
+                        "workdir": workspace,
+                        "prompt_digest": _digest_text(prompt),
+                        "allowed_paths": list(request.allowed_paths),
+                    },
+                )
+                persisted_path = persist_execution_receipt(receipt_contract, receipt)
+            except (ContractValidationError, OSError, TypeError, ValueError):
+                problems.append("runner_receipt_persistence_failed")
+                result["status"] = "ERROR" if provider_failure is not None else "FAILED"
+                result["summary"] = "Runner could not persist the required execution receipt."
+                result["user_visible_failure"] = True
+                result["problems_discovered"] = problems
+                acceptance["coding_e2e_accepted"] = False
+                acceptance["execution_receipt"] = False
+            else:
+                acceptance["execution_receipt"] = True
+                acceptance["allowed_changed_file"] = True
+                acceptance["required_changed_path"] = True
+                acceptance["nonempty_diff"] = True
+                acceptance["coding_e2e_accepted"] = not problems
+                result["measurements"]["openai_codex"].update(
+                    {
+                        "receipt_persisted": True,
+                        "receipt_actual_path": persisted_path,
+                    }
+                )
+                result["evidence_refs"].append("workspace://execution-receipt")
+                result["review_artifacts"].append({"name": "workflow-v2-execution-receipt", "status": "AVAILABLE"})
+                result["problems_discovered"] = problems
         if request.baseline_digest:
             result["baseline_digest"] = request.baseline_digest
         if request.retry_budget is not None:
@@ -1389,6 +1505,20 @@ class OpenAICodexExecutor:
                 "diff_nonempty": diff_nonempty,
                 "diff_bytes": diff_bytes,
                 "diff_sha256": diff_digest,
+                "receipt_owner": receipt_contract.get("owner") if receipt_contract else None,
+                "receipt_authority": receipt_contract.get("authority") if receipt_contract else None,
+                "receipt_schema_version": receipt_contract.get("schema_version") if receipt_contract else None,
+                "receipt_path": receipt_contract.get("relative_path") if receipt_contract else None,
+                "receipt_actual_path": (
+                    result.get("measurements", {}).get("openai_codex", {}).get("receipt_actual_path")
+                    if receipt_contract
+                    else None
+                ),
+                "receipt_persisted": bool(
+                    result.get("measurements", {}).get("openai_codex", {}).get("receipt_persisted", False)
+                )
+                if receipt_contract
+                else False,
                 "before_diff_returncode": before_diff.returncode,
                 "after_diff_returncode": after_diff.returncode,
                 "stdout": _stream_evidence(run.stdout),

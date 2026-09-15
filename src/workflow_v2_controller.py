@@ -14,15 +14,24 @@ import os
 import threading
 import uuid
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from .contracts import ContractValidationError, canonical_json, sha256_json
 from .contract_handshake import STAGE_PROPAGATION_INVARIANT, payload_snapshot, stage_digest, stage_identity_digest
+from .execution_receipt_contract import (
+    build_execution_receipt_contract,
+    resolve_execution_receipt_path as _resolve_execution_receipt_path,
+    validate_execution_receipt,
+)
 from .workflow_v2_contracts import (
     PUBLIC_COMMANDS,
     STAGE_STATES,
     assess_observation,
+    BLOCKER_RECOVERABILITIES,
+    BLOCKER_STILL_TRUE,
+    classify_blocker,
     dependency_authorization_digest,
     validate_command_envelope,
     validate_correction_receipt,
@@ -35,6 +44,9 @@ from .workflow_v2_contracts import (
     validate_operation_envelope,
     validate_provider_handoff_manifest,
     validate_provider_observation,
+    validate_blocker_record,
+    validate_genuine_blocked_evidence,
+    validate_human_gate,
     observation_identity,
     validate_semantic_iteration,
     validate_stage,
@@ -47,6 +59,51 @@ from .workflow_v2_contracts import (
 
 class WorkflowV2ControllerError(RuntimeError):
     """Raised when a canonical V2 command cannot be committed."""
+
+
+def resolve_stage_execution_receipt_path(
+    workspace_root: str | Path,
+    relative_path: str,
+    allowed_paths: Sequence[str],
+    protected_paths: Sequence[str] = (),
+) -> Path:
+    """Use the shared receipt path authority at the supervisor boundary."""
+
+    return _resolve_execution_receipt_path(
+        workspace_root,
+        relative_path,
+        allowed_paths,
+        protected_paths,
+    )
+
+
+def ingest_stage_execution_receipt(
+    workspace_root: str | Path,
+    relative_path: str,
+    allowed_paths: Sequence[str],
+    protected_paths: Sequence[str] = (),
+) -> dict[str, Any]:
+    """Read and validate the runner-owned receipt at the canonical boundary."""
+
+    contract = build_execution_receipt_contract(
+        workspace_root=workspace_root,
+        relative_path=relative_path,
+        allowed_paths=allowed_paths,
+        protected_paths=protected_paths,
+    )
+    path = resolve_stage_execution_receipt_path(
+        workspace_root,
+        relative_path,
+        allowed_paths,
+        protected_paths,
+    )
+    if not path.is_file():
+        raise ContractValidationError(f"execution receipt is missing: {path}")
+    try:
+        receipt = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ContractValidationError(f"execution receipt cannot be read: {path}") from exc
+    return validate_execution_receipt(receipt, contract=contract)
 
 
 def _copy(value: Any) -> Any:
@@ -71,6 +128,10 @@ def _id(prefix: str, value: Any) -> str:
 
 def _new_command_id() -> str:
     return "command-" + uuid.uuid4().hex
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def build_provider_handoff_manifest(
@@ -212,6 +273,12 @@ class StageController:
             "legacy_resolutions": {},
             "correction_decisions": {},
             "blockers": {},
+            # These collections were added as an optional maintenance seam.
+            # Older journals remain loadable and acquire them on the first
+            # maintenance command; no historical record is rewritten.
+            "blocker_records": [],
+            "blocker_revalidations": [],
+            "human_gates": [],
         }
 
     def _read_journal(self, path: Path) -> dict[str, Any]:
@@ -290,6 +357,24 @@ class StageController:
         for key in ("commands", "stages", "stage_runtime", "iterations", "attempts", "observations", "assessments", "decisions", "dependencies", "operations", "correction_decisions", "blockers"):
             if not isinstance(payload.get(key), dict):
                 raise WorkflowV2ControllerError(f"journal collection is invalid: {key}")
+        for key in ("blocker_records", "blocker_revalidations", "human_gates"):
+            if key in payload and not isinstance(payload[key], list):
+                raise WorkflowV2ControllerError(f"journal collection is invalid: {key}")
+        for record in payload.get("blocker_records", []):
+            validate_blocker_record(record)
+        for record in payload.get("blocker_revalidations", []):
+            if not isinstance(record, Mapping):
+                raise WorkflowV2ControllerError("blocker revalidation record is invalid")
+            for field in ("revalidation_id", "blocker_id", "stage_id", "assessment_id", "blocker_still_true", "recoverability"):
+                if field not in record:
+                    raise WorkflowV2ControllerError(f"blocker revalidation record is missing {field}")
+            if not all(isinstance(record[field], str) and record[field] for field in ("revalidation_id", "blocker_id", "stage_id", "assessment_id")):
+                raise WorkflowV2ControllerError("blocker revalidation identity is invalid")
+            if record["blocker_still_true"] not in BLOCKER_STILL_TRUE or record["recoverability"] not in BLOCKER_RECOVERABILITIES:
+                raise WorkflowV2ControllerError("blocker revalidation classification is invalid")
+        for record in payload.get("human_gates", []):
+            if not isinstance(record, Mapping) or not isinstance(record.get("decision_id"), str) or not isinstance(record.get("gate"), Mapping):
+                raise WorkflowV2ControllerError("human gate record is invalid")
         supersessions = payload.get("assessment_supersessions", {})
         if not isinstance(supersessions, dict):
             raise WorkflowV2ControllerError("journal collection is invalid: assessment_supersessions")
@@ -407,6 +492,12 @@ class StageController:
             keys.insert(len(keys) - 2, "legacy_resolutions")
         if "assessment_supersessions" in journal:
             keys.insert(len(keys) - 2, "assessment_supersessions")
+        if "blocker_records" in journal:
+            keys.insert(len(keys) - 2, "blocker_records")
+        if "blocker_revalidations" in journal:
+            keys.insert(len(keys) - 2, "blocker_revalidations")
+        if "human_gates" in journal:
+            keys.insert(len(keys) - 2, "human_gates")
         return sha256_json({key: _copy(journal.get(key)) for key in keys})
 
     def _persist(self, payload: Mapping[str, Any]) -> None:
@@ -608,9 +699,15 @@ class StageController:
         )
 
     def _budgeted_attempts_for(self, journal: Mapping[str, Any], stage_id: str, iteration_id: str | None = None) -> list[dict[str, Any]]:
+        released_attempts = {
+            item.get("released_attempt_id")
+            for item in journal.get("blocker_revalidations", [])
+            if isinstance(item, Mapping) and item.get("released_attempt_id")
+        }
         return [
             attempt
             for attempt in self._attempts_for(journal, stage_id, iteration_id)
+            if attempt.get("attempt_id") not in released_attempts
             if self._legacy_resolution_for_attempt(journal, attempt["attempt_id"]) is None
             and not any(
                 supersession.get("assessment_id") == assessment.get("assessment_id")
@@ -1277,6 +1374,12 @@ class StageController:
         if decision["actor_kind"] != "GPT" or decision["boundary"] != "TECHNICAL_REVIEW":
             raise WorkflowV2ControllerError("APPLY_GPT_DECISION requires a Technical Review decision")
         assessment_id = stage.get("current_assessment_id")
+        if assessment_id is None:
+            # A maintenance revalidation may release the projection before a
+            # newly obtained technical review is applied.  The old assessment
+            # remains immutable and is recorded on the runtime pointer solely
+            # to bind that one already-authorized review.
+            assessment_id = self._runtime(journal, stage_id).get("last_blocker_assessment_id")
         if assessment_id is None or decision["subject_id"] != assessment_id:
             raise WorkflowV2ControllerError("GPT decision is not bound to the current assessment")
         assessment = journal["assessments"].get(assessment_id)
@@ -1293,6 +1396,11 @@ class StageController:
             typed = validate_typed_replan(decision, subtype)
         elif choice not in decision["allowed_choices"]:
             raise WorkflowV2ControllerError("GPT choice is outside the decision envelope")
+        human_gate = None
+        if choice == "HUMAN_GATE":
+            human_gate = validate_human_gate(payload.get("human_gate", {}))
+        if choice == "BLOCKED" and payload.get("strict_blocked_validation") is True:
+            validate_genuine_blocked_evidence(payload.get("blocked_validation", {}))
         decision_record = {**_copy(decision), "resolution": choice}
         existing_decision = journal["decisions"].get(decision["decision_id"])
         if existing_decision is not None:
@@ -1300,6 +1408,13 @@ class StageController:
                 raise WorkflowV2ControllerError("Decision identity collision or conflicting resolution")
             return {"stage": self.show_stage(stage_id, journal=journal), "decision": _copy(existing_decision), "choice": choice}
         journal["decisions"][decision["decision_id"]] = decision_record
+        if human_gate is not None:
+            journal.setdefault("human_gates", []).append({
+                "decision_id": decision["decision_id"],
+                "stage_id": stage_id,
+                "gate": _copy(dict(human_gate)),
+                "resolved": False,
+            })
         if choice == "STAGE_READY":
             assessment = journal["assessments"].get(assessment_id)
             if assessment is None or assessment.get("verdict") != "ADMISSIBLE":
@@ -1324,10 +1439,12 @@ class StageController:
             else:
                 self._runtime(journal, stage_id)["baseline_change_requested"] = True
                 stage["current_assessment_id"] = None
+            self._runtime(journal, stage_id).pop("last_blocker_assessment_id", None)
             return {"stage": self.show_stage(stage_id, journal=journal), "decision": typed}
         elif choice == "CONTINUE":
             stage["current_assessment_id"] = None
             self._runtime(journal, stage_id)["execution_authorized"] = True
+            self._runtime(journal, stage_id).pop("last_blocker_assessment_id", None)
         return {"stage": self.show_stage(stage_id, journal=journal), "decision": _copy(decision), "choice": choice}
 
     def _advance_iteration(self, journal: dict[str, Any], command: Mapping[str, Any], payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -1485,7 +1602,93 @@ class StageController:
         journal["executable_owner_stage_id"] = edge["parent_id"]
         return {"parent": self.show_stage(parent["stage_id"], journal=journal), "child": self.show_stage(child_id, journal=journal), "dependency": _copy(edge)}
 
+    def _revalidate_blocker(self, journal: dict[str, Any], command: Mapping[str, Any], payload: Mapping[str, Any]) -> dict[str, Any]:
+        """Re-evaluate a historical technical/scientific BLOCKED projection.
+
+        This is deliberately a command, not a new Stage state.  The original
+        assessment, observation, and GPT decision remain immutable; a new
+        append-only record either releases the current attempt for one bounded
+        recovery route or leaves the historical blocker authoritative.
+        """
+
+        stage_id = command["subject_id"]
+        stage = self._stage(journal, stage_id)
+        self._require_status(stage, {"ACTIVE"})
+        assessment_id = stage.get("current_assessment_id")
+        if not isinstance(assessment_id, str) or not assessment_id:
+            raise WorkflowV2ControllerError("blocker revalidation requires the current assessment")
+        blocked = self._resolved_gpt_decision(journal, assessment_id)
+        if blocked is None or blocked.get("resolution") != "BLOCKED":
+            raise WorkflowV2ControllerError("blocker revalidation requires the preserved GPT BLOCKED decision")
+        record = payload.get("blocker_record")
+        if not isinstance(record, Mapping):
+            raise WorkflowV2ControllerError("blocker revalidation requires blocker metadata")
+        record = validate_blocker_record(record)
+        if record.get("stage_id") != stage_id or record.get("project_id") != stage.get("project_id") or record.get("assessment_id") != assessment_id:
+            raise WorkflowV2ControllerError("blocker metadata is not bound to the current Stage assessment")
+        if record.get("revision") != journal.get("revision"):
+            raise WorkflowV2ControllerError("blocker metadata was created from a stale journal revision")
+        still_true = str(payload.get("blocker_still_true", "")).upper()
+        if still_true not in BLOCKER_STILL_TRUE:
+            raise WorkflowV2ControllerError("blocker_still_true must be YES, NO, or UNKNOWN")
+        revalidations = journal.setdefault("blocker_revalidations", [])
+        stage_revalidations = [item for item in revalidations if item.get("stage_id") == stage_id]
+        if len(stage_revalidations) >= stage["budgets"]["max_revalidation_ops"]:
+            raise WorkflowV2ControllerError("blocker revalidation budget exhausted")
+        released_attempt_id = payload.get("released_attempt_id")
+        current_attempt_id = self._runtime(journal, stage_id).get("current_attempt_id")
+        if still_true == "NO":
+            if released_attempt_id != current_attempt_id:
+                raise WorkflowV2ControllerError("a NO blocker revalidation must release the current attempt")
+            if self._runtime(journal, stage_id).get("in_flight_operation_id") is not None:
+                raise WorkflowV2ControllerError("blocker revalidation cannot release an in-flight operation")
+        revalidation_id = payload.get("revalidation_id") or _id("blocker-revalidation", command["command_id"])
+        if any(item.get("revalidation_id") == revalidation_id for item in revalidations):
+            existing = next(item for item in revalidations if item.get("revalidation_id") == revalidation_id)
+            return {"stage": self.show_stage(stage_id, journal=journal), "blocker_record": _copy(record), "revalidation": _copy(existing)}
+        now = _utc_now()
+        initial = _copy(dict(record))
+        initial["resolved_at"] = None
+        validate_blocker_record(initial)
+        records = journal.setdefault("blocker_records", [])
+        records.append(initial)
+        revalidation = {
+            "schema_version": "blocker_revalidation.v1",
+            "revalidation_id": revalidation_id,
+            "blocker_id": initial["blocker_id"],
+            "stage_id": stage_id,
+            "assessment_id": assessment_id,
+            "blocker_still_true": still_true,
+            "recoverability": initial["recoverability"],
+            "validated_at": now,
+            "evidence_refs": _copy(initial["evidence_refs"]),
+        }
+        if released_attempt_id is not None:
+            revalidation["released_attempt_id"] = released_attempt_id
+        revalidations.append(revalidation)
+        latest = _copy(initial)
+        latest["last_validated_at"] = now
+        if still_true == "NO":
+            latest["resolved_at"] = now
+            latest["resolution"] = "STALE_BLOCKER_REASSESSED"
+            records.append(latest)
+            runtime = self._runtime(journal, stage_id)
+            runtime["execution_authorized"] = True
+            runtime["last_blocker_revalidation_id"] = revalidation_id
+            runtime["last_blocker_assessment_id"] = assessment_id
+            stage["current_assessment_id"] = None
+        else:
+            runtime = self._runtime(journal, stage_id)
+            runtime["last_blocker_revalidation_id"] = revalidation_id
+        return {
+            "stage": self.show_stage(stage_id, journal=journal),
+            "blocker_record": _copy(latest),
+            "revalidation": _copy(revalidation),
+        }
+
     def _resolve_blocker(self, journal: dict[str, Any], command: Mapping[str, Any], payload: Mapping[str, Any]) -> dict[str, Any]:
+        if isinstance(payload.get("blocker_record"), Mapping):
+            return self._revalidate_blocker(journal, command, payload)
         blocker_id = _text(payload.get("blocker_id"), "blocker_id")
         if blocker_id not in journal["blockers"]:
             raise WorkflowV2ControllerError("unknown blocker")
@@ -1683,6 +1886,16 @@ class StageController:
             # authority remains the Stage and journal decision records.
             projection["gpt_decision"] = decision["resolution"]
             projection["gpt_decision_id"] = decision["decision_id"]
+            if decision["resolution"] == "HUMAN_GATE":
+                projection["next_action"] = "HUMAN_GATE"
+                projection["next_actor"] = "Human"
+                gate = next(
+                    (item.get("gate") for item in self._journal.get("human_gates", [])
+                     if item.get("decision_id") == decision["decision_id"] and item.get("resolved") is not True),
+                    None,
+                )
+                if gate is not None:
+                    projection["human_gate"] = _copy(gate)
         return projection
 
     def register_stage(self, stage: Mapping[str, Any], **kwargs: Any) -> dict[str, Any]:
@@ -1773,10 +1986,15 @@ class StageController:
             else:
                 stage = self.resolve_canonical_stage(stage_id)
                 assessment_id = stage.get("current_assessment_id")
+                if assessment_id is None:
+                    assessment_id = self._journal.get("stage_runtime", {}).get(stage_id, {}).get("last_blocker_assessment_id")
                 assessment = self.state.get("assessments", {}).get(assessment_id)
                 if isinstance(assessment, Mapping) and assessment.get("objective_identity") is not None:
                     decision["objective_identity"] = assessment["objective_identity"]
-        payload = {"decision": decision, "choice": choice, **{key: kwargs.pop(key) for key in tuple(kwargs) if key in {"replan_subtype", "technical_change_digest", "solution_fingerprint"}}}
+        payload = {"decision": decision, "choice": choice, **{key: kwargs.pop(key) for key in tuple(kwargs) if key in {
+            "replan_subtype", "technical_change_digest", "solution_fingerprint", "human_gate",
+            "strict_blocked_validation", "blocked_validation",
+        }}}
         return self.dispatch("APPLY_GPT_DECISION", subject_id=stage_id, payload=payload, **kwargs)
 
     def advance_iteration(self, stage_id: str, **kwargs: Any) -> dict[str, Any]:
@@ -1795,6 +2013,9 @@ class StageController:
         return self.dispatch("SATISFY_DEPENDENCY", subject_id=parent_id, payload=_copy(payload if payload is not None else kwargs), command_id=command_id, expected_revision=expected_revision)
 
     def resolve_blocker(self, stage_id: str, *, payload: Mapping[str, Any] | None = None, command_id: str | None = None, expected_revision: int | None = None, **kwargs: Any) -> dict[str, Any]:
+        return self.dispatch("RESOLVE_BLOCKER", subject_id=stage_id, payload=_copy(payload if payload is not None else kwargs), command_id=command_id, expected_revision=expected_revision)
+
+    def revalidate_blocker(self, stage_id: str, *, payload: Mapping[str, Any] | None = None, command_id: str | None = None, expected_revision: int | None = None, **kwargs: Any) -> dict[str, Any]:
         return self.dispatch("RESOLVE_BLOCKER", subject_id=stage_id, payload=_copy(payload if payload is not None else kwargs), command_id=command_id, expected_revision=expected_revision)
 
     def apply_receipt(self, stage_id: str, *, payload: Mapping[str, Any] | None = None, command_id: str | None = None, expected_revision: int | None = None, **kwargs: Any) -> dict[str, Any]:

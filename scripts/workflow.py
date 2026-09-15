@@ -410,6 +410,12 @@ def _resume(args: argparse.Namespace, workspace: Path) -> dict[str, Any]:
     resumed = ProductWorkflowRuntime(workspace, config=config).resume()
     summary = project_brief_summary(workspace) or {}
     registry = record_workspace(paths, workspace, str(summary.get("project_id")))
+    maintenance_keys = (
+        "blocker_classification", "resume_blocker_revalidation", "technical_recovery",
+        "technical_gpt_escalation", "gpt_decision_applied", "provider_execution",
+        "stage_owned_output_missing", "generation_started", "blocked_validation",
+        "human_intervention_count", "human_action",
+    )
     result = {
         "schema_version": "workflow_resume.v1",
         "operation": "resume",
@@ -418,9 +424,9 @@ def _resume(args: argparse.Namespace, workspace: Path) -> dict[str, Any]:
         "registry": registry,
         **initialized,
         "canonical": resumed.get("canonical", initialized.get("canonical")),
-        **{key: resumed[key] for key in ("legacy_resolution", "old_operation_preserved", "old_operation_redispatched", "side_effect_audit", "self_repair") if key in resumed},
+        **{key: resumed[key] for key in ("legacy_resolution", "old_operation_preserved", "old_operation_redispatched", "side_effect_audit", "self_repair", *maintenance_keys) if key in resumed},
     }
-    presentation = build_human_presentation(canonical_state=result.get("canonical"), artifact_root=workspace)
+    presentation = build_human_presentation(metadata=result, canonical_state=result.get("canonical"), artifact_root=workspace)
     return {"human_summary": presentation["human_summary"], "machine_details": presentation["machine_details"], "presentation": presentation, **result}
 
 
