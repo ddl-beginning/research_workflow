@@ -649,10 +649,12 @@ class ProductWorkflowRuntime:
         if operation == "CONSULT_REVIEW":
             stage = self.controller.show_stage(request.get("stage_id"))
             assessment_id = stage.get("current_assessment_id")
-            if not assessment_id or self.controller.state["assessments"][assessment_id]["verdict"] != "ADMISSIBLE":
+            if not assessment_id:
                 raise WorkflowRuntimeError("REVIEW_NOT_READY", "technical review requires current admissible assessment")
             assessment = self.controller.state["assessments"][assessment_id]
             objective_identity = assessment.get("objective_identity")
+            if objective_identity is None and assessment.get("verdict") != "ADMISSIBLE":
+                raise WorkflowRuntimeError("REVIEW_NOT_READY", "technical review requires current admissible assessment")
             if objective_identity is not None:
                 pack = request.get("context_pack")
                 if not isinstance(pack, Mapping):
@@ -681,7 +683,30 @@ class ProductWorkflowRuntime:
                 mismatches = [field for field, value in required_binding.items() if pack.get(field) != value]
                 if mismatches:
                     raise WorkflowRuntimeError("GPT_PACKET_OBJECTIVE_MISMATCH", "technical review packet binding mismatch: " + ", ".join(mismatches))
-                request = {**request, "objective_identity": objective_identity}
+                # The bridge context-pack builder intentionally whitelists its
+                # public fields and drops unknown top-level extensions.  Keep
+                # the machine-readable binding in the adapter contract while
+                # also projecting the exact identity into a generated,
+                # GPT-visible source context entry.
+                binding_excerpt = "\n".join([
+                    f"PROJECT_ID: {required_binding['PROJECT_ID']}",
+                    f"STAGE_ID: {required_binding['STAGE_ID']}",
+                    f"OBJECTIVE_IDENTITY: {required_binding['OBJECTIVE_IDENTITY']}",
+                    f"STAGE_GOAL: {required_binding['STAGE_GOAL']}",
+                    f"ASSESSMENT_ID: {required_binding['ASSESSMENT_ID']}",
+                    f"OBSERVATION_ID: {required_binding['OBSERVATION_ID']}",
+                ])
+                bound_pack = copy.deepcopy(dict(pack))
+                prior_source_context = bound_pack.get("sourceContext")
+                source_context = list(prior_source_context) if isinstance(prior_source_context, list) else ([] if prior_source_context is None else [prior_source_context])
+                source_context.append({
+                    "filePath": "OBJECTIVE_BINDING.md",
+                    "relevantFunctions": [],
+                    "excerpt": binding_excerpt,
+                    "whyRelevant": "Canonical objective binding for this technical review; do not infer it from natural-language context.",
+                })
+                bound_pack["sourceContext"] = source_context
+                request = {**request, "context_pack": bound_pack, "objective_identity": objective_identity}
             revision = request.get("review_revision", 1)
             if isinstance(revision, bool) or not isinstance(revision, int) or not 1 <= revision <= 32:
                 raise WorkflowRuntimeError("REVIEW_INPUT_INVALID", "review_revision must be an explicit bounded positive integer")

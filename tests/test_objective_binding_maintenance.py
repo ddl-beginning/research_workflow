@@ -8,6 +8,12 @@ import pytest
 from src.contracts import sha256_json
 from src.workflow_v2_contracts import assess_observation, assessment_identity, observation_identity
 from src.workflow_v2_controller import StageController, WorkflowV2ControllerError
+import src.product_workflow_runtime as product_runtime
+from src.product_workflow_runtime import ProductWorkflowRuntime
+from src.runtime_composition import load_runtime_composition_config
+from src.workflow_runtime import WorkflowRuntimeError
+
+from tests.test_product_workflow_runtime import _approved_runtime, _write_machine_config
 
 
 STAGE_ID = "stage-objective-maintenance-12345678"
@@ -228,3 +234,114 @@ def test_true_scientific_blocked_cannot_be_superseded():
             misalignment_evidence_digest=sha256_json(proof), maintenance_authority="maintenance-authority-objective-true-12345678",
             command_id="command-objective-true-supersede-12345678",
         )
+
+
+def test_objective_bound_rejected_assessment_reaches_gpt_with_visible_binding(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "objective-review"
+    root.mkdir()
+    config_path = _write_machine_config(root, tmp_path / "machine")
+    runtime = _approved_runtime(root, config_path)
+    stage = _stage()
+    stage["workspace_id"] = runtime.controller.workspace_id
+    stage["project_id"] = runtime.intake.state["project_id"]
+    runtime.controller.register_stage(stage, command_id="command-objective-review-register-12345678")
+    runtime.controller.start(STAGE_ID, command_id="command-objective-review-start-12345678")
+    requested = runtime.controller.request_execution(
+        STAGE_ID,
+        request={"objective": "objective-bound scientific attempt"},
+        command_id="command-objective-review-request-12345678",
+    )
+    attempt = requested["attempt"]
+    manifest = _manifest(attempt["attempt_id"], "manifest-objective-review-12345678")
+    observation = {
+        "schema_version": "provider_observation.v2",
+        "observation_id": "pending",
+        "stage_id": STAGE_ID,
+        "objective_identity": OBJECTIVE,
+        "iteration_id": attempt["iteration_id"],
+        "attempt_id": attempt["attempt_id"],
+        "provider_operation_id": requested["operation"]["operation_id"],
+        "result_identity": "provider-objective-review-12345678",
+        "provider_result_digest": "provider-objective-review-12345678",
+        "evidence_manifest_digest": manifest["manifest_id"],
+        "provider_terminal_status": "FAILED",
+        "raw_provider_claim": {"status": "FAILED"},
+        "provenance": {"provider": "fixture-provider", "engine_digest": "engine-objective-review-12345678"},
+        "failure": None,
+        "outputs": {"files": []},
+        "immutable": True,
+    }
+    observation["observation_id"] = observation_identity(observation)
+    runtime.controller.record_observation(
+        STAGE_ID, observation, effect_state="SETTLED", command_id="command-objective-review-observe-12345678"
+    )
+    assessment = assess_observation(
+        observation,
+        manifest,
+        baseline_digest=stage["baseline_digest"],
+        validator_code_digest="validator-objective-review-12345678",
+        validation_contract_revision="admission.v2",
+    )
+    runtime.controller.assess_result(
+        STAGE_ID, assessment, command_id="command-objective-review-assess-12345678"
+    )
+    assert assessment["verdict"] == "REJECTED"
+
+    calls = []
+
+    def run_bridge(_prompt, **kwargs):
+        calls.append(kwargs)
+        return {
+            "status": "complete",
+            "mode": "fresh",
+            "response_text": "WORKFLOW_DECISION: BLOCKED",
+            "consultation_id": "consultation-objective-review-12345678",
+            "request_count": 1,
+            "receipt": {
+                "status": "complete",
+                "mode": "fresh",
+                "consultation_id": "consultation-objective-review-12345678",
+                "request_count": 1,
+                "conversation_id": "conversation-objective-review-12345678",
+                "conversation_validated": True,
+                "context_pack": {"pack_sha256": "packet-objective-review-12345678"},
+            },
+        }
+
+    monkeypatch.setattr(product_runtime, "subprocess_bridge_runner", run_bridge)
+    pack = {
+        "mode": "fresh",
+        "projectGoal": "objective-bound scientific review",
+        "currentStageGoal": "review the current scientific attempt",
+        "latestResult": {"actualWork": "one bounded attempt", "success": [], "failure": ["scientific input absent"]},
+        "evidence": [],
+        "evidenceRoots": ["."],
+        "PROJECT_ID": stage["project_id"],
+        "STAGE_ID": STAGE_ID,
+        "OBJECTIVE_IDENTITY": OBJECTIVE,
+        "STAGE_GOAL": "review the current scientific attempt",
+        "ASSESSMENT_ID": assessment["assessment_id"],
+        "OBSERVATION_ID": observation["observation_id"],
+    }
+    result = runtime.run(
+        {
+            "operation": "CONSULT_REVIEW",
+            "stage_id": STAGE_ID,
+            "prompt": "Review only the current objective-bound scientific result.",
+            "context_pack": pack,
+        }
+    )
+    assert result["technical_review"]["decision"] == "BLOCKED"
+    assert len(calls) == 1
+    excerpt = calls[0]["context_pack"]["sourceContext"][-1]["excerpt"]
+    for key, value in {
+        "PROJECT_ID": stage["project_id"],
+        "STAGE_ID": STAGE_ID,
+        "OBJECTIVE_IDENTITY": OBJECTIVE,
+        "STAGE_GOAL": "review the current scientific attempt",
+        "ASSESSMENT_ID": assessment["assessment_id"],
+        "OBSERVATION_ID": observation["observation_id"],
+    }.items():
+        assert f"{key}: {value}" in excerpt
