@@ -305,8 +305,8 @@ def stage_contract(*, workspace_id: str, project_id: str, baseline: str) -> dict
     }
 
 
-def context_pack(*, stage_goal: str, latest: Mapping[str, Any], evidence: list[dict[str, Any]], commit: str, dirty: bool) -> dict[str, Any]:
-    return {
+def context_pack(*, stage_goal: str, latest: Mapping[str, Any], evidence: list[dict[str, Any]], commit: str, dirty: bool, project_id: str | None = None, objective_identity: str | None = None, assessment_id: str | None = None, observation_id: str | None = None) -> dict[str, Any]:
+    pack = {
         "mode": "fresh",
         "projectGoal": OBJECTIVE,
         "currentStageGoal": stage_goal,
@@ -322,6 +322,16 @@ def context_pack(*, stage_goal: str, latest: Mapping[str, Any], evidence: list[d
         "evidenceRoots": ["release", "specs", "src"],
         "gitMetadata": {"rootIdentifier": f"release-validation-{commit[:16]}", "commit": commit, "dirty": dirty, "changedFiles": [SOURCE_PATH] if dirty else []},
     }
+    if all(item is not None for item in (project_id, objective_identity, assessment_id, observation_id)):
+        pack.update({
+            "PROJECT_ID": project_id,
+            "STAGE_ID": STAGE_ID,
+            "OBJECTIVE_IDENTITY": objective_identity,
+            "STAGE_GOAL": stage_goal,
+            "ASSESSMENT_ID": assessment_id,
+            "OBSERVATION_ID": observation_id,
+        })
+    return pack
 
 
 def file_digest(path: Path) -> str:
@@ -451,6 +461,8 @@ def run_installation_validation(args: argparse.Namespace) -> dict[str, Any]:
         provider_handoff_manifest = {
             "workflow_operation_id": execution_operation_id,
             "stage_id": STAGE_ID,
+            "project_id": project_id,
+            "objective_identity": stage["objective_fingerprint"],
             "iteration_id": execution_iteration_id,
             "attempt_id": execution_attempt_id,
             "provider_owner": "openai-codex",
@@ -461,6 +473,8 @@ def run_installation_validation(args: argparse.Namespace) -> dict[str, Any]:
                 "schema_version": "request_descriptor.v1",
                 "operation": "REQUEST_EXECUTION",
                 "purpose": "DOMAIN",
+                "project_id": project_id,
+                "objective_identity": stage["objective_fingerprint"],
                 "request_digest": execution_request_digest,
                 "request": execution_request,
                 "provider_args": {"provider_owner": "openai-codex", "provider_route": "openai-codex", "provider_request_identity": execution_request_id},
@@ -486,7 +500,7 @@ def run_installation_validation(args: argparse.Namespace) -> dict[str, Any]:
         provider_result_digest = sha256_json(dict(provider_result))
         manifest_body = {"stage_id": STAGE_ID, "attempt_id": attempt["attempt_id"], "required_artifact_paths": [SOURCE_PATH], "changed_paths": [SOURCE_PATH], "allowed_paths": ["src"], "protected_paths": PROTECTED_PATHS, "path_inventory": [{"path": SOURCE_PATH, "sha256": file_digest(project / SOURCE_PATH)}], "complete": True}
         manifest = {"schema_version": "evidence_manifest.v2", "manifest_id": "manifest-" + sha256_json(manifest_body), **manifest_body}
-        observation = {"schema_version": "provider_observation.v2", "observation_id": "pending", "stage_id": STAGE_ID, "iteration_id": attempt["iteration_id"], "attempt_id": attempt["attempt_id"], "provider_result_digest": provider_result_digest, "evidence_manifest_digest": manifest["manifest_id"], "provider_terminal_status": "SUCCEEDED", "raw_provider_claim": {"status": provider_result.get("status"), "provider": "openai-codex", "changed_files": [SOURCE_PATH], "tests": provider_result.get("tests", [])}, "provenance": {"provider": "openai-codex", "executor_request_id": provider_view.get("executor_request_id"), "actual_model": provider_view.get("actual_model"), "execution_profile": provider_view.get("execution_profile"), "reasoning_effort": provider_view.get("reasoning_effort"), "auth_mode": provider_view.get("auth_mode")}, "failure": None, "outputs": {"changed_paths": [SOURCE_PATH], "test_command": TEST_COMMAND}, "immutable": True}
+        observation = {"schema_version": "provider_observation.v2", "observation_id": "pending", "stage_id": STAGE_ID, "iteration_id": attempt["iteration_id"], "attempt_id": attempt["attempt_id"], "objective_identity": stage["objective_fingerprint"], "provider_operation_id": execution_operation_id, "result_identity": provider_result_digest, "provider_result_digest": provider_result_digest, "evidence_manifest_digest": manifest["manifest_id"], "provider_terminal_status": "SUCCEEDED", "raw_provider_claim": {"status": provider_result.get("status"), "provider": "openai-codex", "changed_files": [SOURCE_PATH], "tests": provider_result.get("tests", [])}, "provenance": {"provider": "openai-codex", "executor_request_id": provider_view.get("executor_request_id"), "actual_model": provider_view.get("actual_model"), "execution_profile": provider_view.get("execution_profile"), "reasoning_effort": provider_view.get("reasoning_effort"), "auth_mode": provider_view.get("auth_mode")}, "failure": None, "outputs": {"changed_paths": [SOURCE_PATH], "test_command": TEST_COMMAND}, "immutable": True}
         # The identity algorithm is part of the installed V2 contracts.  The
         # release validator invokes it through a short installed helper below.
         identity_helper = project / ".release-observation-identity.py"
@@ -515,10 +529,14 @@ def run_installation_validation(args: argparse.Namespace) -> dict[str, Any]:
             evidence=[{"sourcePath": "release/requirement.json", "logicalName": "requirement.json", "stagedName": "release/requirement.json", "role": "source"}],
             commit=baseline,
             dirty=True,
+            project_id=project_id,
+            objective_identity=stage["objective_fingerprint"],
+            assessment_id=assessment["assessment_id"],
+            observation_id=observation["observation_id"],
         )
         reviewed = client.call("workflow_run", {"workspace": str(project), "request": {"operation": "CONSULT_REVIEW", "stage_id": STAGE_ID, "review_revision": 1, "prompt": "Perform the technical review using only this fresh packet. The real provider succeeded, the immutable observation is SETTLED, the current assessment is ADMISSIBLE, the exact test passed, and the delta is exactly src/add.py. STAGE_READY is technical readiness for COMMIT_INTEGRATION, not Human approval. Do not execute or modify anything. Return one final standalone line exactly: WORKFLOW_DECISION: STAGE_READY", "context_pack": technical_pack}})
         technical = require_decision(reviewed, "STAGE_READY", "technical_review")
-        decision = {"schema_version": "decision.v2", "decision_id": "decision-real-gpt-" + str(technical["response_digest"])[:24], "actor_kind": "GPT", "boundary": "TECHNICAL_REVIEW", "subject_id": assessment["assessment_id"], "subject_digest": assessment["assessment_id"], "subject_version": 1, "allowed_choices": ["STAGE_READY"], "requested_action": "Apply the exact real GPT technical-review result to the current assessment.", "provenance": {"request_count": technical["request_count"], "conversation_id": technical["conversation_id"], "response_digest": technical["response_digest"], "packet_digest": technical["packet_digest"]}, "supersedes": None}
+        decision = {"schema_version": "decision.v2", "decision_id": "decision-real-gpt-" + str(technical["response_digest"])[:24], "actor_kind": "GPT", "boundary": "TECHNICAL_REVIEW", "subject_id": assessment["assessment_id"], "subject_digest": assessment["assessment_id"], "subject_version": 1, "objective_identity": stage["objective_fingerprint"], "allowed_choices": ["STAGE_READY"], "requested_action": "Apply the exact real GPT technical-review result to the current assessment.", "provenance": {"request_count": technical["request_count"], "conversation_id": technical["conversation_id"], "response_digest": technical["response_digest"], "packet_digest": technical["packet_digest"]}, "supersedes": None}
         gpt_review_pipeline = evaluate_gpt_review_pipeline(
             transport_status="PASS" if all(technical.get(key) for key in ("consultation_id", "conversation_id", "packet_digest")) and technical.get("request_count") == 1 else "FAIL",
             response_received=bool(technical.get("response_digest")),

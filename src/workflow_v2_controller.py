@@ -35,10 +35,12 @@ from .workflow_v2_contracts import (
     validate_operation_envelope,
     validate_provider_handoff_manifest,
     validate_provider_observation,
+    observation_identity,
     validate_semantic_iteration,
     validate_stage,
     validate_stage_assessment,
     validate_typed_replan,
+    stage_objective_identity,
     PROVIDER_HANDOFF_INVARIANT_VERSION,
 )
 
@@ -81,6 +83,8 @@ def build_provider_handoff_manifest(
     request: Mapping[str, Any],
     provenance: Mapping[str, Any],
     purpose: str,
+    project_id: str | None = None,
+    objective_identity: str | None = None,
 ) -> dict[str, Any]:
     """Build the durable, secret-free handoff record for one execution intent."""
 
@@ -101,6 +105,10 @@ def build_provider_handoff_manifest(
             "provider_request_identity": provider_request_identity,
         },
     }
+    if project_id is not None:
+        descriptor["project_id"] = _text(project_id, "project_id")
+    if objective_identity is not None:
+        descriptor["objective_identity"] = _text(objective_identity, "objective_identity")
     manifest = {
         "workflow_operation_id": operation_id,
         "stage_id": stage_id,
@@ -115,6 +123,10 @@ def build_provider_handoff_manifest(
         "reconciliation_identity": "reconcile-" + sha256_json({"operation_id": operation_id, "provider_request_identity": provider_request_identity})[:40],
         "dispatch_state": "PREPARED",
     }
+    if project_id is not None:
+        manifest["project_id"] = _text(project_id, "project_id")
+    if objective_identity is not None:
+        manifest["objective_identity"] = _text(objective_identity, "objective_identity")
     return validate_provider_handoff_manifest(manifest)
 
 
@@ -193,6 +205,7 @@ class StageController:
             "attempts": {},
             "observations": {},
             "assessments": {},
+            "assessment_supersessions": {},
             "decisions": {},
             "dependencies": {},
             "operations": {},
@@ -277,6 +290,11 @@ class StageController:
         for key in ("commands", "stages", "stage_runtime", "iterations", "attempts", "observations", "assessments", "decisions", "dependencies", "operations", "correction_decisions", "blockers"):
             if not isinstance(payload.get(key), dict):
                 raise WorkflowV2ControllerError(f"journal collection is invalid: {key}")
+        supersessions = payload.get("assessment_supersessions", {})
+        if not isinstance(supersessions, dict):
+            raise WorkflowV2ControllerError("journal collection is invalid: assessment_supersessions")
+        for supersession_id, supersession in supersessions.items():
+            StageController._validate_assessment_supersession(supersession, supersession_id=supersession_id)
         legacy_resolutions = payload.get("legacy_resolutions", {})
         if not isinstance(legacy_resolutions, dict):
             raise WorkflowV2ControllerError("journal collection is invalid: legacy_resolutions")
@@ -380,13 +398,15 @@ class StageController:
 
     @staticmethod
     def _projection_digest(journal: Mapping[str, Any]) -> str:
-        keys = (
+        keys = [
             "schema_version", "workspace_id", "stages", "stage_runtime", "iterations",
             "attempts", "observations", "assessments", "decisions", "dependencies",
             "operations", "correction_decisions", "blockers", "executable_owner_stage_id",
-        )
+        ]
         if "legacy_resolutions" in journal:
-            keys = (*keys[:-2], "legacy_resolutions", *keys[-2:])
+            keys.insert(len(keys) - 2, "legacy_resolutions")
+        if "assessment_supersessions" in journal:
+            keys.insert(len(keys) - 2, "assessment_supersessions")
         return sha256_json({key: _copy(journal.get(key)) for key in keys})
 
     def _persist(self, payload: Mapping[str, Any]) -> None:
@@ -513,14 +533,48 @@ class StageController:
         return {"stage_sha256": stage_digest(stage), "identity_sha256": stage_identity_digest(stage)}
 
     def _runtime(self, journal: dict[str, Any], stage_id: str) -> dict[str, Any]:
-        return journal["stage_runtime"].setdefault(
+        runtime = journal["stage_runtime"].setdefault(
             stage_id,
             {"current_attempt_id": None, "in_flight_operation_id": None, "execution_authorized": False, "integration_operation_id": None, "closeout": None},
         )
+        runtime.setdefault("current_assessment_epoch_id", None)
+        return runtime
 
     def _require_status(self, stage: Mapping[str, Any], allowed: set[str]) -> None:
         if stage.get("status") not in allowed:
             raise WorkflowV2ControllerError(f"Stage {stage.get('stage_id')} is {stage.get('status')}, expected {sorted(allowed)}")
+
+    @staticmethod
+    def _validate_assessment_supersession(value: Mapping[str, Any], *, supersession_id: str | None = None) -> dict[str, Any]:
+        """Validate the append-only maintenance record without adding a Stage state."""
+
+        if not isinstance(value, Mapping):
+            raise WorkflowV2ControllerError("assessment supersession record is invalid")
+        required = (
+            "schema_version", "supersession_id", "project_id", "stage_id", "objective_identity",
+            "assessment_id", "consultation_id", "reason", "status", "misalignment_evidence_digest",
+            "maintenance_authority", "new_assessment_epoch_id", "old_observation_preserved",
+            "old_assessment_preserved", "old_gpt_decision_preserved",
+        )
+        if any(not isinstance(value.get(field), str) or not value[field].strip() for field in required[:-3]):
+            raise WorkflowV2ControllerError("assessment supersession record is incomplete")
+        if supersession_id is not None and value.get("supersession_id") != supersession_id:
+            raise WorkflowV2ControllerError("assessment supersession identity is invalid")
+        if value.get("schema_version") != "assessment_supersession.v1":
+            raise WorkflowV2ControllerError("assessment supersession schema is invalid")
+        if value.get("reason") != "STAGE_OBJECTIVE_EVIDENCE_MISALIGNMENT":
+            raise WorkflowV2ControllerError("assessment supersession reason is invalid")
+        if value.get("status") != "NOT_APPLICABLE_TO_CURRENT_OBJECTIVE":
+            raise WorkflowV2ControllerError("assessment supersession status is invalid")
+        for field in ("assessment_id", "objective_identity", "misalignment_evidence_digest", "new_assessment_epoch_id"):
+            if not isinstance(value.get(field), str) or len(value[field]) < 8:
+                raise WorkflowV2ControllerError(f"assessment supersession {field} identity is invalid")
+        for field in ("old_observation_preserved", "old_assessment_preserved", "old_gpt_decision_preserved"):
+            if value.get(field) is not True:
+                raise WorkflowV2ControllerError(f"assessment supersession {field} proof is invalid")
+        if value.get("new_attempt_id") is not None and (not isinstance(value["new_attempt_id"], str) or len(value["new_attempt_id"]) < 8):
+            raise WorkflowV2ControllerError("assessment supersession new_attempt_id is invalid")
+        return _copy(dict(value))
 
     def _pending_decisions(self, journal: Mapping[str, Any], subject_id: str) -> list[dict[str, Any]]:
         return [
@@ -558,6 +612,12 @@ class StageController:
             attempt
             for attempt in self._attempts_for(journal, stage_id, iteration_id)
             if self._legacy_resolution_for_attempt(journal, attempt["attempt_id"]) is None
+            and not any(
+                supersession.get("assessment_id") == assessment.get("assessment_id")
+                and assessment.get("attempt_id") == attempt.get("attempt_id")
+                for supersession in journal.get("assessment_supersessions", {}).values()
+                for assessment in journal.get("assessments", {}).values()
+            )
         ]
 
     def _legacy_orphan_operation(self, journal: Mapping[str, Any], stage_id: str) -> tuple[dict[str, Any], dict[str, Any]] | None:
@@ -661,6 +721,7 @@ class StageController:
             "RESOLVE_LEGACY_ORPHAN": self._resolve_legacy_orphan,
             "RECORD_OBSERVATION": self._record_observation,
             "ASSESS_RESULT": self._assess_result,
+            "SUPERSEDE_ASSESSMENT": self._supersede_assessment,
             "APPLY_GPT_DECISION": self._apply_gpt_decision,
             "ADVANCE_ITERATION": self._advance_iteration,
             "REQUEST_DECISION": self._request_decision,
@@ -771,7 +832,7 @@ class StageController:
             if descendant_attempts >= ancestor["budgets"]["max_descendant_attempts"]:
                 raise WorkflowV2ControllerError("descendant attempt budget exhausted")
         reason = str(payload.get("reason", "INITIAL")).upper()
-        if iteration_attempts and reason not in {"RETRY", "ENGINEERING_FIX", "CONTINUE", "LEGACY_ORPHAN_RECOVERY"}:
+        if iteration_attempts and reason not in {"RETRY", "ENGINEERING_FIX", "CONTINUE", "LEGACY_ORPHAN_RECOVERY", "OBJECTIVE_SUPERSESSION_RECOVERY"}:
             raise WorkflowV2ControllerError("a later attempt needs an explicit typed retry/review reason")
         if reason == "LEGACY_ORPHAN_RECOVERY":
             if not any(
@@ -792,15 +853,35 @@ class StageController:
             )
             if latest_observation is None or latest_observation.get("failure", {}).get("retryability") != "RETRYABLE":
                 raise WorkflowV2ControllerError("RETRY requires a controller-typed RETRYABLE failure")
+        if reason == "OBJECTIVE_SUPERSESSION_RECOVERY":
+            if not self._runtime(journal, stage_id).get("current_assessment_epoch_id"):
+                raise WorkflowV2ControllerError("OBJECTIVE_SUPERSESSION_RECOVERY requires an active assessment epoch")
+            if not any(
+                item.get("stage_id") == stage_id
+                and item.get("new_assessment_epoch_id") == self._runtime(journal, stage_id).get("current_assessment_epoch_id")
+                for item in journal.get("assessment_supersessions", {}).values()
+            ):
+                raise WorkflowV2ControllerError("OBJECTIVE_SUPERSESSION_RECOVERY requires a committed assessment supersession")
         if reason in {"ENGINEERING_FIX", "CONTINUE"} and not runtime["execution_authorized"]:
             raise WorkflowV2ControllerError(f"{reason} requires a typed GPT decision")
         request = _copy(payload.get("request", {}))
         request_id = payload.get("request_id") or _id("request", command["command_id"])
-        attempt_id = payload.get("attempt_id") or _id("attempt", command["command_id"])
         request_digest = payload.get("request_digest") or sha256_json(request)
         provenance = _copy(payload.get("provenance", {"provider": "fixture-provider", "engine_digest": "engine-fixed-v2"}))
         purpose = payload.get("purpose", stage["purpose"])
         operation_id = payload.get("operation_id") or _id("operation", command["command_id"])
+        recovery_epoch_id = self._runtime(journal, stage_id).get("current_assessment_epoch_id")
+        recovery_supersession = next(
+            (
+                item for item in journal.get("assessment_supersessions", {}).values()
+                if item.get("stage_id") == stage_id and item.get("new_assessment_epoch_id") == recovery_epoch_id
+            ),
+            None,
+        ) if reason == "OBJECTIVE_SUPERSESSION_RECOVERY" else None
+        expected_recovery_attempt_id = recovery_supersession.get("new_attempt_id") if recovery_supersession else None
+        attempt_id = payload.get("attempt_id") or expected_recovery_attempt_id or _id("attempt", command["command_id"])
+        if expected_recovery_attempt_id is not None and attempt_id != expected_recovery_attempt_id:
+            raise WorkflowV2ControllerError("OBJECTIVE_SUPERSESSION_RECOVERY attempt identity does not match the assessment epoch")
         handoff = payload.get("provider_handoff_manifest")
         if not isinstance(handoff, Mapping):
             raise WorkflowV2ControllerError("INTENT_COMMIT_REQUIRES_RECOVERABLE_PROVIDER_HANDOFF")
@@ -818,10 +899,19 @@ class StageController:
             raise WorkflowV2ControllerError("provider handoff manifest does not bind the execution identity")
         if handoff.get("dispatch_state") != "PREPARED":
             raise WorkflowV2ControllerError("provider handoff must be durably PREPARED before intent commit")
+        objective_identity = stage_objective_identity(stage)
+        if handoff.get("project_id") != stage["project_id"] or handoff.get("objective_identity") != objective_identity:
+            raise WorkflowV2ControllerError("PROVIDER_REQUEST_OBJECTIVE_MISMATCH")
+        descriptor = handoff.get("reconstructible_request_descriptor", {})
+        if descriptor.get("project_id") != stage["project_id"] or descriptor.get("objective_identity") != objective_identity:
+            raise WorkflowV2ControllerError("PROVIDER_REQUEST_OBJECTIVE_MISMATCH")
+        assessment_epoch_id = self._runtime(journal, stage_id).get("current_assessment_epoch_id")
         attempt = {
             "schema_version": "execution_attempt.v2",
             "attempt_id": attempt_id,
+            "project_id": stage["project_id"],
             "stage_id": stage_id,
+            "objective_identity": objective_identity,
             "iteration_id": iteration_id,
             "request_id": request_id,
             "request_digest": request_digest,
@@ -832,6 +922,8 @@ class StageController:
             "committed": True,
             "status": "REQUESTED",
         }
+        if assessment_epoch_id is not None:
+            attempt["assessment_epoch_id"] = assessment_epoch_id
         validate_execution_attempt(attempt)
         operation = {
             "schema_version": "operation_envelope.v2",
@@ -851,6 +943,8 @@ class StageController:
         runtime["current_attempt_id"] = attempt_id
         runtime["in_flight_operation_id"] = operation_id
         runtime["execution_authorized"] = False
+        if assessment_epoch_id is not None:
+            runtime["current_assessment_epoch_id"] = assessment_epoch_id
         stage["current_assessment_id"] = None
         return {"stage": self.show_stage(stage_id, journal=journal), "attempt": _copy(attempt), "operation": _copy(operation)}
 
@@ -924,23 +1018,152 @@ class StageController:
             "old_attempt": _copy(attempt),
         }
 
+    def _supersede_assessment(self, journal: dict[str, Any], command: Mapping[str, Any], payload: Mapping[str, Any]) -> dict[str, Any]:
+        """Record a bounded objective-mismatch recovery on the same Stage.
+
+        This command never rewrites the historical observation, assessment, or
+        GPT decision.  It only releases the current assessment projection and
+        opens an assessment epoch whose next canonical action is execution.
+        """
+
+        stage_id = command["subject_id"]
+        stage = self._stage(journal, stage_id)
+        self._require_status(stage, {"ACTIVE"})
+        assessment_id = _text(payload.get("assessment_id"), "assessment_id")
+        assessment = journal["assessments"].get(assessment_id)
+        if assessment is None or assessment.get("stage_id") != stage_id:
+            raise WorkflowV2ControllerError("assessment supersession requires an assessment from the current Stage")
+        current_objective = stage_objective_identity(stage)
+        supersession_id = payload.get("supersession_id") or _id("assessment-supersession", command["command_id"])
+        existing = journal.setdefault("assessment_supersessions", {}).get(supersession_id)
+        if existing is not None:
+            self._validate_assessment_supersession(existing, supersession_id=supersession_id)
+            supplied_reason = str(payload.get("reason", "")).upper()
+            if (
+                existing.get("stage_id") != stage_id
+                or existing.get("project_id") != stage.get("project_id")
+                or existing.get("objective_identity") != current_objective
+                or existing.get("assessment_id") != assessment_id
+                or existing.get("consultation_id") != payload.get("consultation_id")
+                or existing.get("reason") != supplied_reason
+                or existing.get("maintenance_authority") != payload.get("maintenance_authority")
+                or existing.get("misalignment_evidence_digest") != payload.get("misalignment_evidence_digest")
+                or (
+                    payload.get("new_assessment_epoch_id") is not None
+                    and existing.get("new_assessment_epoch_id") != payload.get("new_assessment_epoch_id")
+                )
+            ):
+                raise WorkflowV2ControllerError("assessment supersession identity collision")
+            return {"stage": self.show_stage(stage_id, journal=journal), "supersession": _copy(existing)}
+        if stage.get("current_assessment_id") != assessment_id:
+            raise WorkflowV2ControllerError("assessment supersession requires the current assessment")
+        old_objective = assessment.get("objective_identity")
+        if old_objective == current_objective:
+            raise WorkflowV2ControllerError("TRUE_SCIENTIFIC_BLOCKED_NOT_SUPERSEDABLE")
+        consultation_id = _text(payload.get("consultation_id"), "consultation_id")
+        maintenance_authority = _text(payload.get("maintenance_authority"), "maintenance_authority")
+        reason = _text(payload.get("reason"), "reason").upper()
+        if reason != "STAGE_OBJECTIVE_EVIDENCE_MISALIGNMENT":
+            raise WorkflowV2ControllerError("assessment supersession reason is not an approved maintenance reason")
+        proof = payload.get("misalignment_proof")
+        if not isinstance(proof, Mapping):
+            raise WorkflowV2ControllerError("assessment supersession requires explicit misalignment proof")
+        if proof.get("assessment_id") != assessment_id or proof.get("consultation_id") != consultation_id:
+            raise WorkflowV2ControllerError("assessment supersession proof is not bound to the historical review")
+        if proof.get("current_objective_identity") != current_objective:
+            raise WorkflowV2ControllerError("assessment supersession proof does not bind the current objective")
+        if proof.get("old_objective_identity") != old_objective:
+            raise WorkflowV2ControllerError("assessment supersession proof does not bind the old objective")
+        if proof.get("objective_mismatch_proven") is not True:
+            raise WorkflowV2ControllerError("assessment supersession requires proven objective mismatch")
+        if proof.get("validation_evidence_only") is not True:
+            raise WorkflowV2ControllerError("assessment supersession requires validation-only evidence proof")
+        if proof.get("real_current_objective_scientific_result_present") is not False:
+            raise WorkflowV2ControllerError("assessment supersession cannot invalidate current-objective scientific evidence")
+        evidence_digest = _text(payload.get("misalignment_evidence_digest"), "misalignment_evidence_digest")
+        if evidence_digest != sha256_json(proof):
+            raise WorkflowV2ControllerError("assessment supersession evidence digest does not match proof")
+        blocked = self._resolved_gpt_decision(journal, assessment_id)
+        if blocked is None or blocked.get("resolution") != "BLOCKED":
+            raise WorkflowV2ControllerError("assessment supersession requires the preserved GPT BLOCKED decision")
+        epoch_id = payload.get("new_assessment_epoch_id") or _id("assessment-epoch", supersession_id)
+        new_attempt_id = payload.get("new_attempt_id") or _id("attempt", f"{epoch_id}-recovery")
+        record = {
+            "schema_version": "assessment_supersession.v1",
+            "supersession_id": supersession_id,
+            "project_id": stage["project_id"],
+            "stage_id": stage_id,
+            "objective_identity": current_objective,
+            "assessment_id": assessment_id,
+            "consultation_id": consultation_id,
+            "reason": reason,
+            "status": "NOT_APPLICABLE_TO_CURRENT_OBJECTIVE",
+            "misalignment_evidence_digest": evidence_digest,
+            "maintenance_authority": maintenance_authority,
+            "new_assessment_epoch_id": epoch_id,
+            "new_attempt_id": new_attempt_id,
+            "old_observation_preserved": True,
+            "old_assessment_preserved": True,
+            "old_gpt_decision_preserved": True,
+        }
+        self._validate_assessment_supersession(record, supersession_id=supersession_id)
+        for existing_record in journal["assessment_supersessions"].values():
+            if existing_record.get("assessment_id") == assessment_id:
+                raise WorkflowV2ControllerError("assessment already has a different supersession")
+        journal["assessment_supersessions"][supersession_id] = record
+        runtime = self._runtime(journal, stage_id)
+        if runtime.get("in_flight_operation_id") is not None:
+            raise WorkflowV2ControllerError("assessment supersession requires no in-flight provider operation")
+        runtime["current_attempt_id"] = None
+        runtime["in_flight_operation_id"] = None
+        runtime["execution_authorized"] = False
+        runtime["current_assessment_epoch_id"] = epoch_id
+        stage["current_assessment_id"] = None
+        return {"stage": self.show_stage(stage_id, journal=journal), "supersession": _copy(record)}
+
     def _record_observation(self, journal: dict[str, Any], command: Mapping[str, Any], payload: Mapping[str, Any]) -> dict[str, Any]:
-        observation = validate_provider_observation(payload.get("observation", {}))
-        if command["subject_id"] != observation["stage_id"]:
+        raw_observation = payload.get("observation", {})
+        if not isinstance(raw_observation, Mapping):
+            raise WorkflowV2ControllerError("observation must be an object")
+        observation = _copy(dict(raw_observation))
+        if command["subject_id"] != observation.get("stage_id"):
             raise WorkflowV2ControllerError("observation command subject does not match Stage")
         stage = self._stage(journal, observation["stage_id"])
         attempt = journal["attempts"].get(observation["attempt_id"])
         if attempt is None or attempt["stage_id"] != observation["stage_id"] or attempt["iteration_id"] != observation["iteration_id"]:
             raise WorkflowV2ControllerError("observation is not linked to the committed attempt")
+        operation_id = self._runtime(journal, stage["stage_id"])["in_flight_operation_id"]
+        if operation_id is None or operation_id not in journal["operations"]:
+            raise WorkflowV2ControllerError("observation requires the attempt operation intent")
+        operation = journal["operations"][operation_id]
+        handoff = operation.get("provider_handoff_manifest") or {}
+        expected_objective = attempt.get("objective_identity") or handoff.get("objective_identity")
+        if expected_objective is not None:
+            if observation.get("objective_identity") is not None and observation["objective_identity"] != expected_objective:
+                raise WorkflowV2ControllerError("OBSERVATION_OBJECTIVE_MISMATCH")
+            if observation.get("objective_identity") is None:
+                observation["objective_identity"] = expected_objective
+        expected_provider_operation = operation.get("operation_id")
+        if expected_provider_operation is not None:
+            if observation.get("provider_operation_id") is not None and observation["provider_operation_id"] != expected_provider_operation:
+                raise WorkflowV2ControllerError("OBSERVATION_PROVIDER_OPERATION_MISMATCH")
+            if observation.get("provider_operation_id") is None:
+                observation["provider_operation_id"] = expected_provider_operation
+        if observation.get("result_identity") is None and observation.get("provider_result_digest") is not None:
+            observation["result_identity"] = observation["provider_result_digest"]
+        elif observation.get("result_identity") != observation.get("provider_result_digest"):
+            raise WorkflowV2ControllerError("OBSERVATION_RESULT_IDENTITY_MISMATCH")
+        if observation.get("objective_identity") is not None and observation["objective_identity"] != stage_objective_identity(stage):
+            raise WorkflowV2ControllerError("OBSERVATION_OBJECTIVE_MISMATCH")
+        if any(key not in raw_observation for key in ("objective_identity", "provider_operation_id", "result_identity")):
+            observation["observation_id"] = "pending"
+            observation["observation_id"] = observation_identity(observation)
+        validate_provider_observation(observation, require_objective_identity=expected_objective is not None)
         if observation["observation_id"] in journal["observations"]:
             existing = journal["observations"][observation["observation_id"]]
             if canonical_json(existing) != canonical_json(observation):
                 raise WorkflowV2ControllerError("observation identity collision")
             return {"stage": self.show_stage(stage["stage_id"], journal=journal), "observation": _copy(existing)}
-        operation_id = self._runtime(journal, stage["stage_id"])["in_flight_operation_id"]
-        if operation_id is None or operation_id not in journal["operations"]:
-            raise WorkflowV2ControllerError("observation requires the attempt operation intent")
-        operation = journal["operations"][operation_id]
         effect_state = payload.get("effect_state")
         if effect_state is None:
             effect_state = observation.get("failure", {}).get("effect_state") if observation.get("failure") else "UNKNOWN"
@@ -963,6 +1186,7 @@ class StageController:
             raise WorkflowV2ControllerError("assessment Stage subject mismatch")
         if assessment["iteration_id"] != stage.get("current_iteration_id"):
             raise WorkflowV2ControllerError("assessment is not bound to the current semantic iteration")
+        expected_objective = stage_objective_identity(stage)
         if assessment["correction_receipt_digest"] is not None:
             if assessment["revalidation"] is not True:
                 raise WorkflowV2ControllerError("a correction receipt is only valid for revalidation")
@@ -992,6 +1216,14 @@ class StageController:
         )
         if attempt is None or observation is None:
             raise WorkflowV2ControllerError("assessment references an unknown attempt")
+        if observation.get("objective_identity") is not None and observation["objective_identity"] != expected_objective:
+            raise WorkflowV2ControllerError("OBSERVATION_OBJECTIVE_MISMATCH")
+        if assessment.get("objective_identity") is not None:
+            if assessment["objective_identity"] != expected_objective or (
+                observation.get("objective_identity") is not None
+                and assessment["objective_identity"] != observation["objective_identity"]
+            ):
+                raise WorkflowV2ControllerError("ASSESSMENT_OBJECTIVE_MISMATCH")
         if runtime["current_attempt_id"] != assessment["attempt_id"]:
             raise WorkflowV2ControllerError("only the latest committed attempt is the live candidate")
         stage_assessments = [
@@ -1043,6 +1275,11 @@ class StageController:
         assessment_id = stage.get("current_assessment_id")
         if assessment_id is None or decision["subject_id"] != assessment_id:
             raise WorkflowV2ControllerError("GPT decision is not bound to the current assessment")
+        assessment = journal["assessments"].get(assessment_id)
+        expected_objective = stage_objective_identity(stage)
+        if isinstance(assessment, Mapping) and assessment.get("objective_identity") is not None:
+            if decision.get("objective_identity") != assessment["objective_identity"] or decision.get("objective_identity") != expected_objective:
+                raise WorkflowV2ControllerError("GPT_PACKET_OBJECTIVE_MISMATCH")
         choice = _text(payload.get("choice"), "choice").upper()
         typed = None
         if choice == "REPLAN":
@@ -1462,7 +1699,18 @@ class StageController:
                 raise WorkflowV2ControllerError("execution requires an opened semantic iteration")
             request = payload.get("request", {})
             request_id = payload.get("request_id") or _id("request", command_id)
-            attempt_id = payload.get("attempt_id") or _id("attempt", command_id)
+            attempt_id = payload.get("attempt_id")
+            if attempt_id is None and str(payload.get("reason", "")).upper() == "OBJECTIVE_SUPERSESSION_RECOVERY":
+                epoch_id = self.state.get("stage_runtime", {}).get(stage_id, {}).get("current_assessment_epoch_id")
+                attempt_id = next(
+                    (
+                        item.get("new_attempt_id")
+                        for item in self.state.get("assessment_supersessions", {}).values()
+                        if item.get("stage_id") == stage_id and item.get("new_assessment_epoch_id") == epoch_id
+                    ),
+                    None,
+                )
+            attempt_id = attempt_id or _id("attempt", command_id)
             operation_id = payload.get("operation_id") or _id("operation", command_id)
             provenance = payload.get("provenance", {"provider": "fixture-provider", "engine_digest": "engine-fixed-v2"})
             purpose = payload.get("purpose", stage["purpose"])
@@ -1475,6 +1723,8 @@ class StageController:
                 request=request,
                 provenance=provenance,
                 purpose=purpose,
+                project_id=stage["project_id"],
+                objective_identity=stage_objective_identity(stage),
             )
         return self.dispatch("REQUEST_EXECUTION", subject_id=stage_id, payload=payload, command_id=command_id, **kwargs)
 
@@ -1484,7 +1734,16 @@ class StageController:
         return self.dispatch("RESOLVE_LEGACY_ORPHAN", subject_id=stage_id, payload=payload, **kwargs)
 
     def record_observation(self, stage_id: str, observation: Mapping[str, Any], **kwargs: Any) -> dict[str, Any]:
-        return self.dispatch("RECORD_OBSERVATION", subject_id=stage_id, payload={"observation": observation, **{key: kwargs.pop(key) for key in tuple(kwargs) if key in {"effect_state"}}}, **kwargs)
+        result = self.dispatch("RECORD_OBSERVATION", subject_id=stage_id, payload={"observation": observation, **{key: kwargs.pop(key) for key in tuple(kwargs) if key in {"effect_state"}}}, **kwargs)
+        # Older callers may construct a pre-binding observation object.  The
+        # controller canonicalizes that object from the committed handoff; if
+        # it is mutable, reflect the canonical immutable identity back to the
+        # caller so later assessment/decision code cannot retain a stale key.
+        canonical = result.get("observation")
+        if isinstance(observation, dict) and isinstance(canonical, Mapping):
+            observation.clear()
+            observation.update(_copy(dict(canonical)))
+        return result
 
     def assess_result(self, stage_id: str, assessment: Mapping[str, Any], **kwargs: Any) -> dict[str, Any]:
         payload = {"assessment": assessment}
@@ -1492,7 +1751,27 @@ class StageController:
             payload["correction_receipt"] = kwargs.pop("correction_receipt")
         return self.dispatch("ASSESS_RESULT", subject_id=stage_id, payload=payload, **kwargs)
 
+    def supersede_assessment(self, stage_id: str, **kwargs: Any) -> dict[str, Any]:
+        payload = _copy(kwargs.pop("payload", {}))
+        payload.update({key: kwargs.pop(key) for key in tuple(kwargs) if key in {
+            "assessment_id", "consultation_id", "reason", "misalignment_evidence_digest",
+            "misalignment_proof", "maintenance_authority", "supersession_id", "new_assessment_epoch_id", "new_attempt_id",
+        }})
+        return self.dispatch("SUPERSEDE_ASSESSMENT", subject_id=stage_id, payload=payload, **kwargs)
+
     def apply_gpt_decision(self, stage_id: str, decision: Mapping[str, Any], *, choice: str, **kwargs: Any) -> dict[str, Any]:
+        if isinstance(decision, dict) and decision.get("objective_identity") is None:
+            command_id = kwargs.get("command_id")
+            prior = self.state.get("commands", {}).get(command_id) if command_id else None
+            prior_decision = prior.get("receipt", {}).get("decision") if isinstance(prior, Mapping) else None
+            if isinstance(prior_decision, Mapping) and prior_decision.get("objective_identity") is not None:
+                decision["objective_identity"] = prior_decision["objective_identity"]
+            else:
+                stage = self.resolve_canonical_stage(stage_id)
+                assessment_id = stage.get("current_assessment_id")
+                assessment = self.state.get("assessments", {}).get(assessment_id)
+                if isinstance(assessment, Mapping) and assessment.get("objective_identity") is not None:
+                    decision["objective_identity"] = assessment["objective_identity"]
         payload = {"decision": decision, "choice": choice, **{key: kwargs.pop(key) for key in tuple(kwargs) if key in {"replan_subtype", "technical_change_digest", "solution_fingerprint"}}}
         return self.dispatch("APPLY_GPT_DECISION", subject_id=stage_id, payload=payload, **kwargs)
 

@@ -32,8 +32,8 @@ class WorkflowV2MigrationBoundary(unittest.TestCase):
 
     def test_v2_route_has_exact_state_and_command_surface(self):
         self.assertEqual(STAGE_STATES, ("PLANNED", "ACTIVE", "READY", "CLOSED", "STOPPED"))
-        self.assertEqual(len(PUBLIC_COMMANDS), 17)
-        self.assertEqual(len(set(PUBLIC_COMMANDS)), 17)
+        self.assertEqual(len(PUBLIC_COMMANDS), 18)
+        self.assertEqual(len(set(PUBLIC_COMMANDS)), 18)
         self.assertTrue(callable(StageController.dispatch))
 
 

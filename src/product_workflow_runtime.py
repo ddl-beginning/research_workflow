@@ -37,6 +37,7 @@ from .workflow_v2_controller import StageController, WorkflowV2ControllerError, 
 STAGE_SCOPED_COMMANDS = frozenset({
     "START", "START_STAGE", "REQUEST_EXECUTION", "RECORD_OBSERVATION",
     "RESOLVE_LEGACY_ORPHAN",
+    "SUPERSEDE_ASSESSMENT",
     "OBSERVE_RESULT", "ASSESS_RESULT", "APPLY_GPT_DECISION", "ADVANCE_ITERATION",
     "REQUEST_DECISION", "APPLY_DECISION", "RESOLVE_BLOCKER", "APPLY_RECEIPT",
     "COMMIT_INTEGRATION", "CLOSEOUT", "CLOSE_STAGE", "STOP", "ADD_DEPENDENCY",
@@ -565,7 +566,8 @@ class ProductWorkflowRuntime:
                 "response_digest": hashlib.sha256(response.encode()).hexdigest(),
                 "consultation_id": checked["consultation_id"], "receipt_path": checked.get("receipt_path"),
                 "request_count": checked["request_count"], "conversation_id": receipt.get("conversation_id"),
-                "conversation_validated": True, "packet_digest": context["pack_sha256"]}
+                "conversation_validated": True, "packet_digest": context["pack_sha256"],
+                "objective_identity": request.get("objective_identity")}
 
     @_boundary
     def run(self, request: Mapping[str, Any]) -> dict[str, Any]:
@@ -649,6 +651,37 @@ class ProductWorkflowRuntime:
             assessment_id = stage.get("current_assessment_id")
             if not assessment_id or self.controller.state["assessments"][assessment_id]["verdict"] != "ADMISSIBLE":
                 raise WorkflowRuntimeError("REVIEW_NOT_READY", "technical review requires current admissible assessment")
+            assessment = self.controller.state["assessments"][assessment_id]
+            objective_identity = assessment.get("objective_identity")
+            if objective_identity is not None:
+                pack = request.get("context_pack")
+                if not isinstance(pack, Mapping):
+                    raise WorkflowRuntimeError("GPT_PACKET_OBJECTIVE_BINDING_REQUIRED", "technical review packet must be an object")
+                observation_id = next(
+                    (
+                        item.get("observation_id")
+                        for item in self.controller.state.get("observations", {}).values()
+                        if item.get("stage_id") == stage["stage_id"]
+                        and item.get("attempt_id") == assessment.get("attempt_id")
+                        and item.get("provider_result_digest") == assessment.get("provider_result_digest")
+                    ),
+                    None,
+                )
+                required_binding = {
+                    "PROJECT_ID": stage["project_id"],
+                    "STAGE_ID": stage["stage_id"],
+                    "OBJECTIVE_IDENTITY": objective_identity,
+                    "STAGE_GOAL": pack.get("STAGE_GOAL") or request.get("stage_goal") or request.get("STAGE_GOAL"),
+                    "ASSESSMENT_ID": assessment_id,
+                    "OBSERVATION_ID": observation_id,
+                }
+                missing = [field for field, value in required_binding.items() if not isinstance(value, str) or not value]
+                if missing:
+                    raise WorkflowRuntimeError("GPT_PACKET_OBJECTIVE_BINDING_REQUIRED", "technical review packet is missing: " + ", ".join(missing))
+                mismatches = [field for field, value in required_binding.items() if pack.get(field) != value]
+                if mismatches:
+                    raise WorkflowRuntimeError("GPT_PACKET_OBJECTIVE_MISMATCH", "technical review packet binding mismatch: " + ", ".join(mismatches))
+                request = {**request, "objective_identity": objective_identity}
             revision = request.get("review_revision", 1)
             if isinstance(revision, bool) or not isinstance(revision, int) or not 1 <= revision <= 32:
                 raise WorkflowRuntimeError("REVIEW_INPUT_INVALID", "review_revision must be an explicit bounded positive integer")
@@ -694,7 +727,18 @@ class ProductWorkflowRuntime:
                     stage = normalized_request["stage"]
                     request_body = payload.get("request", {})
                     request_id = payload.get("request_id") or (command_id if command_id.startswith("request-") else "request-" + command_id)
-                    attempt_id = payload.get("attempt_id") or (command_id if command_id.startswith("attempt-") else "attempt-" + command_id)
+                    attempt_id = payload.get("attempt_id")
+                    if attempt_id is None and str(payload.get("reason", "")).upper() == "OBJECTIVE_SUPERSESSION_RECOVERY":
+                        epoch_id = self.controller.state.get("stage_runtime", {}).get(stage["stage_id"], {}).get("current_assessment_epoch_id")
+                        attempt_id = next(
+                            (
+                                item.get("new_attempt_id")
+                                for item in self.controller.state.get("assessment_supersessions", {}).values()
+                                if item.get("stage_id") == stage["stage_id"] and item.get("new_assessment_epoch_id") == epoch_id
+                            ),
+                            None,
+                        )
+                    attempt_id = attempt_id or (command_id if command_id.startswith("attempt-") else "attempt-" + command_id)
                     operation_id = payload.get("operation_id") or (command_id if command_id.startswith("operation-") else "operation-" + command_id)
                     payload["provider_handoff_manifest"] = build_provider_handoff_manifest(
                         operation_id=operation_id,
@@ -705,6 +749,8 @@ class ProductWorkflowRuntime:
                         request=request_body,
                         provenance=payload.get("provenance", {"provider": "fixture-provider", "engine_digest": "engine-fixed-v2"}),
                         purpose=payload.get("purpose", stage["purpose"]),
+                        project_id=stage["project_id"],
+                        objective_identity=stage["objective_fingerprint"],
                     )
                 result = self.controller.dispatch(wire_command, subject_id=normalized_request.get("subject_id"),
                            payload=payload, command_id=command_id,

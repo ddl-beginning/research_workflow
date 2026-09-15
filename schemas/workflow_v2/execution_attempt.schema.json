@@ -7,7 +7,10 @@
   "properties": {
     "schema_version": {"const": "execution_attempt.v2"},
     "attempt_id": {"type": "string", "minLength": 8},
+    "project_id": {"type": "string", "minLength": 1},
     "stage_id": {"type": "string", "minLength": 1},
+    "objective_identity": {"type": "string", "minLength": 8},
+    "assessment_epoch_id": {"type": "string", "minLength": 8},
     "iteration_id": {"type": "string", "minLength": 1},
     "request_id": {"type": "string", "minLength": 8},
     "request_digest": {"type": "string", "minLength": 8},

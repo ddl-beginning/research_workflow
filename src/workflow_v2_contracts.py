@@ -42,6 +42,7 @@ PUBLIC_COMMANDS = (
     "RESOLVE_LEGACY_ORPHAN",
     "RECORD_OBSERVATION",
     "ASSESS_RESULT",
+    "SUPERSEDE_ASSESSMENT",
     "APPLY_GPT_DECISION",
     "ADVANCE_ITERATION",
     "REQUEST_DECISION",
@@ -246,6 +247,18 @@ def validate_stage(value: Mapping[str, Any]) -> dict[str, Any]:
     return stage
 
 
+def stage_objective_identity(stage: Mapping[str, Any]) -> str:
+    """Return the one canonical objective identity owned by a Stage.
+
+    V2 already stores the objective authority as ``objective_fingerprint``.
+    This accessor gives downstream records a stable name without introducing
+    a second objective store or a second Stage field.
+    """
+
+    checked = validate_stage(stage)
+    return _digest(checked["objective_fingerprint"], "objective_fingerprint")
+
+
 def derive_objective_fingerprint(
     *, project_goal: str, acceptance_criteria: Sequence[str], target_identity: str, required_capability: str
 ) -> str:
@@ -280,6 +293,12 @@ def validate_semantic_iteration(value: Mapping[str, Any]) -> dict[str, Any]:
 
 def validate_execution_attempt(value: Mapping[str, Any]) -> dict[str, Any]:
     attempt = _schema(value, "execution_attempt")
+    if attempt.get("project_id") is not None:
+        _text(attempt["project_id"], "project_id")
+    if attempt.get("objective_identity") is not None:
+        _digest(attempt["objective_identity"], "objective_identity")
+    if attempt.get("assessment_epoch_id") is not None:
+        _digest(attempt["assessment_epoch_id"], "assessment_epoch_id")
     for field in ("attempt_id", "stage_id", "iteration_id", "request_id", "request_digest"):
         _digest(attempt[field], field)
     _one_of(attempt["purpose"], "purpose", ("DOMAIN", "INFRASTRUCTURE_REPAIR"))
@@ -313,6 +332,10 @@ def validate_provider_handoff_manifest(value: Mapping[str, Any]) -> dict[str, An
         _digest(manifest[field], field)
     for field in ("provider_owner", "provider_route"):
         _text(manifest[field], field)
+    if manifest.get("project_id") is not None:
+        _text(manifest["project_id"], "project_id")
+    if manifest.get("objective_identity") is not None:
+        _digest(manifest["objective_identity"], "objective_identity")
     _one_of(manifest["dispatch_state"], "dispatch_state", PROVIDER_HANDOFF_DISPATCH_STATES)
     descriptor = _mapping(manifest["reconstructible_request_descriptor"], "reconstructible_request_descriptor")
     _reject_handoff_secrets(descriptor)
@@ -322,6 +345,10 @@ def validate_provider_handoff_manifest(value: Mapping[str, Any]) -> dict[str, An
         _fail("reconstructible_request_descriptor.request_digest", "must match request_digest")
     if "request" not in descriptor or not isinstance(descriptor["request"], Mapping):
         _fail("reconstructible_request_descriptor.request", "must contain the bounded request descriptor")
+    if manifest.get("project_id") is not None and descriptor.get("project_id") != manifest["project_id"]:
+        _fail("reconstructible_request_descriptor.project_id", "must match project_id")
+    if manifest.get("objective_identity") is not None and descriptor.get("objective_identity") != manifest["objective_identity"]:
+        _fail("reconstructible_request_descriptor.objective_identity", "must match objective_identity")
     return {**manifest, "reconstructible_request_descriptor": descriptor}
 
 
@@ -341,7 +368,7 @@ def validate_typed_failure(value: Mapping[str, Any]) -> dict[str, Any]:
     return failure
 
 
-def validate_provider_observation(value: Mapping[str, Any]) -> dict[str, Any]:
+def validate_provider_observation(value: Mapping[str, Any], *, require_objective_identity: bool = False) -> dict[str, Any]:
     observation = _schema(value, "provider_observation")
     for field in (
         "observation_id",
@@ -352,6 +379,14 @@ def validate_provider_observation(value: Mapping[str, Any]) -> dict[str, Any]:
         "evidence_manifest_digest",
     ):
         _digest(observation[field], field)
+    if observation.get("objective_identity") is None:
+        if require_objective_identity:
+            _fail("objective_identity", "is required for objective-bound observations")
+    else:
+        _digest(observation["objective_identity"], "objective_identity")
+    for field in ("provider_operation_id", "result_identity"):
+        if observation.get(field) is not None:
+            _digest(observation[field], field)
     _one_of(observation["provider_terminal_status"], "provider_terminal_status", ("SUCCEEDED", "FAILED", "ERROR", "UNKNOWN"))
     _mapping(observation["raw_provider_claim"], "raw_provider_claim")
     _mapping(observation["provenance"], "provenance")
@@ -365,7 +400,7 @@ def validate_provider_observation(value: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _observation_identity_body(observation: Mapping[str, Any]) -> dict[str, Any]:
-    return {
+    body = {
         key: copy.deepcopy(observation[key])
         for key in (
             "stage_id", "iteration_id", "attempt_id", "provider_result_digest",
@@ -373,6 +408,10 @@ def _observation_identity_body(observation: Mapping[str, Any]) -> dict[str, Any]
             "provenance", "failure", "outputs",
         )
     }
+    for key in ("objective_identity", "provider_operation_id", "result_identity"):
+        if key in observation and observation[key] is not None:
+            body[key] = copy.deepcopy(observation[key])
+    return body
 
 
 def observation_identity(observation: Mapping[str, Any]) -> str:
@@ -390,6 +429,7 @@ def assessment_identity(
     validator_code_digest: str,
     validation_contract_revision: str,
     correction_receipt_digest: str | None,
+    objective_identity: str | None = None,
 ) -> str:
     tuple_body = {
         "stage_id": _text(stage_id, "stage_id"),
@@ -404,6 +444,8 @@ def assessment_identity(
     }
     if correction_receipt_digest is not None:
         _digest(correction_receipt_digest, "correction_receipt_digest")
+    if objective_identity is not None:
+        tuple_body["objective_identity"] = _digest(objective_identity, "objective_identity")
     return "assessment-" + sha256_json(tuple_body)
 
 
@@ -426,7 +468,7 @@ def validate_correction_receipt(value: Mapping[str, Any]) -> dict[str, Any]:
     return receipt
 
 
-def validate_stage_assessment(value: Mapping[str, Any]) -> dict[str, Any]:
+def validate_stage_assessment(value: Mapping[str, Any], *, require_objective_identity: bool = False) -> dict[str, Any]:
     assessment = _schema(value, "stage_assessment")
     expected = assessment_identity(
         stage_id=assessment["stage_id"],
@@ -438,10 +480,16 @@ def validate_stage_assessment(value: Mapping[str, Any]) -> dict[str, Any]:
         validator_code_digest=assessment["validator_code_digest"],
         validation_contract_revision=assessment["validation_contract_revision"],
         correction_receipt_digest=assessment["correction_receipt_digest"],
+        objective_identity=assessment.get("objective_identity"),
     )
     if assessment["assessment_id"] != expected:
         _fail("assessment_id", "must be the hash of the complete immutable assessment tuple")
     _one_of(assessment["verdict"], "verdict", ASSESSMENT_VERDICTS)
+    if assessment.get("objective_identity") is None:
+        if require_objective_identity:
+            _fail("objective_identity", "is required for objective-bound assessments")
+    else:
+        _digest(assessment["objective_identity"], "objective_identity")
     _mapping(assessment["checks"], "checks")
     _list(assessment["limitations"], "limitations")
     if assessment["revalidation"] and assessment["correction_receipt_digest"] is None:
@@ -499,8 +547,10 @@ def assess_observation(
             validator_code_digest=validator_code_digest,
             validation_contract_revision=validation_contract_revision,
             correction_receipt_digest=correction_digest,
+            objective_identity=observed.get("objective_identity"),
         ),
         "stage_id": observed["stage_id"],
+        **({"objective_identity": observed["objective_identity"]} if observed.get("objective_identity") is not None else {}),
         "baseline_digest": baseline_digest,
         "iteration_id": observed["iteration_id"],
         "attempt_id": observed["attempt_id"],
@@ -525,6 +575,8 @@ def validate_decision(value: Mapping[str, Any]) -> dict[str, Any]:
     _one_of(decision["boundary"], "boundary", DECISION_BOUNDARIES)
     _text(decision["subject_id"], "subject_id")
     _digest(decision["subject_digest"], "subject_digest")
+    if decision.get("objective_identity") is not None:
+        _digest(decision["objective_identity"], "objective_identity")
     choices = _list(decision["allowed_choices"], "allowed_choices", minimum=1)
     if len(set(choices)) != len(choices) or not all(isinstance(item, str) and item for item in choices):
         _fail("allowed_choices", "must be unique non-empty strings")
@@ -702,6 +754,6 @@ __all__ = [
     "validate_decision_subject", "validate_dependency", "dependency_authorization_digest", "validate_dependency_graph",
     "validate_evidence_manifest", "validate_execution_attempt", "validate_operation_envelope",
     "validate_provider_observation", "validate_semantic_iteration", "validate_stage",
-    "validate_stage_assessment", "validate_typed_failure", "validate_typed_replan",
+    "validate_stage_assessment", "validate_typed_failure", "validate_typed_replan", "stage_objective_identity",
     "validate_provider_handoff_manifest", "PROVIDER_HANDOFF_INVARIANT_VERSION",
 ]
