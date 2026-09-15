@@ -205,6 +205,16 @@ def test_cli_fixed_discovery_reports_exact_missing_file(tmp_path: Path) -> None:
     assert result["missing"] == ["plan/REQUIREMENTS.md"]
 
 
+def test_cli_init_reports_plan_gap_before_machine_setup(tmp_path: Path) -> None:
+    (tmp_path / "plan").mkdir()
+    (tmp_path / "plan" / "REQUIREMENTS.md").write_text("# Goal\nA goal\n", encoding="utf-8")
+    args = build_parser().parse_args(["init", "--project", str(tmp_path), "--json"])
+    code, result = run_command(args)
+    assert code == 1
+    assert result["code"] == "PLAN_INPUT_MISSING"
+    assert result["missing"] == ["plan/STAGE_PLAN.md"]
+
+
 def test_natural_language_stage_headings_receive_stable_slugs(tmp_path: Path) -> None:
     _write_plan(tmp_path, stage_two=False)
     (tmp_path / "plan" / "STAGE_PLAN.md").write_text(

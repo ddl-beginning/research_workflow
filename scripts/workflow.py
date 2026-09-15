@@ -359,12 +359,10 @@ def _setup(args: argparse.Namespace, workspace: Path) -> dict[str, Any]:
 def _init(args: argparse.Namespace, workspace: Path) -> dict[str, Any]:
     paths = machine_paths(args.machine_root)
     config_path = _runtime_config_path(paths, args)
-    if not config_path.is_file():
-        raise CommandError("SETUP_REQUIRED", "run workflow setup before workflow init")
-    preflight = product_doctor.run_doctor(workspace, config_path)
-    machine_failures = [item for item in preflight.get("checks", []) if item.get("name") not in {"project.workspace"} and item.get("status") != "PASS"]
-    if machine_failures:
-        raise CommandError("SETUP_REQUIRED", "machine setup is not ready; run workflow setup", details={"doctor": preflight})
+    # Fixed plan discovery is the first project-level decision.  A partially
+    # supplied plan must report its exact missing source even when the machine
+    # runtime has not been provisioned yet; setup readiness is a separate
+    # concern and must not mask project input.
     plan_discovery = detect_plan_sources(workspace)
     if plan_discovery["status"] == "INCOMPLETE":
         missing = ", ".join(plan_discovery["missing"])
@@ -378,6 +376,12 @@ def _init(args: argparse.Namespace, workspace: Path) -> dict[str, Any]:
             "plan_discovery": plan_discovery,
             "writes_performed": False,
         }
+    if not config_path.is_file():
+        raise CommandError("SETUP_REQUIRED", "run workflow setup before workflow init")
+    preflight = product_doctor.run_doctor(workspace, config_path)
+    machine_failures = [item for item in preflight.get("checks", []) if item.get("name") not in {"project.workspace"} and item.get("status") != "PASS"]
+    if machine_failures:
+        raise CommandError("SETUP_REQUIRED", "machine setup is not ready; run workflow setup", details={"doctor": preflight})
     plan_bound = plan_discovery["status"] == "READY"
     if plan_bound and not project_identity_present(workspace):
         try:
