@@ -879,7 +879,7 @@ class ProductWorkflowRuntime:
             "generation_started": bool(required_file.is_file()),
         }
 
-    def _technical_review_decision(self, context: tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any] | None], blocker: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    def _technical_review_decision(self, context: tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any] | None], blocker: Mapping[str, Any], *, terminal_budget_review: bool = False) -> tuple[dict[str, Any], dict[str, Any]]:
         stage, assessment, observation, _operation = context
         state = self.controller.state
         prior_admissible = next(
@@ -940,12 +940,18 @@ class ProductWorkflowRuntime:
             "relevant_artifacts": copy.deepcopy(observation.get("outputs", {}).get("required_artifact_paths", [])) if isinstance(observation.get("outputs"), Mapping) else [],
             "accepted_baseline": stage.get("baseline_digest"),
         }
+        terminal_instruction = (
+            "The controller has exhausted the authorized attempt budget and rejected the proposed provider route. "
+            "This is a terminal technical review: return exactly BLOCKED or HUMAN_GATE. Do not return CONTINUE, REPLAN, or STAGE_READY. "
+            if terminal_budget_review else ""
+        )
         prompt = (
             "Perform one bounded technical recovery review for the current Workflow Stage. "
             "Use only the packet identities and evidence. Decide whether a legal technical route remains. "
             "Return exactly one marker: WORKFLOW_DECISION: CONTINUE, REPLAN, STAGE_READY, HUMAN_GATE, or BLOCKED. "
             "CONTINUE and REPLAN must be applied automatically when legal; HUMAN_GATE requires QUESTION_FOR_HUMAN, WHY_AI_CANNOT_DECIDE, OPTIONS, CONSEQUENCE, HUMAN_DECISION_REQUIRED. "
-            "Do not claim scientific success without evidence.\n" + json.dumps({"blocker": dict(blocker), "packet": pack}, ensure_ascii=False, sort_keys=True)
+            "Do not claim scientific success without evidence.\n" + terminal_instruction
+            + json.dumps({"blocker": dict(blocker), "packet": pack}, ensure_ascii=False, sort_keys=True)
         )
         consulted = self._consult({"context_pack": pack, "prompt": prompt, "objective_identity": stage["objective_fingerprint"]}, purpose="TECHNICAL_ESCALATION_REVIEW")
         decision = {
@@ -1002,7 +1008,8 @@ class ProductWorkflowRuntime:
                 "gpt_technical_escalation": {"status": "NOT_REQUIRED", "reason": "stage-owned work remains"},
             })
             return self._view(**maintenance)
-        consulted, decision = self._technical_review_decision(context, blocker)
+        terminal_budget_review = bool(budget.get("total_exhausted") or budget.get("max_iteration_exhausted"))
+        consulted, decision = self._technical_review_decision(context, blocker, terminal_budget_review=terminal_budget_review)
         choice = consulted["decision"]
         if choice in {"CONTINUE", "REPLAN", "STAGE_READY"}:
             revalidated = None
