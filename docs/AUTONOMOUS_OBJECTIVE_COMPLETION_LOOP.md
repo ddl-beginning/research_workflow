@@ -1,6 +1,6 @@
 # Autonomous Objective Completion Loop
 
-Status: implementation and ownership-audit closure complete; bounded project-plan ingestion added; release evidence in progress.
+Status: implementation and ownership-audit closure complete; bounded project-plan ingestion added; local release evidence complete; stable promotion held by the external clean-room review gate.
 
 This document is a durable architecture and maintenance reference. It is not a
 runtime authority. Runtime authority remains the canonical `StageController`,
@@ -722,3 +722,19 @@ current, completed, accepted, or final-objective changes are marked for
 technical/plan review without rewriting history. Normal Stage completion and
 Human approval refresh the snapshot and select the next planned Stage through
 the existing controller.
+
+### 25.1 Bounded Project Plan Ingestion Release Evidence
+
+```text
+IMPLEMENTED_IN_COMMIT: 1f9ae89 (plan ingestion implementation 502b1d3; CLI missing-source boundary fix 1f9ae89)
+PLAN_CONTRACT: docs/PROJECT_PLAN_INGESTION_CONTRACT.md
+PLAN_TEST_EVIDENCE: 41 focused plan/runtime tests passed; plan E2E subset 5 passed
+FULL_REGRESSION: 660 passed, 1 skipped, 2 deselected known historical self-test fixture failures
+PORTABLE_VALIDATION: PASS; destructive_actions=0; resume_idempotence=YES; frozen_kernel_unchanged=YES
+DOCUMENTATION_AUDIT: PASS
+CLEANROOM: FAIL_WITH_EXTERNAL_REVIEW_LIMITATION; first bounded run stopped at ATTACHMENT_UPLOAD_FAILED before prompt; one controlled retry uploaded attachments and stopped at GPT_DECISION_INVALID during planning review; current product worktree writes=NO
+CURRENT_RELEASE_CANDIDATE: workflow-v2.1.5-release-candidate-r2
+CURRENT_STABLE_TAG: NOT_PROMOTED; stable promotion requires clean-room PASS
+KNOWN_LIMITATIONS: historical self-test fixture is missing .consultations/CONSULT-20260906-070055-bef2fdb6/receipt.json; the external bridge/GPT decision contract did not provide clean-room release evidence
+NEXT_ACTION: retry clean-room only after the external bridge/GPT response state changes; no Human technical relay is required
+```
