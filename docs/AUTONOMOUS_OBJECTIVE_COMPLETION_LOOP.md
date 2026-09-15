@@ -1,6 +1,6 @@
 # Autonomous Objective Completion Loop
 
-Status: maintenance design baseline, authored before implementation of this closure.
+Status: implementation complete; release candidate r3 clean-room validated; stable promotion intentionally pending.
 
 This document is a durable architecture and maintenance reference. It is not a
 runtime authority. Runtime authority remains the canonical `StageController`,
@@ -566,11 +566,11 @@ After implementation, reopen this document and update the compact evidence
 index below. Do not paste large logs into the document.
 
 ```text
-IMPLEMENTED_IN_COMMIT: TODO
-TEST_EVIDENCE: TODO
-REAL_E2E_EVIDENCE: TODO
-FINAL_INVARIANTS: TODO
-KNOWN_LIMITATIONS: TODO
+IMPLEMENTED_IN_COMMIT: 6b76fd1 (implementation; docs-first commit 7132780; prior implementation 7d27e1c)
+TEST_EVIDENCE: focused 6 passed; compileall passed; full suite excluding historical self-test fixture 624 passed, 1 skipped; full suite 624 passed, 1 skipped, 2 proven baseline fixture failures
+REAL_E2E_EVIDENCE: facade journal revision 33 ended with genuine BLOCKED and allowed termination; clean-room PASS at D:/work/workflow-v2.1.4-release-validation-20260915-r3.json from candidate r3
+FINAL_INVARIANTS: PASS; unfinished objectives do not terminate for ordinary technical failure; termination is validator-gated; no Human technical relay; facade human_intervention_count=0
+KNOWN_LIMITATIONS: historical self-test fixture is missing .consultations/CONSULT-20260906-070055-bef2fdb6/receipt.json; facade remains scientifically incomplete but has no legal automated next action; stable tag not promoted
 CURRENT_STABLE_TAG: workflow-v2.1.3-stable
 ```
 
