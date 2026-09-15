@@ -738,3 +738,25 @@ CURRENT_STABLE_TAG: NOT_PROMOTED; stable promotion requires clean-room PASS
 KNOWN_LIMITATIONS: historical self-test fixture is missing .consultations/CONSULT-20260906-070055-bef2fdb6/receipt.json; the external bridge/GPT decision contract did not provide clean-room release evidence
 NEXT_ACTION: retry clean-room only after the external bridge/GPT response state changes; no Human technical relay is required
 ```
+
+### 25.2 Per-project ChatGPT browser target maintenance evidence
+
+The optional `## Workflow ChatGPT Project` section in
+`plan/REQUIREMENTS.md` is parsed into the existing canonical
+`.research/PROJECT_BRIEF.json` brief. No third user input file or second
+configuration authority was introduced. A configured target overrides the
+machine default only for that project, and the bridge receipt requires the
+bound target digest, `https://chatgpt.com` origin, verified Project navigation,
+and a fresh Project chat marker. No target keeps the legacy default transport.
+
+Target changes are recorded as bounded append-only `project_config_changes`
+metadata and apply only to future reviews; existing consultation receipts are
+not rewritten. Derived views expose only `BOUND_PROJECT`/`CONFIGURED` and a
+digest, never the full URL. No account, quota, rotation, or profile switching
+was added; authentication material remains machine-local.
+
+IMPLEMENTED_IN_COMMIT: pending after implementation validation
+TARGET_TEST_EVIDENCE: Python plan/runtime target tests and Node bridge target/receipt tests are required before candidate tagging
+CLEANROOM: one bounded post-implementation clean-room run is required; stable promotion remains held unless it passes
+CURRENT_RELEASE_CANDIDATE: pending
+CURRENT_STABLE_TAG: workflow-v2.1.4-stable (unchanged)

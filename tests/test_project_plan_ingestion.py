@@ -16,9 +16,13 @@ from src.workflow_v2_controller import StageController
 from src.workflow_v2_contracts import assess_observation, observation_identity
 
 
-def _write_plan(root: Path, *, stage_two: bool = True) -> None:
+def _write_plan(root: Path, *, stage_two: bool = True, project_url: str | None = None) -> None:
     plan = root / "plan"
     plan.mkdir(parents=True, exist_ok=True)
+    target_section = (
+        f"\n## Workflow ChatGPT Project\nChatGPT Project URL: {project_url}\n"
+        if project_url is not None else ""
+    )
     (plan / "REQUIREMENTS.md").write_text(
         """# Final Project Goal
 Build a bounded, testable project result.
@@ -38,7 +42,7 @@ Build a bounded, testable project result.
 
 ## Business Constraints
 - no secrets in generated files
-""",
+""" + target_section,
         encoding="utf-8",
     )
     second = (
@@ -178,6 +182,83 @@ def test_detects_requirements_and_stage_plan(tmp_path: Path) -> None:
     result = detect_plan_sources(tmp_path)
     assert result["status"] == "READY"
     assert result["missing"] == []
+
+
+def test_chatgpt_project_target_is_optional_and_ingested_into_canonical_brief(tmp_path: Path) -> None:
+    _write_plan(tmp_path, project_url="https://chatgpt.com/projects/research-tools")
+    plan = load_project_plan(tmp_path)
+    assert plan["chatgpt_target_mode"] == "PROJECT"
+    assert plan["chatgpt_project_url"] == "https://chatgpt.com/projects/research-tools"
+    result = sync_project_plan(tmp_path, controller=_controller(tmp_path))
+    canonical = ProjectRequirementsIntake(tmp_path).state
+    assert canonical is not None
+    assert canonical["brief"]["chatgpt_project_url"] == plan["chatgpt_project_url"]
+    assert canonical["brief"]["chatgpt_project_binding"]["scope"] == "project"
+    assert result["chatgpt_target_mode"] == "PROJECT"
+    assert "GPT Review Workspace: BOUND_PROJECT" in (tmp_path / WORKFLOW_PLAN_RELATIVE_PATH).read_text(encoding="utf-8")
+    assert "GPT Review Target: CONFIGURED" in (tmp_path / CURRENT_STATE_RELATIVE_PATH).read_text(encoding="utf-8")
+
+
+def test_chatgpt_project_target_absent_keeps_default_behavior(tmp_path: Path) -> None:
+    _write_plan(tmp_path)
+    plan = load_project_plan(tmp_path)
+    assert plan["chatgpt_target_mode"] == "DEFAULT"
+    assert plan["chatgpt_project_url"] is None
+    sync_project_plan(tmp_path, controller=_controller(tmp_path))
+    canonical = ProjectRequirementsIntake(tmp_path).state
+    assert canonical is not None
+    assert "chatgpt_project_url" not in canonical["brief"]
+    assert "GPT Review Workspace: DEFAULT_BROWSER" in (tmp_path / WORKFLOW_PLAN_RELATIVE_PATH).read_text(encoding="utf-8")
+
+
+def test_invalid_chatgpt_project_target_fails_closed(tmp_path: Path) -> None:
+    for candidate in (
+        "https://evil.example/projects/research-tools",
+        "http://chatgpt.com/projects/research-tools",
+        "javascript:alert(1)",
+    ):
+        _write_plan(tmp_path, project_url=candidate)
+        try:
+            load_project_plan(tmp_path)
+        except ProjectPlanIngestionError as exc:
+            assert exc.code == "PROJECT_URL_INVALID"
+        else:
+            raise AssertionError(f"unsafe ChatGPT Project URL was accepted: {candidate}")
+
+
+def test_chatgpt_project_target_change_is_future_only_and_preserves_history(tmp_path: Path) -> None:
+    first_url = "https://chatgpt.com/projects/research-tools-a"
+    second_url = "https://chatgpt.com/projects/research-tools-b"
+    controller = _controller(tmp_path)
+    _write_plan(tmp_path, project_url=first_url)
+    sync_project_plan(tmp_path, controller=controller)
+    first = ProjectRequirementsIntake(tmp_path).state
+    assert first is not None
+    first_receipt = tmp_path / ".consultations" / "old" / "receipt.json"
+    first_receipt.parent.mkdir(parents=True)
+    first_receipt.write_text('{"chatgpt_target_url_digest":"old-receipt-binding"}\n', encoding="utf-8")
+    _write_plan(tmp_path, project_url=second_url)
+    changed = sync_project_plan(tmp_path, controller=controller)
+    final = ProjectRequirementsIntake(tmp_path).state
+    assert final is not None
+    assert final["brief"]["chatgpt_project_url"] == second_url
+    assert changed["project_target_change"]["from_url_digest"] is not None
+    assert changed["project_target_change"]["to_url_digest"] is not None
+    assert changed["plan_change"]["target_only_changed"] is True
+    assert changed["plan_change"]["impact"] == "GPT_TARGET_ONLY"
+    assert changed["plan_change"]["technical_review_required"] is False
+    assert len(final["project_config_changes"]) == 2
+    assert first_receipt.read_text(encoding="utf-8") == '{"chatgpt_target_url_digest":"old-receipt-binding"}\n'
+
+
+def test_resume_rebinds_the_bound_project_target_from_canonical_brief(tmp_path: Path) -> None:
+    target = "https://chatgpt.com/projects/research-tools"
+    _write_plan(tmp_path, project_url=target)
+    controller = _controller(tmp_path)
+    sync_project_plan(tmp_path, controller=controller)
+    resumed = sync_project_plan(tmp_path, controller=StageController.from_state(controller.state_path))
+    assert resumed["chatgpt_target_mode"] == "PROJECT"
+    assert ProjectRequirementsIntake(tmp_path).state["brief"]["chatgpt_project_url"] == target
 
 
 def test_missing_one_plan_source_reports_exact_missing_file(tmp_path: Path) -> None:

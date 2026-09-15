@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import sys
 from pathlib import Path
 from typing import Any, Mapping
@@ -197,6 +198,101 @@ def _bridge_stub(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
 
     monkeypatch.setattr(product_runtime, "subprocess_bridge_runner", run_bridge)
     return calls
+
+
+def _write_target_plan(root: Path, target: str) -> None:
+    plan = root / "plan"
+    plan.mkdir(parents=True, exist_ok=True)
+    (plan / "REQUIREMENTS.md").write_text(
+        """# Goal
+Build a project-scoped review fixture.
+
+## Workflow ChatGPT Project
+ChatGPT Project URL: """ + target + "\n",
+        encoding="utf-8",
+    )
+    (plan / "STAGE_PLAN.md").write_text(
+        """# Stage Plan
+
+## S1 - Review
+- Goal: review the bounded fixture
+- Machine Acceptance: focused tests pass
+""",
+        encoding="utf-8",
+    )
+
+
+def _targeted_bridge_envelope(project_url: str, index: int) -> dict[str, Any]:
+    conversation_id = f"conversation-project-target-{index}"
+    digest = hashlib.sha256(project_url.encode("utf-8")).hexdigest()
+    return {
+        "status": "complete",
+        "mode": "fresh",
+        "response_text": "WORKFLOW_DECISION: CONTINUE",
+        "consultation_id": f"consultation-project-target-{index}",
+        "request_count": 1,
+        "receipt": {
+            "status": "complete",
+            "mode": "fresh",
+            "consultation_id": f"consultation-project-target-{index}",
+            "request_count": 1,
+            "conversation_id": conversation_id,
+            "conversation_validated": True,
+            "context_pack": {"pack_sha256": "project-target-packet"},
+            "project_url": project_url,
+            "project_scope_requested": True,
+            "project_scope_verified": True,
+            "project_scope_evidence": {
+                "initial_navigation": {
+                    "requested_url": project_url,
+                    "landed_url": project_url,
+                    "matched": True,
+                    "verified": True,
+                }
+            },
+            "chatgpt_target_mode": "PROJECT",
+            "chatgpt_target_url_digest": digest,
+            "chatgpt_target_origin": "https://chatgpt.com",
+            "chatgpt_project_target_verified": "YES",
+            "fresh_project_chat_created": "YES",
+        },
+    }
+
+
+def test_bound_project_targets_are_isolated_and_each_review_is_fresh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first_root = tmp_path / "project-a"
+    second_root = tmp_path / "project-b"
+    first_root.mkdir()
+    second_root.mkdir()
+    first_url = "https://chatgpt.com/projects/project-a"
+    second_url = "https://chatgpt.com/projects/project-b"
+    _write_target_plan(first_root, first_url)
+    _write_target_plan(second_root, second_url)
+    first_config = _write_machine_config(first_root, tmp_path / "machine-a")
+    second_config = _write_machine_config(second_root, tmp_path / "machine-b")
+    first = ProductWorkflowRuntime(first_root, config=load_runtime_composition_config(first_root, config_path=first_config))
+    second = ProductWorkflowRuntime(second_root, config=load_runtime_composition_config(second_root, config_path=second_config))
+    first._sync_plan()
+    second._sync_plan()
+    calls: list[dict[str, Any]] = []
+
+    def run_bridge(prompt: str, **kwargs: Any) -> Mapping[str, Any]:
+        calls.append({"prompt": prompt, **kwargs})
+        return _targeted_bridge_envelope(kwargs["project_url"], len(calls))
+
+    monkeypatch.setattr(product_runtime, "subprocess_bridge_runner", run_bridge)
+    pack = {"pack_sha256": "project-target-packet"}
+    first_result = first._consult({"prompt": "review A", "context_pack": pack}, purpose="technical")
+    second_result = second._consult({"prompt": "review B", "context_pack": pack}, purpose="technical")
+
+    assert [call["project_url"] for call in calls] == [first_url, second_url]
+    assert all(call["transport"] is None for call in calls)
+    assert [call["mode"] for call in calls] == ["fresh", "fresh"]
+    assert [first_result["conversation_id"], second_result["conversation_id"]] == [
+        "conversation-project-target-1", "conversation-project-target-2"
+    ]
 
 
 def test_clean_product_init_uses_mocked_native_runtime_and_persists_empty_v2_journal(

@@ -16,7 +16,7 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Mapping
 
-from .bridge_adapter import BridgeEnvelopeError, normalize_bridge_envelope
+from .bridge_adapter import BridgeEnvelopeError, normalize_bridge_envelope, normalize_project_url
 from .artifact_resolver import ArtifactResolver, ArtifactResolverError
 from .contract_handshake import (
     STAGE_PROPAGATION_INVARIANT,
@@ -31,6 +31,7 @@ from .project_intake import ProjectIntakeError, ProjectRequirementsIntake
 from .project_plan_ingestion import (
     ProjectPlanIngestionError,
     detect_plan_sources,
+    load_project_plan,
     sync_project_plan,
 )
 from .runtime_composition import RuntimeCompositionConfig, load_runtime_composition_config
@@ -205,8 +206,19 @@ def doctor_product_runtime(workspace: str | Path, config_path: str | Path | None
     need(shutil.which(cfg.node_executable) is not None or Path(cfg.node_executable).is_file(), "bridge.node", "NODE_NOT_FOUND")
     profile = Path(cfg.bridge_profile_dir).expanduser() if cfg.bridge_profile_dir else None
     need(profile is not None and profile.is_dir(), "bridge.profile", "BROWSER_PROFILE_REQUIRED")
-    need((cfg.bridge_transport == "homepage_fallback" and cfg.project_url is None)
-         or (cfg.bridge_transport is None and bool(cfg.project_url)), "bridge.scope", "EXPLICIT_TRANSPORT_SCOPE_REQUIRED")
+    plan_target = None
+    plan_target_error = None
+    try:
+        discovered_plan = detect_plan_sources(root)
+        if discovered_plan["status"] == "READY":
+            plan_target = load_project_plan(root).get("chatgpt_project_url")
+    except ProjectPlanIngestionError as exc:
+        plan_target_error = exc.code
+    effective_target = plan_target or cfg.project_url
+    effective_transport = None if plan_target else cfg.bridge_transport
+    need(plan_target_error is None, "plan.chatgpt_project_target", plan_target_error or "PLAN_TARGET_INVALID")
+    need((effective_transport == "homepage_fallback" and effective_target is None)
+         or (effective_transport is None and bool(effective_target)), "bridge.scope", "EXPLICIT_TRANSPORT_SCOPE_REQUIRED")
     provider = OpenAICodexExecutor(codex_executable=cfg.codex_executable,
                                   preferred_model=cfg.preferred_model, fallback_model=cfg.fallback_model)
     runtime = provider.discover_runtime()
@@ -272,6 +284,30 @@ class ProductWorkflowRuntime:
             missing = ", ".join(str(item) for item in result.get("missing", []))
             raise ProjectPlanIngestionError("PLAN_INPUT_MISSING", f"Missing required planning input: {missing}", details={"missing": result.get("missing", [])})
         return result
+
+    def _bound_project_url(self) -> str | None:
+        """Read the plan-bound target from the canonical brief only.
+
+        The optional plan section is ingested into PROJECT_BRIEF.json.  This
+        helper deliberately does not read REQUIREMENTS.md a second time and
+        therefore cannot create a competing configuration authority.
+        """
+
+        state = self.intake.state
+        if not isinstance(state, Mapping):
+            return None
+        candidates: list[Any] = []
+        for owner in (state, state.get("brief") if isinstance(state.get("brief"), Mapping) else None):
+            if not isinstance(owner, Mapping):
+                continue
+            candidates.append(owner.get("chatgpt_project_url"))
+            binding = owner.get("chatgpt_project_binding")
+            if isinstance(binding, Mapping):
+                candidates.append(binding.get("url"))
+        for candidate in candidates:
+            if isinstance(candidate, str) and candidate.strip():
+                return normalize_project_url(candidate)
+        return None
 
     @property
     def last_contract_trace(self) -> dict[str, Any] | None:
@@ -491,6 +527,7 @@ class ProductWorkflowRuntime:
                     "current_plan_source", "context_recovery_order", "stage_data_validation",
                     "existing_project_evidence",
                     "human_intervention_count",
+                    "chatgpt_target_mode", "chatgpt_target_url_digest", "project_target_change",
                 )
                 if key in plan_ingestion
             }
@@ -1624,27 +1661,48 @@ class ProductWorkflowRuntime:
         prompt = request.get("prompt")
         if not isinstance(pack, Mapping) or not isinstance(prompt, str) or not prompt.strip():
             raise WorkflowRuntimeError("PLANNING_INPUT_REQUIRED", "consultation requires a bounded prompt and context_pack")
+        bound_project_url = self._bound_project_url()
+        effective_project_url = bound_project_url or cfg.project_url
+        effective_transport = None if bound_project_url is not None else cfg.bridge_transport
         try:
             raw = subprocess_bridge_runner(prompt, mode="fresh", continue_from=None, context_pack=pack,
                     root_dir=str(self.root), profile_dir=cfg.bridge_profile_dir, bridge_root=cfg.bridge_root,
-                    node_executable=cfg.node_executable, project_url=cfg.project_url, transport=cfg.bridge_transport,
+                    node_executable=cfg.node_executable, project_url=effective_project_url, transport=effective_transport,
                     timeout_ms=min(int(cfg.timeout_seconds * 1000), 300000))
         except StageIntegrationError as exc:
             raise WorkflowRuntimeError(exc.code, str(exc), details=exc.details) from exc
         checked = normalize_bridge_envelope(raw, expected_mode="fresh", require_receipt=True)
         receipt = checked["receipt"]
+        target_mode = receipt.get("chatgpt_target_mode")
+        if bound_project_url is not None:
+            expected_digest = hashlib.sha256(bound_project_url.encode("utf-8")).hexdigest()
+            if (
+                target_mode != "PROJECT"
+                or receipt.get("chatgpt_target_url_digest") != expected_digest
+                or receipt.get("chatgpt_target_origin") != "https://chatgpt.com"
+                or receipt.get("chatgpt_project_target_verified") != "YES"
+                or receipt.get("fresh_project_chat_created") != "YES"
+            ):
+                raise WorkflowRuntimeError("PROJECT_TARGET_METADATA_INVALID", "consultation did not prove the bound Project target")
         if receipt.get("conversation_validated") is not True or checked.get("request_count") != 1:
             raise WorkflowRuntimeError("CONSULTATION_INVALID", "real fresh consultation identity was not validated")
         context = receipt.get("context_pack", {})
         if not context.get("pack_sha256"):
             raise WorkflowRuntimeError("CONSULTATION_INVALID", "real consultation lacks packet provenance")
         response = checked["response_text"]
-        return {"purpose": purpose, "decision": parse_dialogue_decision(response),
+        result = {"purpose": purpose, "decision": parse_dialogue_decision(response),
                 "response_digest": hashlib.sha256(response.encode()).hexdigest(),
                 "consultation_id": checked["consultation_id"], "receipt_path": checked.get("receipt_path"),
                 "request_count": checked["request_count"], "conversation_id": receipt.get("conversation_id"),
                 "conversation_validated": True, "packet_digest": context["pack_sha256"],
                 "objective_identity": request.get("objective_identity")}
+        for key in (
+            "chatgpt_target_mode", "chatgpt_target_url_digest", "chatgpt_target_origin",
+            "chatgpt_project_target_verified", "fresh_project_chat_created",
+        ):
+            if key in receipt:
+                result[key] = copy.deepcopy(receipt[key])
+        return result
 
     @_boundary
     def run(self, request: Mapping[str, Any]) -> dict[str, Any]:

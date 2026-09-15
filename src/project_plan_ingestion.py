@@ -16,9 +16,10 @@ import tempfile
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from .bridge_adapter import BridgeEnvelopeError, normalize_project_url
 from .contracts import sha256_json
 from .execution_profile import default_execution_profile
-from .project_intake import BriefState, IntakeMode, ProjectRequirementsIntake
+from .project_intake import BriefState, IntakeMode, ProjectIntakeError, ProjectRequirementsIntake
 from .workflow_v2_contracts import derive_objective_fingerprint
 
 
@@ -74,6 +75,7 @@ _HEADING_RE = re.compile(r"^(?P<hash>#{1,6})\s+(?P<title>.*?)\s*#*\s*$")
 _WINDOWS_PATH_RE = re.compile(r"(?<![A-Za-z0-9_])(?:[A-Za-z]:[\\/]|\\\\)[^\s\"'`<>()[\]{};,]+")
 _POSIX_PATH_RE = re.compile(r"(?<![A-Za-z0-9_:/])/(?:[^\s\"'`<>()[\]{};,]+/)*[^\s\"'`<>()[\]{};,]+")
 _RELATIVE_PATH_RE = re.compile(r"(?im)(?:path|路径|dataset|数据集|data|数据)\s*[:：]\s*([A-Za-z0-9_.-]+(?:[\\/][A-Za-z0-9_. -]+)+)")
+_CHATGPT_PROJECT_LABEL_RE = re.compile(r"(?i)^\s*ChatGPT\s+Project\s+URL\s*[:：]\s*(?P<inline>.*?)\s*$")
 
 
 def _root(project_root: str | os.PathLike[str]) -> Path:
@@ -201,9 +203,34 @@ def _source_digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _parse_chatgpt_project_url(text: str) -> str | None:
+    """Extract the one optional Project target from REQUIREMENTS.md."""
+
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    candidates: list[str] = []
+    for index, line in enumerate(lines):
+        match = _CHATGPT_PROJECT_LABEL_RE.match(line)
+        if match is None:
+            continue
+        candidate = match.group("inline").strip()
+        if not candidate and index + 1 < len(lines):
+            candidate = lines[index + 1].strip()
+        candidates.append(candidate.rstrip(".,;)"))
+    if not candidates:
+        return None
+    if len(candidates) != 1 or not candidates[0]:
+        raise ProjectPlanIngestionError("PROJECT_URL_INVALID", "ChatGPT Project URL must be declared exactly once", details={"field": "ChatGPT Project URL"})
+    candidate = candidates[0]
+    try:
+        return normalize_project_url(candidate)
+    except BridgeEnvelopeError as exc:
+        raise ProjectPlanIngestionError(exc.code, "ChatGPT Project URL is invalid", details={"field": "ChatGPT Project URL"}) from exc
+
+
 def _parse_requirements(text: str, project_name: str) -> tuple[dict[str, Any], dict[str, Any]]:
     fields = _collect_fields(text, aliases=_REQUIREMENT_ALIASES)
     paragraphs = _items(text)
+    chatgpt_project_url = _parse_chatgpt_project_url(text)
     goal = _first(fields, "goal") or (paragraphs[0] if paragraphs else f"Execute the project plan for {project_name}.")
     output = _list_field(fields, "expected_output") or [goal]
     success = _list_field(fields, "success_criteria")
@@ -225,6 +252,14 @@ def _parse_requirements(text: str, project_name: str) -> tuple[dict[str, Any], d
         "stakeholders": [],
         "preferences": _list_field(fields, "preferences"),
     }
+    if chatgpt_project_url is not None:
+        brief["chatgpt_project_url"] = chatgpt_project_url
+        brief["chatgpt_project_binding"] = {
+            "scope": "project",
+            "url": chatgpt_project_url,
+            "origin": "https://chatgpt.com",
+            "url_digest": _source_digest(chatgpt_project_url),
+        }
     structured = {
         "goal": goal,
         "scope": _list_field(fields, "scope"),
@@ -234,6 +269,8 @@ def _parse_requirements(text: str, project_name: str) -> tuple[dict[str, Any], d
         "constraints": _list_field(fields, "constraints"),
         "raw_text": text[:MAX_PLAN_SOURCE_BYTES],
     }
+    if chatgpt_project_url is not None:
+        structured["chatgpt_project_url"] = chatgpt_project_url
     return brief, structured
 
 
@@ -386,15 +423,23 @@ def load_project_plan(project_root: str | os.PathLike[str]) -> dict[str, Any]:
     stage_plan_text = _bounded_text(stage_plan_path)
     brief, requirements = _parse_requirements(requirements_text, root.name)
     stages = _parse_stages(stage_plan_text)
+    semantic_requirements = {
+        key: value for key, value in requirements.items()
+        if key not in {"raw_text", "chatgpt_project_url"}
+    }
     return {
         "status": "READY",
         "root": str(root),
         "requirements_text": requirements_text,
         "stage_plan_text": stage_plan_text,
         "requirements_digest": _source_digest(requirements_text),
+        "requirements_semantic_digest": sha256_json(semantic_requirements),
         "stage_plan_digest": _source_digest(stage_plan_text),
         "requirements": requirements,
         "brief": brief,
+        "chatgpt_project_url": brief.get("chatgpt_project_url"),
+        "chatgpt_target_mode": "PROJECT" if brief.get("chatgpt_project_url") else "DEFAULT",
+        "chatgpt_target_url_digest": _source_digest(str(brief["chatgpt_project_url"])) if brief.get("chatgpt_project_url") else None,
         "stages": stages,
         "source_files": {
             "requirements": REQUIREMENTS_RELATIVE_PATH.as_posix(),
@@ -436,7 +481,56 @@ def ensure_plan_intake(project_root: str | os.PathLike[str], *, intake: ProjectR
     final = service.state
     if final is None or final.get("state") != BriefState.APPROVED.value:
         raise ProjectPlanIngestionError("PLAN_REQUIREMENTS_INCOMPLETE", "planning sources did not produce a complete canonical project brief")
-    return {"brief": final, "auto_approved": auto_approved, "plan": plan}
+    project_target_change = None
+    target = plan.get("chatgpt_project_url")
+    nested = final.get("brief") if isinstance(final.get("brief"), Mapping) else {}
+    current = nested.get("chatgpt_project_url") if isinstance(nested, Mapping) else None
+    binding = nested.get("chatgpt_project_binding") if isinstance(nested, Mapping) else None
+    target_digest = _source_digest(target) if isinstance(target, str) and target else None
+    binding_matches = (
+        isinstance(target, str)
+        and isinstance(current, str)
+        and normalize_project_url(current) == target
+        and isinstance(binding, Mapping)
+        and binding.get("scope") == "project"
+        and binding.get("url") == target
+        and binding.get("origin") == "https://chatgpt.com"
+        and binding.get("url_digest") == target_digest
+    )
+    history = final.get("project_config_changes") if isinstance(final.get("project_config_changes"), list) else []
+    last_plan_binding = history[-1] if history and isinstance(history[-1], Mapping) else None
+    recorded_target = any(
+        isinstance(item, Mapping)
+        and item.get("actor") == "workflow-plan-ingestion"
+        and item.get("setting") == "chatgpt_project_url"
+        and item.get("to_url_digest") == target_digest
+        for item in history
+    )
+    should_clear_removed_target = (
+        target is None
+        and isinstance(current, str)
+        and isinstance(last_plan_binding, Mapping)
+        and last_plan_binding.get("actor") == "workflow-plan-ingestion"
+        and last_plan_binding.get("source_requirements_digest") != plan["requirements_digest"]
+    )
+    if (not binding_matches or not recorded_target) and (isinstance(target, str) and target or should_clear_removed_target):
+        try:
+            bound = service.bind_chatgpt_project_target(
+                target if isinstance(target, str) and target else None,
+                source_requirements_digest=plan["requirements_digest"],
+                source_path=REQUIREMENTS_RELATIVE_PATH.as_posix(),
+                actor="workflow-plan-ingestion",
+            )
+        except ProjectIntakeError as exc:
+            raise ProjectPlanIngestionError(exc.code, "canonical Project target binding failed") from exc
+        final = bound["project_brief"]
+        project_target_change = bound.get("project_target_change")
+    return {
+        "brief": final,
+        "auto_approved": auto_approved,
+        "plan": plan,
+        "project_target_change": project_target_change,
+    }
 
 
 def _stage_object(plan_stage: Mapping[str, Any], *, project_id: str, workspace_id: str, plan: Mapping[str, Any]) -> dict[str, Any]:
@@ -450,7 +544,7 @@ def _stage_object(plan_stage: Mapping[str, Any], *, project_id: str, workspace_i
         target_identity=target_identity,
         required_capability=capability,
     )
-    baseline = "baseline-" + sha256_json({"requirements": plan["requirements_digest"], "stage": plan_stage["source_stage_digest"]})
+    baseline = "baseline-" + sha256_json({"requirements": plan.get("requirements_semantic_digest", plan["requirements_digest"]), "stage": plan_stage["source_stage_digest"]})
     return {
         "schema_version": "stage.v2",
         "stage_id": str(plan_stage.get("bound_stage_id") or plan_stage["stage_id"]),
@@ -480,6 +574,7 @@ def _read_previous_binding(path: Path) -> dict[str, Any]:
     except (OSError, UnicodeError):
         return {"requirements_digest": None, "stage_plan_digest": None, "stages": {}}
     requirements = re.search(r"^REQUIREMENTS_SHA256:\s*([0-9a-f]{64})\s*$", text, re.MULTILINE)
+    semantic_requirements = re.search(r"^REQUIREMENTS_SEMANTIC_SHA256:\s*([0-9a-f]{64})\s*$", text, re.MULTILINE)
     stage_plan = re.search(r"^STAGE_PLAN_SHA256:\s*([0-9a-f]{64})\s*$", text, re.MULTILINE)
     stages: dict[str, str] = {}
     current: str | None = None
@@ -490,11 +585,23 @@ def _read_previous_binding(path: Path) -> dict[str, Any]:
         digest = re.match(r"^SOURCE_STAGE_SHA256:\s*([0-9a-f]{64})\s*$", line)
         if current and digest:
             stages[current] = digest.group(1)
-    return {"requirements_digest": requirements.group(1) if requirements else None, "stage_plan_digest": stage_plan.group(1) if stage_plan else None, "stages": stages}
+    return {
+        "requirements_digest": requirements.group(1) if requirements else None,
+        "requirements_semantic_digest": semantic_requirements.group(1) if semantic_requirements else None,
+        "stage_plan_digest": stage_plan.group(1) if stage_plan else None,
+        "stages": stages,
+    }
 
 
 def _plan_change(plan: Mapping[str, Any], previous: Mapping[str, Any], statuses: Mapping[str, str], current_stage_id: str | None) -> dict[str, Any]:
-    requirement_changed = bool(previous.get("requirements_digest") and previous.get("requirements_digest") != plan["requirements_digest"])
+    current_semantic = plan.get("requirements_semantic_digest", plan["requirements_digest"])
+    previous_semantic = previous.get("requirements_semantic_digest") or previous.get("requirements_digest")
+    requirement_changed = bool(previous_semantic and previous_semantic != current_semantic)
+    target_only_changed = bool(
+        previous.get("requirements_digest")
+        and previous.get("requirements_digest") != plan["requirements_digest"]
+        and previous_semantic == current_semantic
+    )
     stage_plan_changed = bool(previous.get("stage_plan_digest") and previous.get("stage_plan_digest") != plan["stage_plan_digest"])
     previous_stages = previous.get("stages") if isinstance(previous.get("stages"), Mapping) else {}
     changed_stages = [item["stage_id"] for item in plan["stages"] if previous_stages.get(item["stage_id"]) not in (None, item["source_stage_digest"])]
@@ -504,6 +611,8 @@ def _plan_change(plan: Mapping[str, Any], previous: Mapping[str, Any], statuses:
     current = [stage_id for stage_id in affected if stage_id == current_stage_id]
     if requirement_changed:
         impact = "FINAL_OBJECTIVE"
+    elif target_only_changed:
+        impact = "GPT_TARGET_ONLY"
     elif completed:
         impact = "COMPLETED_STAGE"
     elif current:
@@ -513,8 +622,9 @@ def _plan_change(plan: Mapping[str, Any], previous: Mapping[str, Any], statuses:
     else:
         impact = "NONE"
     return {
-        "changed": bool(requirement_changed or stage_plan_changed or changed_stages or new_stages),
+        "changed": bool(requirement_changed or target_only_changed or stage_plan_changed or changed_stages or new_stages),
         "requirements_changed": requirement_changed,
+        "target_only_changed": target_only_changed,
         "stage_plan_changed": stage_plan_changed,
         "changed_stage_ids": changed_stages,
         "new_stage_ids": new_stages,
@@ -526,6 +636,7 @@ def _plan_change(plan: Mapping[str, Any], previous: Mapping[str, Any], statuses:
 
 def _render_workflow_plan(plan: Mapping[str, Any], change: Mapping[str, Any]) -> str:
     requirements = plan["requirements"]
+    target_configured = bool(plan.get("chatgpt_project_url"))
     lines = [
         "# Workflow Plan",
         "",
@@ -537,8 +648,12 @@ def _render_workflow_plan(plan: Mapping[str, Any], change: Mapping[str, Any]) ->
         "",
         f"REQUIREMENTS_SHA256: {plan['requirements_digest']}",
         f"STAGE_PLAN_SHA256: {plan['stage_plan_digest']}",
+        f"REQUIREMENTS_SEMANTIC_SHA256: {plan.get('requirements_semantic_digest', plan['requirements_digest'])}",
+        f"CHATGPT_TARGET_URL_SHA256: {plan.get('chatgpt_target_url_digest') or 'NONE'}",
         f"PLAN_CHANGE_IMPACT: {change.get('impact', 'NONE')}",
         f"TECHNICAL_REVIEW_REQUIRED: {'YES' if change.get('technical_review_required') else 'NO'}",
+        f"GPT Review Workspace: {'BOUND_PROJECT' if target_configured else 'DEFAULT_BROWSER'}",
+        f"GPT_REVIEW_MUST_USE_BOUND_PROJECT_TARGET: {'YES' if target_configured else 'NOT_APPLICABLE'}",
         "",
         "## Project Goal",
         "",
@@ -642,7 +757,8 @@ def _render_current_state(root: Path, plan: Mapping[str, Any], projection: Mappi
         f"Next Legal Action: {legal.get('action') or projection.get('next_action') or 'NONE'}",
         f"Remaining Stages: {', '.join(remaining) if remaining else 'None'}",
         "Current Plan Source: plan/REQUIREMENTS.md + plan/STAGE_PLAN.md",
-        f"Plan Source Digests: requirements={plan['requirements_digest']}; stage_plan={plan['stage_plan_digest']}",
+        f"Plan Source Digests: requirements={plan['requirements_digest']}; requirements_semantic={plan.get('requirements_semantic_digest', plan['requirements_digest'])}; stage_plan={plan['stage_plan_digest']}",
+        f"GPT Review Target: {'CONFIGURED' if plan.get('chatgpt_project_url') else 'DEFAULT'}",
         f"Plan Change: {change.get('impact', 'NONE')} (technical review required={'YES' if change.get('technical_review_required') else 'NO'})",
         "",
         "Journal wins over this snapshot if any displayed field conflicts with canonical state.",
@@ -781,7 +897,10 @@ def sync_project_plan(project_root: str | os.PathLike[str], *, controller: Any |
         "stage_data_validation": checks,
         "existing_project_evidence": evidence,
         "context_recovery_order": ["plan/REQUIREMENTS.md", "plan/STAGE_PLAN.md", "plan/WORKFLOW_PLAN.md", "journal", "plan/CURRENT_STATE.md", "latest receipts"],
-        "current_plan_source": {"requirements": REQUIREMENTS_RELATIVE_PATH.as_posix(), "stage_plan": STAGE_PLAN_RELATIVE_PATH.as_posix(), "requirements_digest": plan["requirements_digest"], "stage_plan_digest": plan["stage_plan_digest"]},
+        "current_plan_source": {"requirements": REQUIREMENTS_RELATIVE_PATH.as_posix(), "stage_plan": STAGE_PLAN_RELATIVE_PATH.as_posix(), "requirements_digest": plan["requirements_digest"], "requirements_semantic_digest": plan.get("requirements_semantic_digest"), "stage_plan_digest": plan["stage_plan_digest"]},
+        "chatgpt_target_mode": plan.get("chatgpt_target_mode", "DEFAULT"),
+        "chatgpt_target_url_digest": plan.get("chatgpt_target_url_digest"),
+        "project_target_change": copy.deepcopy(prepared.get("project_target_change")),
         "canonical": projection,
         "human_intervention_count": 0,
         "auto_approved_plan_intake": prepared["auto_approved"],

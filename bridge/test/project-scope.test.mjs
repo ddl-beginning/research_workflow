@@ -133,21 +133,52 @@ async function createReceiptRoot(receipt) {
   return { rootDir, receiptPath };
 }
 
-test('project URL validation accepts only explicit trusted project routes', () => {
+test('project URL validation accepts only safe trusted-origin targets', () => {
   assert.equal(normalizeProjectUrl(`${PROJECT_URL}/`), PROJECT_URL);
+  assert.equal(normalizeProjectUrl('https://chatgpt.com/projects/research-tools'), 'https://chatgpt.com/projects/research-tools');
   assert.equal(isValidProjectUrl(PROJECT_URL), true);
   for (const value of [
     'https://evil.example/g/g-p-project/project',
     'http://chatgpt.com/g/g-p-project/project',
-    'https://chatgpt.com/c/12345678-1234-4234-8234-123456789abc',
     '/g/g-p-project/project',
     `${PROJECT_URL}?token=must-not-be-stored`,
     `${PROJECT_URL}#fragment`,
-    'https://chatgpt.com/g/g-p-project/other',
+    'https://chatgpt.com/',
     'https://chatgpt.com/g/g-p-project/../project',
   ]) {
     assert.equal(isValidProjectUrl(value), false, value);
   }
+});
+
+test('new receipts bind the target mode and fresh Project chat marker', () => {
+  const scoped = projectReceipt({
+    projectUrl: 'https://chatgpt.com/projects/research-tools',
+    chatUrl: `https://chatgpt.com/g/research-tools/c/${CONVERSATION_ID}`,
+  });
+  assert.equal(scoped.chatgpt_target_mode, 'PROJECT');
+  assert.equal(scoped.chatgpt_target_origin, 'https://chatgpt.com');
+  assert.match(scoped.chatgpt_target_url_digest, /^[0-9a-f]{64}$/);
+  assert.equal(scoped.chatgpt_project_target_verified, 'YES');
+  assert.equal(scoped.fresh_project_chat_created, 'YES');
+  assert.equal(validateContinuationReceipt(scoped, ROOT_ID), true);
+
+  const defaultReceipt = buildReceipt({
+    consultationId: ROOT_ID,
+    createdAt: '2026-09-04T00:00:00.000Z',
+    profile: '.auth/chatgpt-profile',
+    mode: CONVERSATION_MODES.FRESH,
+    conversationId: CONVERSATION_ID,
+    chatUrl: `https://chatgpt.com/c/${CONVERSATION_ID}`,
+    conversationRootConsultationId: ROOT_ID,
+    conversationValidated: true,
+    status: 'complete',
+    responseCharCount: 16,
+  });
+  assert.equal(defaultReceipt.chatgpt_target_mode, 'DEFAULT');
+  assert.equal(defaultReceipt.chatgpt_target_url_digest, null);
+  assert.equal(defaultReceipt.chatgpt_project_target_verified, 'NO');
+  assert.equal(defaultReceipt.fresh_project_chat_created, 'NO');
+  assert.equal(validateContinuationReceipt(defaultReceipt, ROOT_ID), true);
 });
 
 test('conversation identity accepts the nested route emitted by a Project composer', () => {
@@ -747,7 +778,7 @@ test('invalid project URL fails closed before browser creation', async () => {
       consultOnce('invalid project prompt', {
         rootDir,
         profileDir: path.join(rootDir, '.auth', 'chatgpt-profile'),
-        projectUrl: 'https://chatgpt.com/c/not-a-project',
+        projectUrl: 'https://evil.example/projects/not-a-project',
         bridgeFactory: () => {
           factoryCalls += 1;
           throw new Error('bridge must not be created');

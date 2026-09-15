@@ -260,6 +260,15 @@ def _summary_receipt(receipt: Mapping[str, Any]) -> dict[str, Any]:
         "response_char_count",
         "context_pack",
         "failure_code",
+        "project_url",
+        "project_scope_requested",
+        "project_scope_verified",
+        "project_scope_evidence",
+        "chatgpt_target_mode",
+        "chatgpt_target_url_digest",
+        "chatgpt_target_origin",
+        "chatgpt_project_target_verified",
+        "fresh_project_chat_created",
     }
     return {key: copy.deepcopy(value) for key, value in receipt.items() if key in allowed}
 

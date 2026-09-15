@@ -42,6 +42,7 @@ from .bridge_adapter import (
     BridgeEnvelopeError,
     is_bridge_envelope,
     normalize_bridge_envelope,
+    normalize_project_url as normalize_bridge_project_url,
 )
 from .asset_layer import (
     ASSET_LAYER_MARKER,
@@ -540,64 +541,16 @@ def _assert_safe(value: Any, *, path: str = "$", depth: int = 0) -> None:
 
 
 def sanitize_project_url(value: str | os.PathLike[str]) -> str:
-    """Validate and sanitize the approved ChatGPT Project URL.
+    """Validate one configured target without guessing its UI route shape.
 
-    Keep this contract equivalent to the headed bridge's
-    ``normalizeProjectUrl``: only the explicit project landing route under
-    ``https://chatgpt.com`` is accepted.  Query strings, fragments, user-info,
-    alternate hosts, ordinary chat URLs, and relative/ambiguous paths are
-    rejected before a consultant is called.
+    The generic bridge adapter owns the minimum origin/ambiguity check. The
+    browser performs the actual Project-page reachability and scope proof.
     """
 
     try:
-        original = os.fspath(value)
-    except (TypeError, AttributeError):
-        raise ProjectDiscoveryError("PROJECT_URL_INVALID", "project URL must be text")
-    if not isinstance(original, str):
-        raise ProjectDiscoveryError("PROJECT_URL_INVALID", "project URL must be text")
-    raw = original.strip()
-    if (
-        not raw
-        or len(raw) > 512
-        or raw != original
-        or "\x00" in raw
-        or any(character.isspace() for character in raw)
-    ):
-        raise ProjectDiscoveryError("PROJECT_URL_INVALID", "project URL is not a safe URL")
-    try:
-        parsed = urlsplit(raw)
-        hostname = parsed.hostname
-        # Accessing port catches malformed bracketed/port syntax.
-        port = parsed.port
-    except ValueError as exc:
-        raise ProjectDiscoveryError("PROJECT_URL_INVALID", "project URL syntax is invalid") from exc
-    if (
-        parsed.scheme.casefold() != "https"
-        or hostname is None
-        or hostname.casefold() != "chatgpt.com"
-        or port is not None
-        or parsed.username is not None
-        or parsed.password is not None
-        or "?" in raw
-        or "#" in raw
-    ):
-        raise ProjectDiscoveryError("PROJECT_URL_INVALID", "project URL must be a canonical ChatGPT Project route")
-
-    # Match both the raw and parsed path. Python's URL parser intentionally
-    # leaves dot segments/escapes untouched; the strict route regex below
-    # therefore rejects those ambiguous spellings just as the bridge does.
-    path = parsed.path
-    if not path or "\\" in path or any(ord(character) < 0x20 for character in path):
-        raise ProjectDiscoveryError("PROJECT_URL_INVALID", "project URL path is unsafe")
-    raw_path = raw[raw.find("/", raw.find("://") + 3):]
-    raw_path_without_trailing = raw_path[:-1] if raw_path.endswith("/") else raw_path
-    parsed_path_without_trailing = path[:-1] if path.endswith("/") else path
-    if not raw_path or raw_path_without_trailing != parsed_path_without_trailing:
-        raise ProjectDiscoveryError("PROJECT_URL_INVALID", "project URL path is ambiguous")
-    match = re.fullmatch(r"/g/(g-p-[A-Za-z0-9][A-Za-z0-9._~-]*)/project/?", path)
-    if match is None:
-        raise ProjectDiscoveryError("PROJECT_URL_INVALID", "project URL must target a ChatGPT Project")
-    return f"https://chatgpt.com/g/{match.group(1)}/project"
+        return normalize_bridge_project_url(value)
+    except BridgeEnvelopeError as exc:
+        raise ProjectDiscoveryError(exc.code, str(exc)) from exc
 
 
 def canonicalize_repo_url(value: str | os.PathLike[str]) -> str:

@@ -24,7 +24,7 @@ function readOptions(name) {
 }
 
 function usage() {
-  console.error('Usage: npm run consult -- --prompt "Reply with exactly: BRIDGE_OK" [--project-url https://chatgpt.com/g/g-p-.../project] [--attachment PATH ...] [--mode fresh|continue] [--continue-from CONSULTATION_ID]');
+  console.error('Usage: npm run consult -- --prompt "Reply with exactly: BRIDGE_OK" [--project-url https://chatgpt.com/<project-path>] [--attachment PATH ...] [--mode fresh|continue] [--continue-from CONSULTATION_ID]');
 }
 
 const prompt = readOption('--prompt');

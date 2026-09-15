@@ -24,7 +24,7 @@ function readOption(name) {
 }
 
 function usage() {
-  console.error('Usage: npm run consult-pack -- --spec path/to/spec.json [--project-url https://chatgpt.com/g/g-p-.../project] [--profile-dir PATH] [--timeout-ms N]');
+  console.error('Usage: npm run consult-pack -- --spec path/to/spec.json [--project-url https://chatgpt.com/<project-path>] [--profile-dir PATH] [--timeout-ms N]');
 }
 
 const specPath = readOption('--spec');

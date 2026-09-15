@@ -27,9 +27,10 @@ import {
 
 export const CHATGPT_URL = 'https://chatgpt.com/';
 export const CHATGPT_ORIGIN = 'https://chatgpt.com';
-// ChatGPT project URLs are a UI navigation contract, not an API endpoint.
-// Keep the accepted shape deliberately narrow: a concrete project route
-// under the trusted origin, with no query/hash/credential material.
+// This pattern is used only when a conversation route exposes ChatGPT's
+// legacy `/g/g-p-.../project` identity. The configured target itself is
+// intentionally validated by origin and URL safety below; it must not depend
+// on a hard-coded Project path shape.
 export const PROJECT_ROUTE_PATTERN = /^\/g\/(g-p-[A-Za-z0-9][A-Za-z0-9._~-]*)\/project\/?$/;
 export const PROJECT_URL_MAX_CHARS = 512;
 export const BRIDGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -200,7 +201,7 @@ function failureMessage(code) {
     [FAILURE_CODES.CONTINUATION_CHAT_NOT_FOUND]: 'The continuation conversation could not be opened.',
     [FAILURE_CODES.FRESH_CHAT_CREATION_FAILED]: 'Could not explicitly create a fresh ChatGPT conversation.',
     [FAILURE_CODES.CONVERSATION_IDENTITY_MISMATCH]: 'The ChatGPT conversation identity did not match the requested lineage.',
-    [FAILURE_CODES.PROJECT_URL_INVALID]: 'The project URL must be an explicit ChatGPT project route on https://chatgpt.com.',
+    [FAILURE_CODES.PROJECT_URL_INVALID]: 'The project URL must be an explicit safe https://chatgpt.com target.',
     [FAILURE_CODES.PROJECT_SCOPE_MISMATCH]: 'The requested ChatGPT project does not match the receipt project scope.',
     [FAILURE_CODES.PROJECT_NAVIGATION_FAILED]: 'Could not open the requested ChatGPT project page.',
     [FAILURE_CODES.ATTACHMENT_INVALID]: 'The attachment path is invalid.',
@@ -316,10 +317,8 @@ export function extractConversationIdFromUrl(value) {
   if (parsed.origin !== CHATGPT_ORIGIN) return null;
   const segments = parsed.pathname.split('/').filter(Boolean);
   const globalConversationRoute = segments.length === 2 && segments[0] === 'c';
-  const projectConversationRoute = segments.length === 4
-    && segments[0] === 'g'
-    && PROJECT_ROUTE_PATTERN.test(`/g/${segments[1]}/project`)
-    && segments[2] === 'c';
+  const projectConversationRoute = segments.length >= 3
+    && segments.at(-2) === 'c';
   if ((!globalConversationRoute && !projectConversationRoute) || !CONVERSATION_ID_PATTERN.test(segments.at(-1))) {
     return null;
   }
@@ -394,10 +393,9 @@ function projectUrlError(message, cause) {
 /**
  * Normalize and validate the explicit ChatGPT project URL contract.
  *
- * This intentionally accepts only the current project landing route used by
- * the browser UI. Relative paths, arbitrary chat URLs, alternate hosts,
- * query/hash-bearing URLs, credentials, and path-normalization tricks are all
- * rejected before a browser is opened.
+ * This validates only the minimum safe target contract. The browser owns the
+ * product-specific Project page check, so no Project identifier or route
+ * structure is inferred here.
  */
 export function normalizeProjectUrl(value) {
   if (typeof value !== 'string' || !value || value.length > PROJECT_URL_MAX_CHARS || value !== value.trim()) {
@@ -423,7 +421,7 @@ export function normalizeProjectUrl(value) {
   }
 
   // URL parsing normalizes dot segments and escaped characters. Compare the
-  // raw path as well so an ambiguous spelling cannot pass as a project route.
+  // raw path as well so an ambiguous spelling cannot pass as a target URL.
   const authorityEnd = value.indexOf('/', value.indexOf('://') + 3);
   const rawPathAndSuffix = authorityEnd === -1 ? '' : value.slice(authorityEnd);
   const rawPath = rawPathAndSuffix.split(/[?#]/, 1)[0];
@@ -435,9 +433,16 @@ export function normalizeProjectUrl(value) {
     throw projectUrlError();
   }
 
-  const match = parsed.pathname.match(PROJECT_ROUTE_PATTERN);
-  if (!match) throw projectUrlError();
-  return `${CHATGPT_ORIGIN}/g/${match[1]}/project`;
+  if (
+    parsed.pathname === '/'
+    || parsed.pathname.endsWith('/.')
+    || parsed.pathname.endsWith('/..')
+    || parsed.pathname.includes('\\')
+    || [...parsed.pathname].some((character) => character.charCodeAt(0) < 0x20 || character.charCodeAt(0) === 0x7f)
+  ) {
+    throw projectUrlError();
+  }
+  return `${CHATGPT_ORIGIN}${parsed.pathname.endsWith('/') ? parsed.pathname.slice(0, -1) : parsed.pathname}`;
 }
 
 export function isValidProjectUrl(value) {
@@ -459,16 +464,10 @@ function parseProjectConversationUrl(value) {
   }
   if (parsed.origin !== CHATGPT_ORIGIN || parsed.search || parsed.hash) return null;
   const segments = parsed.pathname.split('/').filter(Boolean);
-  if (
-    segments.length !== 4
-    || segments[0] !== 'g'
-    || segments[2] !== 'c'
-    || !PROJECT_ROUTE_PATTERN.test(`/g/${segments[1]}/project`)
-    || !CONVERSATION_ID_PATTERN.test(segments[3])
-  ) return null;
+  if (segments.length < 3 || segments.at(-2) !== 'c' || !CONVERSATION_ID_PATTERN.test(segments.at(-1))) return null;
   return {
-    projectSlug: segments[1],
-    conversationId: segments[3],
+    projectSlug: segments.at(-3),
+    conversationId: segments.at(-1),
   };
 }
 
@@ -482,12 +481,14 @@ export function isValidProjectConversationUrl(value, projectUrl, expectedConvers
   let expectedProjectSlug;
   try {
     const normalizedProjectUrl = normalizeProjectUrl(projectUrl);
-    expectedProjectSlug = new URL(normalizedProjectUrl).pathname.split('/')[2];
+    const targetPath = new URL(normalizedProjectUrl).pathname;
+    const knownTarget = targetPath.match(PROJECT_ROUTE_PATTERN);
+    expectedProjectSlug = knownTarget ? knownTarget[1] : null;
   } catch {
     return false;
   }
   const parsed = parseProjectConversationUrl(value);
-  if (!parsed || parsed.projectSlug !== expectedProjectSlug) return false;
+  if (!parsed || (expectedProjectSlug !== null && parsed.projectSlug !== expectedProjectSlug)) return false;
   return expectedConversationId === undefined || parsed.conversationId === expectedConversationId;
 }
 
@@ -759,6 +760,54 @@ function hasProjectScopeFields(receipt) {
   ].some((field) => Object.prototype.hasOwnProperty.call(receipt, field));
 }
 
+function hasChatgptTargetFields(receipt) {
+  return [
+    'chatgpt_target_mode',
+    'chatgpt_target_url_digest',
+    'chatgpt_target_origin',
+    'chatgpt_project_target_verified',
+    'fresh_project_chat_created',
+  ].some((field) => Object.prototype.hasOwnProperty.call(receipt, field));
+}
+
+/** Validate the bounded target markers emitted for new bridge receipts. */
+export function validateChatgptTargetMetadata(receipt) {
+  if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) return false;
+  if (!hasChatgptTargetFields(receipt)) return true;
+  const fields = [
+    'chatgpt_target_mode',
+    'chatgpt_target_url_digest',
+    'chatgpt_target_origin',
+    'chatgpt_project_target_verified',
+    'fresh_project_chat_created',
+  ];
+  if (!fields.every((field) => Object.prototype.hasOwnProperty.call(receipt, field))) return false;
+  if (!['PROJECT', 'DEFAULT'].includes(receipt.chatgpt_target_mode)) return false;
+  if (receipt.chatgpt_target_origin !== CHATGPT_ORIGIN) return false;
+  if (!['YES', 'NO'].includes(receipt.chatgpt_project_target_verified)) return false;
+  if (!['YES', 'NO'].includes(receipt.fresh_project_chat_created)) return false;
+  const projectUrl = safeProjectScopeUrl(receipt.project_url);
+  if (receipt.chatgpt_target_mode === 'PROJECT') {
+    if (!projectUrl || receipt.project_url !== projectUrl) return false;
+    if (typeof receipt.chatgpt_target_url_digest !== 'string' || !/^[0-9a-f]{64}$/.test(receipt.chatgpt_target_url_digest)) return false;
+    const expectedDigest = crypto.createHash('sha256').update(projectUrl, 'utf8').digest('hex');
+    if (receipt.chatgpt_target_url_digest !== expectedDigest) return false;
+    if (receipt.chatgpt_project_target_verified !== 'YES') return false;
+    if (receipt.fresh_project_chat_created === 'YES' && (
+      receipt.mode !== CONVERSATION_MODES.FRESH
+      || receipt.status !== 'complete'
+      || receipt.conversation_validated !== true
+      || !isValidConversationUrl(receipt.chat_url, receipt.conversation_id)
+    )) return false;
+  } else if (
+    receipt.chatgpt_target_url_digest !== null
+    || projectUrl !== null
+    || receipt.chatgpt_project_target_verified !== 'NO'
+    || receipt.fresh_project_chat_created !== 'NO'
+  ) return false;
+  return true;
+}
+
 /** Validate optional receipt project-scope metadata without requiring it for legacy receipts. */
 export function validateProjectScopeMetadata(receipt, { requireVerified = false } = {}) {
   if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) return false;
@@ -836,6 +885,7 @@ export function validateContinuationReceipt(receipt, expectedConsultationId) {
   if (!Number.isInteger(receipt.response_char_count) || receipt.response_char_count < 0) return false;
   if (!validateReceiptAttachments(receipt.attachments, { complete: true })) return false;
   if (receipt.context_pack !== undefined && !validateContextPackReceiptMetadata(receipt.context_pack)) return false;
+  if (!validateChatgptTargetMetadata(receipt)) return false;
   const receiptTransport = safeTransport(receipt.transport);
   if (receipt.transport !== undefined && receiptTransport === null) return false;
   if (receiptTransport === TRANSPORTS.HOMEPAGE_FALLBACK) {
@@ -1676,6 +1726,21 @@ export function buildReceipt({
     const safeProjectEvidence = safeProjectScopeEvidence(evidence, normalizedProjectUrl);
     if (safeProjectEvidence) receipt.project_scope_evidence = safeProjectEvidence;
   }
+  const boundTargetUrl = normalizedTransport === TRANSPORTS.HOMEPAGE_FALLBACK
+    ? null
+    : normalizedProjectUrl;
+  receipt.chatgpt_target_mode = boundTargetUrl ? 'PROJECT' : 'DEFAULT';
+  receipt.chatgpt_target_url_digest = boundTargetUrl
+    ? crypto.createHash('sha256').update(boundTargetUrl, 'utf8').digest('hex')
+    : null;
+  receipt.chatgpt_target_origin = CHATGPT_ORIGIN;
+  receipt.chatgpt_project_target_verified = boundTargetUrl && projectScopeVerified === true ? 'YES' : 'NO';
+  receipt.fresh_project_chat_created = boundTargetUrl
+    && mode === CONVERSATION_MODES.FRESH
+    && status === 'complete'
+    && conversationValidated === true
+    ? 'YES'
+    : 'NO';
   const safeDiagnostics = safeAttachmentDiagnostics(diagnostics);
   if (safeDiagnostics) receipt.attachment_diagnostics = safeDiagnostics;
   const safeResponseDiagnostics = safeResponseForensic(responseForensic);

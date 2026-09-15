@@ -1151,6 +1151,130 @@ class ProjectRequirementsIntake:
         saved = self._save(document)
         return _result("requirements-init", saved, self.root, entrypoint=entrypoint)
 
+    def bind_chatgpt_project_target(
+        self,
+        project_url: str | None,
+        *,
+        source_requirements_digest: str | None = None,
+        source_path: str = "plan/REQUIREMENTS.md",
+        actor: str = "workflow-plan-ingestion",
+    ) -> dict[str, Any]:
+        """Update the existing canonical Project-level GPT target.
+
+        This is a narrow configuration projection inside ``PROJECT_BRIEF``;
+        it is not a second config store and it never changes Stage or journal
+        state.  Target changes are recorded as bounded append-only metadata,
+        while old consultation receipts remain untouched.
+        """
+
+        existing = self._load()
+        if existing is None:
+            raise ProjectIntakeError("BRIEF_NOT_FOUND", "no canonical project brief exists; run requirements-init first")
+        if existing.get("state") == BriefState.CANCELLED.value:
+            raise ProjectIntakeError("BRIEF_CANCELLED", "cancelled project brief cannot be resumed")
+        normalized: str | None = None
+        if project_url is not None:
+            try:
+                from .bridge_adapter import normalize_project_url
+
+                normalized = normalize_project_url(project_url)
+            except Exception as exc:
+                code = getattr(exc, "code", "PROJECT_URL_INVALID")
+                raise ProjectIntakeError(str(code), "ChatGPT Project URL is invalid") from exc
+        brief_value = existing.get("brief") if isinstance(existing.get("brief"), Mapping) else {}
+        current_value = brief_value.get("chatgpt_project_url") if isinstance(brief_value, Mapping) else None
+        if not isinstance(current_value, str):
+            binding = brief_value.get("chatgpt_project_binding") if isinstance(brief_value, Mapping) else None
+            current_value = binding.get("url") if isinstance(binding, Mapping) else None
+        current: str | None = None
+        if isinstance(current_value, str) and current_value.strip():
+            try:
+                from .bridge_adapter import normalize_project_url
+
+                current = normalize_project_url(current_value)
+            except Exception as exc:
+                code = getattr(exc, "code", "PROJECT_URL_INVALID")
+                raise ProjectIntakeError(str(code), "existing ChatGPT Project URL is invalid") from exc
+        current_binding = brief_value.get("chatgpt_project_binding") if isinstance(brief_value, Mapping) else None
+        existing_history = existing.get("project_config_changes")
+        if not isinstance(existing_history, list):
+            existing_history = []
+        normalized_digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest() if normalized else None
+        history_has_current = any(
+            isinstance(item, Mapping)
+            and item.get("setting") == "chatgpt_project_url"
+            and item.get("to_url_digest") == normalized_digest
+            for item in existing_history
+        )
+        binding_matches = (
+            normalized is None
+            and current is None
+        ) or (
+            normalized is not None
+            and current == normalized
+            and isinstance(current_binding, Mapping)
+            and current_binding.get("url") == normalized
+            and current_binding.get("origin") == "https://chatgpt.com"
+            and current_binding.get("url_digest") == normalized_digest
+            and history_has_current
+        )
+        if binding_matches:
+            result = _result("project-target-bind", existing, self.root, entrypoint=actor)
+            result["project_target_change"] = None
+            result["project_target"] = {
+                "mode": "PROJECT" if normalized else "DEFAULT",
+                "url_digest": hashlib.sha256(normalized.encode("utf-8")).hexdigest() if normalized else None,
+                "origin": "https://chatgpt.com",
+            }
+            return result
+
+        updated = copy.deepcopy(existing)
+        target = updated.setdefault("brief", {})
+        if not isinstance(target, dict):
+            raise ProjectIntakeError("BRIEF_INVALID", "canonical project brief fields are invalid")
+        if normalized is None:
+            target.pop("chatgpt_project_url", None)
+            target.pop("chatgpt_project_binding", None)
+        else:
+            target["chatgpt_project_url"] = normalized
+            target["chatgpt_project_binding"] = {
+                "scope": "project",
+                "url": normalized,
+                "origin": "https://chatgpt.com",
+                "url_digest": hashlib.sha256(normalized.encode("utf-8")).hexdigest(),
+            }
+        next_revision = int(updated.get("revision", 0)) + 1
+        updated["revision"] = next_revision
+        updated["updated_at"] = _now()
+        history = updated.get("project_config_changes")
+        if history is None:
+            history = []
+        if not isinstance(history, list) or len(history) >= 64:
+            raise ProjectIntakeError("PROJECT_CONFIG_HISTORY_LIMIT", "Project configuration change history reached its bound")
+        change = {
+            "change_id": "project-config-" + hashlib.sha256(
+                f"{existing['project_id']}:{next_revision}:{normalized or 'DEFAULT'}".encode("utf-8")
+            ).hexdigest()[:24],
+            "setting": "chatgpt_project_url",
+            "from_url_digest": hashlib.sha256(current.encode("utf-8")).hexdigest() if current else None,
+            "to_url_digest": hashlib.sha256(normalized.encode("utf-8")).hexdigest() if normalized else None,
+            "source_path": source_path,
+            "source_requirements_digest": source_requirements_digest,
+            "actor": actor,
+            "recorded_revision": next_revision,
+        }
+        history.append(change)
+        updated["project_config_changes"] = history
+        saved = self._save(updated)
+        result = _result("project-target-bind", saved, self.root, entrypoint=actor)
+        result["project_target_change"] = copy.deepcopy(change)
+        result["project_target"] = {
+            "mode": "PROJECT" if normalized else "DEFAULT",
+            "url_digest": change["to_url_digest"],
+            "origin": "https://chatgpt.com",
+        }
+        return result
+
     # Friendly aliases for small callers that model intake as a stateful
     # object rather than a CLI service.
     def init(

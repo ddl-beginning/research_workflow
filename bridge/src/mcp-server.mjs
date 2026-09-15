@@ -54,7 +54,7 @@ export const consultGptInputSchema = z.object({
     .optional(),
   project_url: z.string()
     .max(PROJECT_URL_MAX_CHARS)
-    .refine((value) => isValidProjectUrl(value), 'project_url must be an explicit ChatGPT project route')
+    .refine((value) => isValidProjectUrl(value), 'project_url must be a safe https://chatgpt.com target')
     .optional(),
 }).strict().superRefine((value, context) => {
   if (value.mode === CONVERSATION_MODES.FRESH && value.continue_from !== undefined) {

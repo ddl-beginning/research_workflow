@@ -100,6 +100,49 @@ derived cross-check, and the latest receipts. It then re-derives the current
 Stage and next legal action from the controller. Missing derived views are
 regenerated automatically.
 
+## Per-project ChatGPT browser target
+
+The optional Project target is configured in the same user-owned
+`plan/REQUIREMENTS.md` file:
+
+```text
+## Workflow ChatGPT Project
+ChatGPT Project URL: https://chatgpt.com/<user-provided-project-path>
+```
+
+The accepted minimum shape is an absolute `https` URL whose hostname is
+exactly `chatgpt.com`, with no credentials, query, fragment, whitespace,
+localhost, third-party origin, or path-normalization ambiguity. Workflow does
+not infer a Project ID or impose a URL path pattern. The target is parsed once
+and projected into the existing canonical `.research/PROJECT_BRIEF.json`
+brief as `chatgpt_project_url` plus a bounded binding record. There is no
+second configuration file, project pool, rotation, quota/account switch, or
+profile switch.
+
+When the canonical brief contains a target, the runtime gives it precedence
+over any machine-level default and passes the exact normalized URL to the
+browser bridge. The bridge boots the machine-local authenticated profile,
+navigates to that exact target, verifies the landing page, creates a fresh
+conversation in that Project for each NORMAL/TECHNICAL review, and requires
+the resulting receipt to prove the binding. The invariant
+`GPT_REVIEW_MUST_USE_BOUND_PROJECT_TARGET` is enforced at the runtime
+boundary. Without a plan target, the prior default/homepage behavior remains
+unchanged.
+
+Receipts carry only bounded audit markers: `PROJECT` or `DEFAULT`, a SHA-256
+target digest, the fixed origin, target verification, and whether a fresh
+Project chat was created. Derived `WORKFLOW_PLAN.md` and `CURRENT_STATE.md`
+show only `BOUND_PROJECT`/`CONFIGURED` (or the default state), never the full
+URL. Browser cookies, tokens, passwords, and session files remain machine
+local and are not committed or uploaded.
+
+If the source digest changes the target, Workflow updates the canonical
+binding for future consultations, records an append-only bounded change entry,
+and leaves all prior consultation receipts byte-for-byte unchanged. A target
+unavailable error may use the existing bounded bridge recovery path; it does
+not become a Human technical relay. Only an irreducible authentication,
+access, business, or acceptance gate can request Human involvement.
+
 ## GPT and Human boundaries
 
 Local parsing, path resolution, existence checks, normalization, derived-view
@@ -109,4 +152,3 @@ plan change whose effect cannot be resolved locally. Human is requested only
 for an irreducible business/semantic choice, explicit visual or semantic
 acceptance, private input, or irreversible authorization. Human is not asked
 to relay technical failures or restate the next Stage prompt.
-

@@ -25,7 +25,6 @@ from typing import Any, Callable, Mapping, Sequence
 from urllib.parse import urlsplit
 
 
-PROJECT_URL_PATTERN = re.compile(r"^/g/(g-p-[A-Za-z0-9][A-Za-z0-9._~-]*)/project/?$")
 MAX_ENVELOPE_TEXT = 250_000
 MAX_METADATA_DEPTH = 8
 MAX_METADATA_LIST = 64
@@ -253,11 +252,11 @@ def _text(value: Any, field: str, *, required: bool = True, maximum: int = MAX_M
 
 
 def normalize_project_url(value: Any) -> str:
-    """Validate the same narrow URL shape as the browser bridge.
+    """Validate the minimum safe shape for a configured ChatGPT target.
 
-    Keeping this tiny local check avoids importing Step 13 from this generic
-    adapter and avoids making the browser implementation a supervisor
-    dependency.  The canonical spelling is identical to the bridge contract.
+    The browser bridge owns the product-specific page check.  This boundary
+    only rejects unsafe origins and ambiguous URL spellings; it deliberately
+    does not infer a Project identifier or hard-code a Project route shape.
     """
 
     if not isinstance(value, str) or not value or value != value.strip() or len(value) > 512:
@@ -278,18 +277,20 @@ def normalize_project_url(value: Any) -> str:
         or parsed.query
         or parsed.fragment
         or any(character.isspace() for character in value)
+        or not parsed.path
+        or parsed.path == "/"
+        or "\\" in parsed.path
+        or any(part in {".", ".."} for part in parsed.path.split("/"))
+        or any(ord(character) < 0x20 or ord(character) == 0x7f for character in parsed.path)
     ):
-        raise BridgeEnvelopeError("PROJECT_URL_INVALID", "project URL must be a canonical ChatGPT Project route")
-    match = PROJECT_URL_PATTERN.fullmatch(parsed.path)
-    if match is None:
-        raise BridgeEnvelopeError("PROJECT_URL_INVALID", "project URL must target a ChatGPT Project")
+        raise BridgeEnvelopeError("PROJECT_URL_INVALID", "project URL must use https://chatgpt.com and identify a non-root target")
     raw_authority_end = value.find("/", value.find("://") + 3)
     raw_path = value[raw_authority_end:] if raw_authority_end >= 0 else ""
     raw_without_trailing = raw_path[:-1] if raw_path.endswith("/") else raw_path
     parsed_without_trailing = parsed.path[:-1] if parsed.path.endswith("/") else parsed.path
     if not raw_path or raw_without_trailing != parsed_without_trailing:
         raise BridgeEnvelopeError("PROJECT_URL_INVALID", "project URL path is ambiguous")
-    return f"https://chatgpt.com/g/{match.group(1)}/project"
+    return f"https://chatgpt.com{parsed_without_trailing}"
 
 
 def _safe_metadata(value: Any, field: str = "metadata", *, depth: int = MAX_METADATA_DEPTH) -> Any:
@@ -423,6 +424,48 @@ def normalize_bridge_envelope(
             raise BridgeEnvelopeError("PROJECT_SCOPE_MISSING", "bridge result has no verified project binding")
         if normalized_project != expected_project:
             raise BridgeEnvelopeError("PROJECT_SCOPE_MISMATCH", "bridge result belongs to another ChatGPT Project")
+
+    target_fields = {
+        "chatgpt_target_mode",
+        "chatgpt_target_url_digest",
+        "chatgpt_target_origin",
+        "chatgpt_project_target_verified",
+        "fresh_project_chat_created",
+    }
+    if any(field in receipt for field in target_fields):
+        if not target_fields.issubset(receipt):
+            raise BridgeEnvelopeError("PROJECT_TARGET_METADATA_INVALID", "bridge receipt target metadata is incomplete")
+        target_mode = receipt.get("chatgpt_target_mode")
+        if target_mode not in {"PROJECT", "DEFAULT"}:
+            raise BridgeEnvelopeError("PROJECT_TARGET_METADATA_INVALID", "bridge receipt target mode is invalid")
+        if receipt.get("chatgpt_target_origin") != "https://chatgpt.com":
+            raise BridgeEnvelopeError("PROJECT_TARGET_METADATA_INVALID", "bridge receipt target origin is invalid")
+        target_verified = receipt.get("chatgpt_project_target_verified")
+        if target_verified not in {"YES", "NO"}:
+            raise BridgeEnvelopeError("PROJECT_TARGET_METADATA_INVALID", "bridge receipt target verification is invalid")
+        fresh_created = receipt.get("fresh_project_chat_created")
+        if fresh_created not in {"YES", "NO"}:
+            raise BridgeEnvelopeError("PROJECT_TARGET_METADATA_INVALID", "bridge receipt fresh-chat marker is invalid")
+        digest = receipt.get("chatgpt_target_url_digest")
+        if target_mode == "PROJECT":
+            if normalized_receipt_project is None or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+                raise BridgeEnvelopeError("PROJECT_TARGET_METADATA_INVALID", "Project receipt target digest is invalid")
+            if digest != hashlib.sha256(normalized_receipt_project.encode("utf-8")).hexdigest():
+                raise BridgeEnvelopeError("PROJECT_TARGET_METADATA_INVALID", "Project receipt target digest does not match its URL")
+            if target_verified != "YES":
+                raise BridgeEnvelopeError("PROJECT_TARGET_METADATA_INVALID", "Project receipt target was not verified")
+            if fresh_created == "YES" and (
+                receipt.get("mode") != "fresh"
+                or receipt.get("status") != "complete"
+                or receipt.get("conversation_validated") is not True
+                or not isinstance(receipt.get("conversation_id"), str)
+                or not receipt.get("conversation_id")
+            ):
+                raise BridgeEnvelopeError("PROJECT_TARGET_METADATA_INVALID", "Project fresh-chat marker is not bound to a completed conversation")
+        elif digest is not None or normalized_receipt_project is not None or target_verified != "NO":
+            raise BridgeEnvelopeError("PROJECT_TARGET_METADATA_INVALID", "default receipt carries Project target state")
+        if target_mode == "DEFAULT" and fresh_created != "NO":
+            raise BridgeEnvelopeError("PROJECT_TARGET_METADATA_INVALID", "default receipt carries a Project fresh-chat marker")
 
     # Receipts produced for a Project-scoped invocation must carry the same
     # verified scope proof that the bridge uses for continuation.  A receipt
@@ -982,7 +1025,6 @@ build_project_asset_pack = build_project_context_pack
 __all__ = [
     "BridgeConsultantAdapter",
     "BridgeEnvelopeError",
-    "PROJECT_URL_PATTERN",
     "ProjectBridgeConsultant",
     "ProjectScopedBridgeConsultant",
     "ProjectScopedConsultant",
