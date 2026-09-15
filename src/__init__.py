@@ -158,6 +158,18 @@ from .project_state import (
     resolve_project_root,
     save_project_brief,
 )
+from .project_plan_ingestion import (
+    CURRENT_STATE_RELATIVE_PATH,
+    PLAN_RELATIVE_PATH,
+    ProjectPlanIngestionError,
+    REQUIREMENTS_RELATIVE_PATH,
+    STAGE_PLAN_RELATIVE_PATH,
+    WORKFLOW_PLAN_RELATIVE_PATH,
+    detect_plan_sources,
+    ensure_plan_intake,
+    load_project_plan,
+    sync_project_plan,
+)
 from .project_intake import (
     BRIEF_STATES,
     CODEX_REQUIREMENTS_INTERVIEW,

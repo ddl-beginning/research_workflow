@@ -28,6 +28,11 @@ from .contracts import ContractValidationError, canonical_json, sha256_json
 from .executor import ExecutionRequest, ExecutionResult
 from .openai_codex_executor import OpenAICodexExecutor
 from .project_intake import ProjectIntakeError, ProjectRequirementsIntake
+from .project_plan_ingestion import (
+    ProjectPlanIngestionError,
+    detect_plan_sources,
+    sync_project_plan,
+)
 from .runtime_composition import RuntimeCompositionConfig, load_runtime_composition_config
 from .stage_integration import StageIntegrationError, parse_dialogue_decision, subprocess_bridge_runner
 from .workflow_runtime import WorkflowRuntimeError
@@ -67,7 +72,7 @@ def _boundary(function):
     def wrapped(*args, **kwargs):
         try:
             return function(*args, **kwargs)
-        except (ProjectIntakeError, BridgeEnvelopeError, StageIntegrationError, ArtifactResolverError) as exc:
+        except (ProjectIntakeError, ProjectPlanIngestionError, BridgeEnvelopeError, StageIntegrationError, ArtifactResolverError) as exc:
             raise WorkflowRuntimeError(exc.code, str(exc), details=getattr(exc, "details", None)) from exc
         except (ContractValidationError, WorkflowV2ControllerError) as exc:
             raise WorkflowRuntimeError("V2_CONTRACT_REJECTED", str(exc)[:512]) from exc
@@ -228,8 +233,11 @@ def initialize_product_runtime(workspace: str | Path, config_path: str | Path | 
         raise WorkflowRuntimeError("RUNNER_NOT_CONFIGURED", "Product machine dependencies are not ready", details=result)
     controller = _controller(root, cfg)
     controller.initialize()
+    plan_ingestion = sync_project_plan(root, controller=controller)
     return {**result, "initialized": True, "canonical": controller.resume_projection(),
-            "stage_created": False, "stage_started": False}
+            "stage_created": bool(plan_ingestion.get("registered_stage_ids")),
+            "stage_started": bool(plan_ingestion.get("stage_started")),
+            "plan_ingestion": plan_ingestion}
 
 
 class ProductWorkflowRuntime:
@@ -247,6 +255,23 @@ class ProductWorkflowRuntime:
         self._transport_request_snapshot: dict[str, Any] | None = None
         self._transport_request_pending = False
         self._last_contract_trace: dict[str, Any] | None = None
+
+    def _sync_plan(self, *, auto_start: bool = True) -> dict[str, Any] | None:
+        """Refresh the bounded plan views and bind them to canonical V2 state."""
+
+        discovery = detect_plan_sources(self.root)
+        if discovery["status"] == "NO_PLAN":
+            return None
+        result = sync_project_plan(
+            self.root,
+            controller=self.controller,
+            intake=self.intake,
+            auto_start=auto_start,
+        )
+        if result.get("status") == "INCOMPLETE":
+            missing = ", ".join(str(item) for item in result.get("missing", []))
+            raise ProjectPlanIngestionError("PLAN_INPUT_MISSING", f"Missing required planning input: {missing}", details={"missing": result.get("missing", [])})
+        return result
 
     @property
     def last_contract_trace(self) -> dict[str, Any] | None:
@@ -440,6 +465,7 @@ class ProductWorkflowRuntime:
         ).absolute_path
 
     def _view(self, **extra: Any) -> dict[str, Any]:
+        plan_ingestion = self._sync_plan()
         brief = self.intake.state
         if brief is None:
             raise WorkflowRuntimeError("WORKFLOW_NOT_FOUND", "workflow has not been started")
@@ -455,8 +481,26 @@ class ProductWorkflowRuntime:
             "loaded": True,
             "authority": "DESIGN_CONTEXT_ONLY",
         }
+        plan_summary = None
+        if isinstance(plan_ingestion, Mapping):
+            plan_summary = {
+                key: copy.deepcopy(plan_ingestion.get(key))
+                for key in (
+                    "status", "requirements_loaded", "stage_plan_loaded", "workflow_plan_generated",
+                    "current_state_generated", "registered_stage_ids", "stage_started", "plan_change",
+                    "current_plan_source", "context_recovery_order", "stage_data_validation",
+                    "existing_project_evidence",
+                    "human_intervention_count",
+                )
+                if key in plan_ingestion
+            }
+            extra = {
+                "PROJECT_PLAN_INGESTION": "PASS",
+                "plan_discovery": copy.deepcopy(plan_ingestion.get("plan_discovery")),
+                **extra,
+            }
         presentation = build_human_presentation(
-            metadata={**extra, "outer_loop_contract": outer_loop_contract},
+            metadata={**extra, "outer_loop_contract": outer_loop_contract, "plan_ingestion": plan_summary},
             canonical_state=projection,
             artifact_root=self.root,
         )
@@ -469,16 +513,18 @@ class ProductWorkflowRuntime:
                     "schema_version": "product_workflow_result.v1", "next_action": action,
                     "next_tool": "workflow_answer", "question_id": question.get("question_id") if question else None,
                     "question": question, "brief_state": brief["state"], "canonical": projection,
-                    "outer_loop_contract": outer_loop_contract, **extra}
+                    "outer_loop_contract": outer_loop_contract, "plan_ingestion": plan_summary, **extra}
         return {"human_summary": presentation["human_summary"],
                 "machine_details": presentation["machine_details"],
                 "presentation": presentation,
                 "schema_version": "product_workflow_result.v1", "lifecycle_version": "v2",
                 "workspace_root": str(self.root), "project_id": brief["project_id"],
                 "brief_state": brief["state"], "canonical": projection, **projection, "next_tool": "workflow_answer" if projection["next_actor"] == "Human" else "workflow_run",
-                "question_id": None, "outer_loop_contract": outer_loop_contract, **extra}
+                "question_id": None, "outer_loop_contract": outer_loop_contract, "plan_ingestion": plan_summary, **extra}
 
+    @_boundary
     def status(self) -> dict[str, Any]:
+        self._sync_plan()
         return self._view()
 
     def _maintenance_context(self) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any] | None] | None:
@@ -1280,6 +1326,7 @@ class ProductWorkflowRuntime:
 
     @_boundary
     def resume(self) -> dict[str, Any]:
+        self._sync_plan()
         inherited: dict[str, Any] = {}
         supervisor_steps: list[dict[str, Any]] = []
         budget_authority: dict[str, Any] | None = None
@@ -1505,6 +1552,14 @@ class ProductWorkflowRuntime:
 
     @_boundary
     def start(self, **kwargs: Any) -> dict[str, Any]:
+        plan_ingestion = self._sync_plan()
+        if plan_ingestion is not None and not any(
+            key in kwargs for key in (
+                "mode", "rough_requirement", "requirement", "raw_requirement",
+                "original_requirement", "user_requirement", "brief",
+            )
+        ):
+            return self.resume()
         # Reuse the existing requirements normalization/intake, without its
         # legacy checkpoint/orchestrator. No second brief identity is created.
         from .workflow_runtime import _normalize_brief_input, _BRIEF_FIELDS
@@ -1600,6 +1655,7 @@ class ProductWorkflowRuntime:
             self._transport_request_pending = False
         else:
             self._transport_request_snapshot = payload_snapshot(request)
+        self._sync_plan()
         brief = self.intake.state
         if brief is None:
             raise WorkflowRuntimeError("WORKFLOW_NOT_FOUND", "workflow has not been started")

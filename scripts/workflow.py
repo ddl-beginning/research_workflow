@@ -42,6 +42,11 @@ from src.portable_startup import (
     secret_scan_paths,
 )
 from src.product_workflow_runtime import ProductWorkflowRuntime, initialize_product_runtime
+from src.project_plan_ingestion import (
+    ProjectPlanIngestionError,
+    detect_plan_sources,
+    ensure_plan_intake,
+)
 from src.project_intake import IntakeMode, ProjectRequirementsIntake
 from src.runtime_composition import RuntimeCompositionError, load_runtime_composition_config
 from src.workflow_runtime import WorkflowRuntimeError
@@ -360,6 +365,25 @@ def _init(args: argparse.Namespace, workspace: Path) -> dict[str, Any]:
     machine_failures = [item for item in preflight.get("checks", []) if item.get("name") not in {"project.workspace"} and item.get("status") != "PASS"]
     if machine_failures:
         raise CommandError("SETUP_REQUIRED", "machine setup is not ready; run workflow setup", details={"doctor": preflight})
+    plan_discovery = detect_plan_sources(workspace)
+    if plan_discovery["status"] == "INCOMPLETE":
+        missing = ", ".join(plan_discovery["missing"])
+        return {
+            "schema_version": "workflow_init.v1",
+            "operation": "init",
+            "ready": False,
+            "code": "PLAN_INPUT_MISSING",
+            "message": f"Missing required planning input: {missing}",
+            "missing": plan_discovery["missing"],
+            "plan_discovery": plan_discovery,
+            "writes_performed": False,
+        }
+    plan_bound = plan_discovery["status"] == "READY"
+    if plan_bound and not project_identity_present(workspace):
+        try:
+            ensure_plan_intake(workspace)
+        except ProjectPlanIngestionError as exc:
+            raise CommandError(exc.code, str(exc), details=exc.details) from exc
     if not project_identity_present(workspace):
         if not args.goal and not args.brief:
             return {
@@ -387,11 +411,25 @@ def _init(args: argparse.Namespace, workspace: Path) -> dict[str, Any]:
     registry = record_workspace(paths, workspace, str(summary.get("project_id")))
     result = {"schema_version": "workflow_init.v1", "operation": "init", "ready": True, "profile": profile, "registry": registry, **initialized}
     presentation = build_human_presentation(canonical_state=result.get("canonical"), artifact_root=workspace)
-    return {"human_summary": presentation["human_summary"], "machine_details": presentation["machine_details"], "presentation": presentation, **result}
+    return {"human_summary": presentation["human_summary"], "machine_details": presentation["machine_details"], "presentation": presentation, "plan_discovery": plan_discovery, **result}
 
 
 def _resume(args: argparse.Namespace, workspace: Path) -> dict[str, Any]:
-    if not project_identity_present(workspace):
+    plan_discovery = detect_plan_sources(workspace)
+    if plan_discovery["status"] == "INCOMPLETE":
+        missing = ", ".join(plan_discovery["missing"])
+        return {
+            "schema_version": "workflow_resume.v1",
+            "operation": "resume",
+            "ready": False,
+            "code": "PLAN_INPUT_MISSING",
+            "message": f"Missing required planning input: {missing}",
+            "missing": plan_discovery["missing"],
+            "plan_discovery": plan_discovery,
+            "writes_performed": False,
+        }
+    plan_bound = plan_discovery["status"] == "READY"
+    if not project_identity_present(workspace) and not plan_bound:
         return {
             "schema_version": "workflow_resume.v1",
             "operation": "resume",
@@ -404,6 +442,11 @@ def _resume(args: argparse.Namespace, workspace: Path) -> dict[str, Any]:
     config_path = _runtime_config_path(paths, args)
     if not config_path.is_file():
         raise CommandError("SETUP_REQUIRED", "run workflow setup before resuming this project")
+    if plan_bound:
+        try:
+            ensure_plan_intake(workspace)
+        except ProjectPlanIngestionError as exc:
+            raise CommandError(exc.code, str(exc), details=exc.details) from exc
     profile = persist_profile(workspace)
     initialized = initialize_product_runtime(workspace, config_path=config_path)
     config = load_runtime_composition_config(workspace, config_path=config_path)
@@ -419,6 +462,7 @@ def _resume(args: argparse.Namespace, workspace: Path) -> dict[str, Any]:
         "termination_validation", "legal_next_action", "outer_supervisory_loop", "outer_loop_contract",
         "provider_execution_error", "auto_next_iteration", "new_iteration_started", "iteration_transition",
         "budget_route_rejected",
+        "plan_ingestion", "plan_discovery",
     )
     result = {
         "schema_version": "workflow_resume.v1",
@@ -431,11 +475,12 @@ def _resume(args: argparse.Namespace, workspace: Path) -> dict[str, Any]:
         **{key: resumed[key] for key in ("legacy_resolution", "old_operation_preserved", "old_operation_redispatched", "side_effect_audit", "self_repair", *maintenance_keys) if key in resumed},
     }
     presentation = build_human_presentation(metadata=result, canonical_state=result.get("canonical"), artifact_root=workspace)
-    return {"human_summary": presentation["human_summary"], "machine_details": presentation["machine_details"], "presentation": presentation, **result}
+    return {"human_summary": presentation["human_summary"], "machine_details": presentation["machine_details"], "presentation": presentation, "plan_discovery": plan_discovery, **result}
 
 
 def _status(args: argparse.Namespace, workspace: Path) -> dict[str, Any]:
     summary = project_brief_summary(workspace) if project_identity_present(workspace) else None
+    plan_discovery = detect_plan_sources(workspace)
     return {
         "schema_version": "workflow_status.v1",
         "operation": "status",
@@ -443,6 +488,8 @@ def _status(args: argparse.Namespace, workspace: Path) -> dict[str, Any]:
         "project": summary,
         "journal": (workspace / ".workflow-v2" / "journal.json").is_file(),
         "machine_config": _runtime_config_path(machine_paths(args.machine_root), args).is_file(),
+        "plan_discovery": plan_discovery,
+        "generated_plan_files": ["plan/WORKFLOW_PLAN.md", "plan/CURRENT_STATE.md"] if plan_discovery["status"] == "READY" else [],
         "cookie_export": False,
     }
 
@@ -497,7 +544,8 @@ def run_command(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     workspace = _workspace(args.workspace)
     command = args.command
     if command is None:
-        command = "resume" if project_identity_present(workspace) else "init"
+        plan_status = detect_plan_sources(workspace)["status"]
+        command = "resume" if project_identity_present(workspace) or plan_status != "NO_PLAN" else "init"
     if command == "setup":
         result = _setup(args, workspace)
         return (0 if result["ready"] else 1), result

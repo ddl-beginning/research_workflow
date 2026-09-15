@@ -1,6 +1,6 @@
 # Autonomous Objective Completion Loop
 
-Status: implementation and ownership-audit closure complete; release evidence passed; stable promotion complete.
+Status: implementation and ownership-audit closure complete; bounded project-plan ingestion added; release evidence in progress.
 
 This document is a durable architecture and maintenance reference. It is not a
 runtime authority. Runtime authority remains the canonical `StageController`,
@@ -702,3 +702,23 @@ final visual or semantic acceptance. Workflow, Codex, and GPT execute,
 diagnose, recover, test, reason technically, replan, transition lifecycle, and
 handle bounded budgets. Human owns the goal and acceptance, not the act of
 keeping the AI moving.
+
+## 25. Bounded Project Plan Ingestion
+
+The user-facing planning contract is documented separately in
+`docs/PROJECT_PLAN_INGESTION_CONTRACT.md`. A project may provide only
+`plan/REQUIREMENTS.md` and `plan/STAGE_PLAN.md`; Workflow derives
+`plan/WORKFLOW_PLAN.md` and `plan/CURRENT_STATE.md` and keeps the canonical
+`StageController + journal + contracts` authority unchanged. The plan layer
+does not create a second lifecycle, registry, manifest, or project state
+store. On every entry and resume it rechecks the fixed paths, preserves the
+legacy no-plan path, reloads plan sources before the journal projection, and
+regenerates missing or conflicting derived views from the journal.
+
+Plan-owned missing inputs remain work remaining and are eligible for the
+existing bounded execution route. Existing journal Stages are aligned without
+restarting closed work; future-only plan changes update the derived view, while
+current, completed, accepted, or final-objective changes are marked for
+technical/plan review without rewriting history. Normal Stage completion and
+Human approval refresh the snapshot and select the next planned Stage through
+the existing controller.
