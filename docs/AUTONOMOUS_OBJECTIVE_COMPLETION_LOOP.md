@@ -755,8 +755,11 @@ not rewritten. Derived views expose only `BOUND_PROJECT`/`CONFIGURED` and a
 digest, never the full URL. No account, quota, rotation, or profile switching
 was added; authentication material remains machine-local.
 
-IMPLEMENTED_IN_COMMIT: pending after implementation validation
-TARGET_TEST_EVIDENCE: Python plan/runtime target tests and Node bridge target/receipt tests are required before candidate tagging
-CLEANROOM: one bounded post-implementation clean-room run is required; stable promotion remains held unless it passes
-CURRENT_RELEASE_CANDIDATE: pending
-CURRENT_STABLE_TAG: workflow-v2.1.4-stable (unchanged)
+IMPLEMENTED_IN_COMMIT: f80eed1 (per-project ChatGPT browser target implementation and focused tests)
+TARGET_TEST_EVIDENCE: focused Python plan/runtime/bridge/discovery/blueprint suite 105 passed; Node bridge suite 122 passed; compileall, node --check, and git diff --check passed
+FULL_REGRESSION: 666 passed, 1 skipped, 2 deselected known historical self-test fixture failures
+PORTABLE_VALIDATION: PASS; destructive_actions=0; project_ab_isolation=YES; relocated_engine=YES; resume_idempotence=YES; frozen_kernel_unchanged=YES
+CLEANROOM: FAIL_WITH_EXTERNAL_ATTACHMENT_LIMITATION; one post-implementation run at D:/work/workflow-v2.1.5-release-validation-20260915-r3.json stopped at ATTACHMENT_UPLOAD_FAILED before prompt; receipt request_count=0 with all 3 attachments failed; current product worktree writes=NO
+CURRENT_RELEASE_CANDIDATE: workflow-v2.1.5-release-candidate-r5 (documentation evidence tag)
+CURRENT_STABLE_TAG: NOT_PROMOTED; workflow-v2.1.4-stable unchanged; stable promotion requires clean-room PASS
+KNOWN_LIMITATIONS: historical self-test fixture is missing .consultations/CONSULT-20260906-070055-bef2fdb6/receipt.json; external browser attachment readiness did not provide clean-room release evidence; no additional retry or Human technical relay was used
