@@ -347,6 +347,98 @@ def require_decision(value: Mapping[str, Any], expected: str, field: str) -> Map
     return record
 
 
+def _pre_prompt_attachment_receipt(project: Path, *, failure_code: str) -> tuple[Path, Mapping[str, Any]]:
+    """Find the single current failed-before-prompt attachment receipt.
+
+    The clean-room validator is itself the bounded recovery caller.  It may
+    recover only a receipt produced by this fresh project, and only when the
+    bridge proved that no prompt request was sent.  Ambiguous evidence fails
+    closed instead of guessing which consultation to retry.
+    """
+    candidates: list[tuple[Path, Mapping[str, Any]]] = []
+    consultation_root = project / ".consultations"
+    if not consultation_root.is_dir():
+        raise ValidationFailure("attachment recovery found no consultation evidence root")
+    for path in consultation_root.glob("*/receipt.json"):
+        try:
+            value = json_file(path)
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            continue
+        if not isinstance(value, Mapping):
+            continue
+        if (
+            value.get("status") == "failed_before_prompt"
+            and value.get("request_count") == 0
+            and value.get("failure_code") == failure_code
+            and value.get("conversation_id") is None
+            and value.get("conversation_validated") is False
+        ):
+            candidates.append((path, value))
+    if len(candidates) != 1:
+        raise ValidationFailure(
+            f"attachment recovery requires exactly one matching pre-prompt receipt; found {len(candidates)}"
+        )
+    path, receipt = candidates[0]
+    attachments = receipt.get("attachments")
+    if not isinstance(attachments, list) or not attachments or not all(
+        isinstance(item, Mapping) and item.get("upload_status") == "failed" for item in attachments
+    ):
+        raise ValidationFailure("attachment recovery receipt lacks all-failed attachment evidence")
+    if failure_code == "ATTACHMENT_UPLOAD_FAILED":
+        diagnostics = receipt.get("attachment_diagnostics")
+        if not isinstance(diagnostics, Mapping) or diagnostics.get("request_count") != 0 or diagnostics.get("final_predicate") is not False:
+            raise ValidationFailure("attachment recovery receipt lacks strict pre-prompt diagnostics")
+    return path, receipt
+
+
+def _plan_with_bounded_transport_recovery(
+    client: MCPClient,
+    *,
+    project: Path,
+    planning_request: Mapping[str, Any],
+    stage_id: str,
+    planning_revision: int,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Run PLAN_STAGE, allowing one explicit no-effect attachment recovery."""
+    planned = client.call("workflow_run", planning_request, allow_error=True)
+    error = planned.get("error") if isinstance(planned.get("error"), Mapping) else None
+    error_code = error.get("code") if error else None
+    if error_code is None:
+        return planned, None
+    if error_code not in {"ATTACHMENT_NOT_READY", "ATTACHMENT_UPLOAD_FAILED"}:
+        raise ValidationFailure(f"real GPT planning failed before bounded recovery: {error_code}")
+    receipt_path, receipt = _pre_prompt_attachment_receipt(project, failure_code=error_code)
+    recovery = {
+        "planning_revision": planning_revision,
+        "stage_id": stage_id,
+        "receipt_path": str(receipt_path.relative_to(project)).replace("\\", "/"),
+    }
+    request_body = planning_request.get("request")
+    if not isinstance(request_body, Mapping):
+        raise ValidationFailure("planning request has no request object for transport recovery")
+    retry_request = {
+        **dict(planning_request),
+        "request": {**dict(request_body), "transport_recovery": recovery},
+    }
+    recovered = client.call("workflow_run", retry_request, allow_error=True)
+    recovered_error = recovered.get("error") if isinstance(recovered.get("error"), Mapping) else None
+    if recovered_error is not None:
+        raise ValidationFailure(
+            f"bounded planning transport recovery failed: {recovered_error.get('code', 'UNKNOWN')}"
+        )
+    diagnostics = receipt.get("attachment_diagnostics")
+    return recovered, {
+        "attempts": 1,
+        "failure_code": error_code,
+        "receipt_path": recovery["receipt_path"],
+        "request_count": receipt.get("request_count"),
+        "packet_id": (receipt.get("context_pack") or {}).get("packet_id") if isinstance(receipt.get("context_pack"), Mapping) else None,
+        "reattach_attempted": diagnostics.get("reattach_attempted") if isinstance(diagnostics, Mapping) else None,
+        "reattach_succeeded": diagnostics.get("reattach_succeeded") if isinstance(diagnostics, Mapping) else None,
+        "recovered_request_count": recovered.get("planning", {}).get("request_count") if isinstance(recovered.get("planning"), Mapping) else None,
+    }
+
+
 def provider_probe(*, python: Path, engine: Path, project: Path, artifact_dir: Path, stage: Mapping[str, Any], baseline: str) -> dict[str, Any]:
     attempt = stage.get("attempt")
     if not isinstance(attempt, Mapping):
@@ -446,7 +538,14 @@ def run_installation_validation(args: argparse.Namespace) -> dict[str, Any]:
             commit=baseline,
             dirty=False,
         )
-        planned = client.call("workflow_run", {"workspace": str(project), "request": {"operation": "PLAN_STAGE", "stage": stage, "planning_revision": 1, "prompt": "Review this fresh bounded release packet for planning only. Confirm it is sufficiently scoped for one real execution. Do not execute or modify anything. Return one final standalone line exactly: WORKFLOW_DECISION: CONTINUE", "context_pack": planning_pack}})
+        planning_request = {"workspace": str(project), "request": {"operation": "PLAN_STAGE", "stage": stage, "planning_revision": 1, "prompt": "Review this fresh bounded release packet for planning only. Confirm it is sufficiently scoped for one real execution. Do not execute or modify anything. Return one final standalone line exactly: WORKFLOW_DECISION: CONTINUE", "context_pack": planning_pack}}
+        planned, planning_transport_recovery = _plan_with_bounded_transport_recovery(
+            client,
+            project=project,
+            planning_request=planning_request,
+            stage_id=STAGE_ID,
+            planning_revision=1,
+        )
         planning = require_decision(planned, "CONTINUE", "planning")
         started = client.call("workflow_run", {"workspace": str(project), "request": {"operation": "COMMAND", "command": "START", "subject_id": STAGE_ID, "payload": {}, "command_id": "release-validation-start-v1"}})
         if stage_from_view(started).get("status") != "ACTIVE":
@@ -631,7 +730,7 @@ def run_installation_validation(args: argparse.Namespace) -> dict[str, Any]:
             "validation_root": str(validation_root),
             "clean_checkout": {"engine": str(engine), "installed_editable": True, "doctor_ready": True, "documentation_audit_ready": True, "engine_status_clean": True},
             "project": {"root": str(project), "project_id": project_id, "workspace_id": workspace_id, "baseline_commit": baseline, "integration_commit": integration_commit, "closeout_path": str(closeout_doc), "final_status": final_stage.get("status"), "owner_stage_id": final_stage.get("owner_stage_id")},
-            "planning": {key: planning.get(key) for key in ("consultation_id", "conversation_id", "request_count", "packet_digest", "decision")},
+            "planning": {**{key: planning.get(key) for key in ("consultation_id", "conversation_id", "request_count", "packet_digest", "decision")}, "transport_recovery": planning_transport_recovery},
             "provider": {"provider_id": provider_view.get("provider_id"), "executor_request_id": provider_view.get("executor_request_id"), "actual_model": provider_view.get("actual_model"), "execution_profile": provider_view.get("execution_profile"), "reasoning_effort": provider_view.get("reasoning_effort"), "auth_mode": provider_view.get("auth_mode"), "status": provider_result.get("status"), "changed_files": provider_result.get("changed_files"), "tests": provider_result.get("tests"), "artifacts": str(artifact_dir)},
             "technical_review": {key: technical.get(key) for key in ("consultation_id", "conversation_id", "request_count", "packet_digest", "decision")},
             "gpt_review_pipeline": gpt_review_pipeline,
