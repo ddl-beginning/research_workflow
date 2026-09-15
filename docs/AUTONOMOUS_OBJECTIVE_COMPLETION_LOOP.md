@@ -755,11 +755,13 @@ not rewritten. Derived views expose only `BOUND_PROJECT`/`CONFIGURED` and a
 digest, never the full URL. No account, quota, rotation, or profile switching
 was added; authentication material remains machine-local.
 
-IMPLEMENTED_IN_COMMIT: f80eed1 (per-project ChatGPT browser target implementation and focused tests)
-TARGET_TEST_EVIDENCE: focused Python plan/runtime/bridge/discovery/blueprint suite 105 passed; Node bridge suite 122 passed; compileall, node --check, and git diff --check passed
-FULL_REGRESSION: 666 passed, 1 skipped, 2 deselected known historical self-test fixture failures
-PORTABLE_VALIDATION: PASS; destructive_actions=0; project_ab_isolation=YES; relocated_engine=YES; resume_idempotence=YES; frozen_kernel_unchanged=YES
+IMPLEMENTED_IN_COMMIT: aa8e477 (fixed Project Roadmap + self-contained Stage Card normalization, bounded structural analysis, and focused tests; per-project ChatGPT browser target implementation remains f80eed1)
+TARGET_TEST_EVIDENCE: focused Python plan/runtime/bridge/discovery/blueprint suite 108 passed; focused plan-ingestion suite 34 passed; Node bridge suite 122 passed; compileall, node --check, and git diff --check passed
+FULL_REGRESSION: 670 passed, 1 skipped, 2 deselected known historical self-test fixture failures
+PORTABLE_VALIDATION: PASS at D:/work/workflow-v2.1.5-portable-validation-20260915-r6.json; destructive_actions=0; project_ab_isolation=YES; relocated_engine=YES; resume_idempotence=YES; frozen_kernel_unchanged=YES
+CARD_STRUCTURE: PASS; fixed LEVEL 1 PROJECT ROADMAP and LEVEL 2 STAGE CARDS; eleven-section Stage cards; stable Task IDs; data maturity/GT/reference bindings; ordinary debug/coding steps remain Tasks; STAGE_SELF_CONTAINED_EXECUTION_READINESS=PASS
+DOCUMENTATION_AUDIT: PASS; writes_performed=NO
 CLEANROOM: FAIL_WITH_EXTERNAL_ATTACHMENT_LIMITATION; one post-implementation run at D:/work/workflow-v2.1.5-release-validation-20260915-r3.json stopped at ATTACHMENT_UPLOAD_FAILED before prompt; receipt request_count=0 with all 3 attachments failed; current product worktree writes=NO
-CURRENT_RELEASE_CANDIDATE: workflow-v2.1.5-release-candidate-r5 (documentation evidence tag)
+CURRENT_RELEASE_CANDIDATE: workflow-v2.1.5-release-candidate-r6
 CURRENT_STABLE_TAG: NOT_PROMOTED; workflow-v2.1.4-stable unchanged; stable promotion requires clean-room PASS
 KNOWN_LIMITATIONS: historical self-test fixture is missing .consultations/CONSULT-20260906-070055-bef2fdb6/receipt.json; external browser attachment readiness did not provide clean-room release evidence; no additional retry or Human technical relay was used
