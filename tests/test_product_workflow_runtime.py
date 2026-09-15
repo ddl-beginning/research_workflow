@@ -11,7 +11,7 @@ import pytest
 import src.product_workflow_runtime as product_runtime
 import src.workflow_mcp as workflow_mcp
 from src.openai_codex_executor import RuntimeSnapshot
-from src.product_workflow_runtime import ProductWorkflowRuntime, initialize_product_runtime
+from src.product_workflow_runtime import ProductWorkflowRuntime, _validate_transport_recovery, initialize_product_runtime
 from src.runtime_composition import RuntimeCompositionError, load_runtime_composition_config
 from src.stage_integration import StageIntegrationError
 from src.workflow_runtime import WorkflowRuntimeError
@@ -293,6 +293,35 @@ def test_bound_project_targets_are_isolated_and_each_review_is_fresh(
     assert [first_result["conversation_id"], second_result["conversation_id"]] == [
         "conversation-project-target-1", "conversation-project-target-2"
     ]
+
+
+def test_pre_prompt_attachment_upload_failure_can_be_recovered_once(tmp_path: Path) -> None:
+    receipt_path = tmp_path / ".consultations" / "failed" / "receipt.json"
+    receipt_path.parent.mkdir(parents=True)
+    receipt_path.write_text(json.dumps({
+        "status": "failed_before_prompt",
+        "request_count": 0,
+        "failure_code": "ATTACHMENT_UPLOAD_FAILED",
+        "conversation_id": None,
+        "conversation_validated": False,
+        "context_pack": {"packet_id": "packet-12345678", "pack_sha256": "pack-12345678"},
+        "attachments": [{"upload_status": "failed"}, {"upload_status": "failed"}],
+        "attachment_diagnostics": {"request_count": 0, "final_predicate": False},
+        "consultation_id": "consultation-12345678",
+    }), encoding="utf-8")
+    recovery = _validate_transport_recovery(
+        tmp_path,
+        {
+            "planning_revision": 1,
+            "stage_id": "stage-s1",
+            "receipt_path": ".consultations/failed/receipt.json",
+        },
+        input_digest="input-12345678",
+        stage_id="stage-s1",
+        planning_revision=1,
+    )
+    assert recovery["failure_code"] == "ATTACHMENT_UPLOAD_FAILED"
+    assert recovery["request_count"] == 0
 
 
 def test_clean_product_init_uses_mocked_native_runtime_and_persists_empty_v2_journal(

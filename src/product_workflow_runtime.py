@@ -165,8 +165,9 @@ def _validate_transport_recovery(root: Path, recovery: Any, *, input_digest: str
         raise WorkflowRuntimeError("TRANSPORT_RECOVERY_INVALID", "transport recovery receipt is not an object")
     if receipt.get("status") != "failed_before_prompt" or receipt.get("request_count") != 0:
         raise WorkflowRuntimeError("TRANSPORT_RECOVERY_INVALID", "transport recovery requires a pre-prompt failed receipt")
-    if receipt.get("failure_code") != "ATTACHMENT_NOT_READY":
-        raise WorkflowRuntimeError("TRANSPORT_RECOVERY_INVALID", "transport recovery only permits attachment readiness failures")
+    failure_code = receipt.get("failure_code")
+    if failure_code not in {"ATTACHMENT_NOT_READY", "ATTACHMENT_UPLOAD_FAILED"}:
+        raise WorkflowRuntimeError("TRANSPORT_RECOVERY_INVALID", "transport recovery only permits bounded attachment readiness failures")
     if receipt.get("conversation_id") is not None or receipt.get("conversation_validated") is not False:
         raise WorkflowRuntimeError("TRANSPORT_RECOVERY_INVALID", "transport recovery receipt has conversation effects")
     packet = receipt.get("context_pack")
@@ -177,11 +178,15 @@ def _validate_transport_recovery(root: Path, recovery: Any, *, input_digest: str
         isinstance(item, Mapping) and item.get("upload_status") == "failed" for item in attachments
     ):
         raise WorkflowRuntimeError("TRANSPORT_RECOVERY_INVALID", "transport recovery receipt lacks failed attachment evidence")
+    if failure_code == "ATTACHMENT_UPLOAD_FAILED":
+        diagnostics = receipt.get("attachment_diagnostics")
+        if not isinstance(diagnostics, Mapping) or diagnostics.get("request_count") != 0 or diagnostics.get("final_predicate") is not False:
+            raise WorkflowRuntimeError("TRANSPORT_RECOVERY_INVALID", "attachment upload failure lacks pre-prompt diagnostics")
     return {
         "consultation_id": receipt.get("consultation_id"),
         "receipt_path": str(receipt_path.relative_to(root)).replace("\\", "/"),
         "request_count": 0,
-        "failure_code": receipt.get("failure_code"),
+        "failure_code": failure_code,
         "packet_id": packet.get("packet_id"),
         "pack_sha256": packet.get("pack_sha256"),
         "input_digest": input_digest,
