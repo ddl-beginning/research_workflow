@@ -165,6 +165,7 @@ from .project_plan_ingestion import (
     REQUIREMENTS_RELATIVE_PATH,
     STAGE_PLAN_RELATIVE_PATH,
     WORKFLOW_PLAN_RELATIVE_PATH,
+    analyze_project_plan,
     detect_plan_sources,
     ensure_plan_intake,
     load_project_plan,

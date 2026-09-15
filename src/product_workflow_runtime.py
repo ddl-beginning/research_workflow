@@ -525,7 +525,7 @@ class ProductWorkflowRuntime:
                     "status", "requirements_loaded", "stage_plan_loaded", "workflow_plan_generated",
                     "current_state_generated", "registered_stage_ids", "stage_started", "plan_change",
                     "current_plan_source", "context_recovery_order", "stage_data_validation",
-                    "existing_project_evidence",
+                    "context_recovery_read_order", "existing_project_evidence", "plan_analysis",
                     "human_intervention_count",
                     "chatgpt_target_mode", "chatgpt_target_url_digest", "project_target_change",
                 )

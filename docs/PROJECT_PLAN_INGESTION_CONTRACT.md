@@ -36,9 +36,25 @@ plan/CURRENT_STATE.md
 ```
 
 `WORKFLOW_PLAN.md` is a normalized, executable view of the two user sources.
-It includes Project Goal, Stage ID, Stage Goal, Inputs, Datasets / paths,
-Tasks, Expected Outputs, Machine Acceptance, Human Acceptance, Human Gate
-Required, Dependencies, and Next Stage. It never overwrites either source.
+It has exactly two readable levels: `LEVEL 1 — PROJECT ROADMAP` with the
+Project Goal, Scope, and a fixed Stage Roadmap table, followed by `LEVEL 2 —
+STAGE CARDS`. Every card uses the same eleven sections: Goal, Why This Stage
+Exists, Entry Conditions, Inputs (Data and Prior Accepted Evidence), Work To
+Perform, Expected Outputs (Human-visible and Machine-readable), Machine
+Evaluation (Primary and Secondary), Human-visible Evidence, Pass Gate, Replan
+/ Stop Conditions, and On PASS. Tasks are rendered as bounded `T01`, `T02`, …
+actions inside the card; ordinary coding, debugging, helper changes, and
+single command retries are not promoted to Stages.
+
+The normalized card records each Stage's stable ID, data name/path/role/GT
+availability/reference type/data maturity, dependencies, expected evidence,
+Human Gate, and next Stage. A read-only structural plan analysis checks stable
+identity, dependency cycles, explicit data/output/gate/replan fields, and
+`STAGE_SELF_CONTAINED_EXECUTION_READINESS`. Technical defaults are marked as
+bounded normalization; they do not expand the product requirement or mutate
+either user source.
+
+`WORKFLOW_PLAN.md` never overwrites either source.
 
 `CURRENT_STATE.md` is a readable snapshot containing Current Stage, Current
 Status, Completed and Accepted Stages, Current Work and Progress, Current
@@ -56,6 +72,13 @@ StageController + journal + contracts.
 
 The journal and canonical projection win every conflict. A missing or stale
 `CURRENT_STATE.md` is regenerated; it is never used to mutate the journal.
+
+`CURRENT_STATE.md` is kept short and uses Project, Current Stage, Completed
+Stages, Current Work, Remaining Stages, and Plan Status sections. It is a
+derived snapshot only and always states `DERIVED HUMAN-READABLE SNAPSHOT` and
+the canonical authority boundary. Stage closeout and Human approval refresh it
+through the normal Workflow completion path before selecting the next legal
+planned Stage.
 
 ## Binding and Stage transitions
 

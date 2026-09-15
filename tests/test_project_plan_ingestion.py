@@ -326,6 +326,130 @@ def test_plan_sources_generate_workflow_plan(tmp_path: Path) -> None:
     assert "SOURCE_STAGE_SHA256:" in generated
 
 
+def test_workflow_plan_has_fixed_roadmap_and_self_contained_stage_cards(tmp_path: Path) -> None:
+    _write_plan(tmp_path)
+    result = sync_project_plan(tmp_path, controller=_controller(tmp_path))
+    generated = (tmp_path / WORKFLOW_PLAN_RELATIVE_PATH).read_text(encoding="utf-8")
+    assert result["plan_analysis"]["status"] == "PASS"
+    assert result["plan_analysis"]["stage_self_contained_execution_readiness"] == "PASS"
+    assert "LEVEL 1 — PROJECT ROADMAP" in generated
+    assert "## Stage Roadmap" in generated
+    assert "| Stage ID | Goal | Depends On | Data | Main Evidence | Human Gate | Next |" in generated
+    assert "LEVEL 2 — STAGE CARDS" in generated
+    assert "# Stage stage-s1 — Build" in generated
+    for section in (
+        "## 1. Goal", "## 2. Why This Stage Exists", "## 3. Entry Conditions",
+        "## 4. Inputs", "## 5. Work To Perform", "## 6. Expected Outputs",
+        "## 7. Machine Evaluation", "## 8. Human-visible Evidence", "## 9. Pass Gate",
+        "## 10. Replan / Stop Conditions", "## 11. On PASS",
+    ):
+        assert section in generated
+    assert "T01 — implement the result" in generated
+    assert "STAGE_SELF_CONTAINED_EXECUTION_READINESS: PASS" in generated
+
+
+def test_debug_steps_do_not_become_stages(tmp_path: Path) -> None:
+    _write_plan(tmp_path, stage_two=False)
+    (tmp_path / "plan" / "STAGE_PLAN.md").write_text(
+        """# Stage Plan
+
+## S1 - Build
+- Goal: build the bounded result
+- Tasks: produce the artifact
+
+### coding
+implement helper
+
+### debug
+retry parser
+
+## S2 - Verify
+- Goal: verify the result
+- Machine Acceptance: tests pass
+""",
+        encoding="utf-8",
+    )
+    plan = load_project_plan(tmp_path)
+    assert [item["source_stage_id"] for item in plan["stages"]] == ["S1", "S2"]
+    assert all("debug" not in item["title"].lower() for item in plan["stages"])
+
+
+def test_plan_without_an_independent_stage_fails_closed(tmp_path: Path) -> None:
+    _write_plan(tmp_path, stage_two=False)
+    (tmp_path / "plan" / "STAGE_PLAN.md").write_text(
+        """# Stage Plan
+
+## coding
+implement the helper
+
+## debug
+retry the parser
+""",
+        encoding="utf-8",
+    )
+    try:
+        load_project_plan(tmp_path)
+    except ProjectPlanIngestionError as exc:
+        assert exc.code == "PLAN_STAGES_NOT_FOUND"
+    else:
+        raise AssertionError("ordinary engineering steps were accepted as Stages")
+
+
+def test_stage_card_recovers_data_maturity_and_evaluation_boundaries(tmp_path: Path) -> None:
+    _write_plan(tmp_path, stage_two=False)
+    (tmp_path / "plan" / "STAGE_PLAN.md").write_text(
+        """# Stage Plan
+
+## S1 - Controlled validation
+- Goal: prove the method on synthetic analytical GT
+- Why This Stage Exists: establish a frozen reference before real data
+- Entry Conditions:
+  - project brief is approved
+- Dataset: synthetic_facade_s1
+- Path: D:/benchmarks/synthetic_facade/S1
+- Data Maturity: Synthetic + analytical GT
+- Role: controlled validation
+- GT Availability: analytical
+- Reference Type: analytical
+- Tasks:
+  - run accepted baseline
+  - evaluate against GT
+- Expected Outputs:
+  - prediction artifact
+  - evaluation report
+- Primary:
+  - boundary distance passes
+- Secondary:
+  - runtime is recorded
+- Human-visible Evidence:
+  - side-by-side evidence image
+- Pass Gate:
+  - primary metrics pass
+- Replan:
+  - representation fails structurally
+- Stop:
+  - private input is unavailable
+- Human Gate Required: YES
+- Next Stage: DONE
+""",
+        encoding="utf-8",
+    )
+    stage = load_project_plan(tmp_path)["stages"][0]
+    assert stage["stage_goal"] == "prove the method on synthetic analytical GT"
+    assert stage["data_maturity"] == "Synthetic + analytical GT"
+    assert stage["dataset_role"] == "controlled validation"
+    assert stage["gt_availability"] == "analytical"
+    assert stage["reference_type"] == "analytical"
+    assert stage["machine_evaluation_primary"] == ["boundary distance passes"]
+    assert stage["machine_evaluation_secondary"] == ["runtime is recorded"]
+    assert stage["human_visible_evidence"] == ["side-by-side evidence image"]
+    assert stage["pass_gate"] == ["primary metrics pass"]
+    assert stage["replan_conditions"] == ["representation fails structurally"]
+    assert stage["stop_conditions"] == ["private input is unavailable"]
+    assert stage["human_gate_required"] is True
+    assert stage["next_stage"] is None
+
+
 def test_plan_sources_generate_current_state(tmp_path: Path) -> None:
     _write_plan(tmp_path)
     controller = _controller(tmp_path)
