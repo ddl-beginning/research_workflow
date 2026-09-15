@@ -521,6 +521,48 @@ class ProductWorkflowRuntime:
         )
         return dict(stage), dict(assessment), dict(observation), dict(operation) if isinstance(operation, Mapping) else None
 
+    def _supplemental_provider_claim(self, observation: Mapping[str, Any]) -> dict[str, Any]:
+        """Read the latest provider receipt for ownership facts only.
+
+        The receipt is already referenced by immutable observation provenance.
+        It enriches the ownership audit; it never mutates canonical state.
+        """
+
+        candidates: list[str] = []
+        provenance = observation.get("provenance")
+        evidence = provenance.get("evidence") if isinstance(provenance, Mapping) else None
+        if isinstance(evidence, Mapping):
+            for key in ("receipt_path", "receipt_actual_path"):
+                value = evidence.get(key)
+                if isinstance(value, str) and value.strip():
+                    candidates.append(value)
+        attempt_files = sorted(
+            self.root.glob(".tmp/workflow_v2_s4_s7_provider_result_attempt_*.json"),
+            key=lambda path: path.stat().st_mtime if path.exists() else 0,
+            reverse=True,
+        )
+        candidates.extend(str(path.relative_to(self.root)).replace("\\", "/") for path in attempt_files[:4])
+        # Prefer the newest attempt-specific claim over the legacy aggregate
+        # file; otherwise an older BLOCKED marker can mask a later S4 run.
+        candidates.extend((
+            ".tmp/workflow_v2_s4_s7_provider_result.json",
+            ".tmp/workflow_v2_s4_s7_execution.json",
+        ))
+        for relative in candidates:
+            try:
+                path = _inside(self.root, relative)
+                value = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, json.JSONDecodeError, WorkflowRuntimeError):
+                continue
+            if not isinstance(value, Mapping):
+                continue
+            nested = value.get("provider_result")
+            if isinstance(nested, Mapping):
+                value = nested
+            if any(key in value for key in ("benchmark_inventory", "absent_required_capabilities", "s4_s7_extractors_present", "s4_s7_scene_assets_present")):
+                return copy.deepcopy(dict(value))
+        return {}
+
     def _rebind_latest_live_assessment(self, stage_id: str) -> dict[str, Any] | None:
         """Recover a cleared assessment projection without rewriting evidence."""
 
@@ -576,11 +618,14 @@ class ProductWorkflowRuntime:
         stage, assessment, observation, operation = context
         failure = observation.get("failure") if isinstance(observation.get("failure"), Mapping) else None
         missing_owner = assessment.get("missing_thing_owner") or observation.get("missing_thing_owner")
+        supplemental = self._supplemental_provider_claim(observation)
         derived = classify_blocker(
             assessment=assessment,
             observation=observation,
             failure=failure,
             missing_thing_owner=missing_owner,
+            stage=stage,
+            supplemental=supplemental,
             evidence_refs=[observation.get("evidence_manifest_digest")],
         )
         operation_id = operation.get("operation_id") if operation else derived.get("operation_id")
@@ -608,6 +653,8 @@ class ProductWorkflowRuntime:
             "missing_thing_owner": missing_owner,
             "operation_id": operation_id,
             "recommended_action": derived["recommended_action"],
+            "ownership_validation": derived["ownership_validation"],
+            "missing_items": [item["item"] for item in derived["ownership_validation"]["items"]],
         }
 
     def _auto_advance_continue_iteration(
@@ -675,11 +722,21 @@ class ProductWorkflowRuntime:
 
         return {
             key: copy.deepcopy(result.get(key))
-            for key in ("status", "summary", "changed_files", "tests", "problems_discovered", "execution_failure")
+            for key in (
+                "status", "summary", "changed_files", "tests", "problems_discovered", "execution_failure",
+                "stage_status", "s4_sensor_scanline_capability_present", "s4_generation_started",
+                "generated_inputs", "generated_evidence",
+            )
             if key in result
         }
 
-    def _maintenance_request(self, context: tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any] | None], *, suffix: str) -> dict[str, Any]:
+    def _maintenance_request(
+        self,
+        context: tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any] | None],
+        *,
+        suffix: str,
+        capability_creation: bool = False,
+    ) -> dict[str, Any]:
         stage, assessment, _observation, operation = context
         # The CONTINUE handoff may have opened a new iteration immediately
         # before this provider request.  Re-read the canonical stage so the
@@ -699,9 +756,21 @@ class ProductWorkflowRuntime:
         allowed_paths = request.get("allowed_paths")
         if not isinstance(allowed_paths, list) or not allowed_paths:
             allowed_paths = [required_path.split("/", 1)[0]]
+        if capability_creation:
+            allowed_paths = list(dict.fromkeys([*allowed_paths, ".tmp", "src", "configs", "tests"]))
         protected_paths = request.get("protected_paths")
         if not isinstance(protected_paths, list):
             protected_paths = [".git", ".workflow-v2", ".research", ".consultations"]
+        if capability_creation:
+            # The normal maintenance route protects implementation files.  A
+            # controller-authorized capability-creation route explicitly
+            # reopens only the bounded implementation roots it names above;
+            # workflow state, research metadata, benchmark data, and existing
+            # evidence remain protected.
+            protected_paths = [
+                path for path in protected_paths
+                if path not in {"src", "configs", "tests"}
+            ]
         request.update({
             "request_id": request_id,
             "task_id": request_id,
@@ -710,6 +779,10 @@ class ProductWorkflowRuntime:
             "objective": (
                 str(request.get("objective") or stage["target_identity"])
                 + " Resume only the bounded stage-owned generation or evidence-producing route needed by the current objective."
+                + (
+                    " CONTROLLER-AUTHORIZED CAPABILITY-CREATION OVERRIDE: for this maintenance attempt, the prior no-source-modification restriction is superseded only for src, configs, tests, and .tmp. Implement the missing bounded S4 capability and its focused tests there; keep all other protected paths unchanged."
+                    if capability_creation else ""
+                )
             ),
             "iteration_index": int(iteration.get("index", 1)),
             "attempt_index": attempt_index,
@@ -721,14 +794,22 @@ class ProductWorkflowRuntime:
                 "schema_version": "action_map.v1",
                 "validated": True,
                 "execute": True,
-                "actions": ["bounded_stage_owned_recovery"],
+                "actions": ["bounded_stage_owned_recovery", "bounded_stage_owned_capability_creation"] if capability_creation else ["bounded_stage_owned_recovery"],
                 "authority": "WORKFLOW_CONTROLLER",
             },
             "maintenance_recovery": True,
             "maintenance_instruction": (
-                "If a required stage-owned generated input or artifact is absent, start its bounded generation within the declared allowed scope and record only a generation-start/result marker. "
-                "Do not modify source, configuration, tests, benchmark, workflow state, or existing evidence. Do not infer scientific success from a marker."
+                "If a required stage-owned generated input or artifact is absent, start its bounded generation within the declared allowed scope and record a generation-start/result marker. "
+                + (
+                    "The ownership audit found a provider-implementable S4 capability gap. Implement the smallest deterministic S4 SENSOR_SCANLINE_SINGLE_WALL synthetic scene/generator/extractor/evaluator route needed by the current objective, add focused tests, and write the required receipt. "
+                    "If the S4 capability is already present from an earlier attempt, execute that route now and persist a bounded S4 generation/evidence marker under .tmp; set s4_generation_started=true only after the generator has actually run, and list generated_inputs/generated_evidence explicitly. "
+                    "Source/config/test edits are permitted only under src, configs, tests, and .tmp; never modify .workflow-v2, .research, .consultations, or unrelated evidence. "
+                    if capability_creation else
+                    "Do not modify source, configuration, tests, benchmark, workflow state, or existing evidence. "
+                )
+                + "Do not infer scientific success from a marker."
             ),
+            "capability_creation": capability_creation,
         })
         return request
 
@@ -746,14 +827,21 @@ class ProductWorkflowRuntime:
             artifact_dir=self.config.artifact_dir,
         )
 
-    def _execute_maintenance_provider(self, context: tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any] | None], *, reason: str, suffix: str) -> dict[str, Any]:
+    def _execute_maintenance_provider(
+        self,
+        context: tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any] | None],
+        *,
+        reason: str,
+        suffix: str,
+        capability_creation: bool = False,
+    ) -> dict[str, Any]:
         stage, _assessment, _observation, _operation = context
-        request = self._maintenance_request(context, suffix=suffix)
+        request = self._maintenance_request(context, suffix=suffix, capability_creation=capability_creation)
         submitted = self.controller.request_execution(
             stage["stage_id"], request=request, reason=reason,
             request_id=request["request_id"], attempt_id="attempt-maintenance-" + suffix,
             operation_id="operation-maintenance-" + suffix,
-            purpose=stage["purpose"],
+            purpose=("INFRASTRUCTURE_REPAIR" if reason == "MAINTENANCE_OWNERSHIP_RECOVERY" else stage["purpose"]),
             provenance={"provider": "openai-codex", "engine_digest": "engine-v2.1.3-maintenance"},
             command_id="command-maintenance-execution-" + suffix,
         )
@@ -811,6 +899,17 @@ class ProductWorkflowRuntime:
         required_path = request["required_changed_path"].replace("\\", "/")
         raw_changed = result_payload.get("changed_files", [])
         changed = [str(item).replace("\\", "/") for item in raw_changed if isinstance(item, str)] if isinstance(raw_changed, list) else []
+        # Receipt-backed native Codex execution reports the complete git-status
+        # inventory in ``changed_files``.  That inventory includes pre-existing
+        # supervisor-owned operational state and is not a provider diff.  Use
+        # the executor's explicit turn delta for scope admission; the required
+        # receipt is added below as the runner-owned output.
+        measurements = result_payload.get("measurements")
+        codex_measurements = measurements.get("openai_codex") if isinstance(measurements, Mapping) else None
+        if request.get("execution_receipt_path") and isinstance(codex_measurements, Mapping):
+            turn_changed = codex_measurements.get("newly_changed_files")
+            if isinstance(turn_changed, list):
+                changed = [str(item).replace("\\", "/") for item in turn_changed if isinstance(item, str)]
         allowed = [str(item).replace("\\", "/").rstrip("/") for item in request["allowed_paths"]]
         scope_violation = [path for path in changed if not any(path == scope or path.startswith(scope + "/") for scope in allowed)]
         changed = [path for path in changed if path not in scope_violation]
@@ -864,6 +963,15 @@ class ProductWorkflowRuntime:
         observed = self.controller.record_observation(
             stage["stage_id"], observation, effect_state="SETTLED", command_id="command-maintenance-observation-" + suffix,
         )
+        provider_claim = self._supplemental_provider_claim(observation)
+        generated_inputs = provider_claim.get("generated_inputs")
+        generated_evidence = provider_claim.get("generated_evidence")
+        s4_generation_started = bool(
+            provider_claim.get("s4_generation_started") is True
+            or (isinstance(generated_inputs, list) and bool(generated_inputs))
+            or (isinstance(generated_evidence, list) and bool(generated_evidence))
+        )
+        capability_claimed = provider_claim.get("s4_sensor_scanline_capability_present") is True
         checked_assessment = assess_observation(
             observation, manifest, baseline_digest=stage["baseline_digest"],
             validator_code_digest=_assessment.get("validator_code_digest") if isinstance(_assessment, Mapping) else "validator-maintenance-v213",
@@ -876,7 +984,17 @@ class ProductWorkflowRuntime:
             "provider_result": self._bounded_result(result_payload), "observation": observed.get("observation", observation),
             "assessment": assessed.get("assessment", checked_assessment), "manifest": manifest,
             "provider_id": provider_id, "scope_violation": scope_violation,
+            # ``generation_started`` is the legacy maintenance receipt marker
+            # kept for generic callers.  The S4-specific field below is the
+            # scientific-route signal and is never inferred from receipt
+            # existence alone.
             "generation_started": bool(required_file.is_file()),
+            "s4_generation_started": s4_generation_started,
+            "capability_creation_started": bool(capability_creation and (
+                capability_claimed
+                or any(path.startswith(("src/", "configs/", "tests/")) for path in changed)
+            )),
+            "provider_capability_claim": provider_claim,
         }
 
     def _technical_review_decision(self, context: tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any] | None], blocker: Mapping[str, Any], *, terminal_budget_review: bool = False) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -941,8 +1059,13 @@ class ProductWorkflowRuntime:
             "accepted_baseline": stage.get("baseline_digest"),
         }
         terminal_instruction = (
-            "The controller has exhausted the authorized attempt budget and rejected the proposed provider route. "
-            "This is a terminal technical review: return exactly BLOCKED or HUMAN_GATE. Do not return CONTINUE, REPLAN, or STAGE_READY. "
+            "The controller has exhausted the current bounded attempt scope. "
+            + (
+                "Ownership evidence shows Stage-owned or provider/GPT-designable work remains; BLOCKED is forbidden. Return CONTINUE or REPLAN with the smallest legal bounded recovery route. "
+                if blocker.get("ownership_validation", {}).get("authorized_alternative_available")
+                else
+                "This is a terminal technical review: return exactly BLOCKED or HUMAN_GATE. Do not return CONTINUE, REPLAN, or STAGE_READY. "
+            )
             if terminal_budget_review else ""
         )
         prompt = (
@@ -986,25 +1109,68 @@ class ProductWorkflowRuntime:
         )
         budget = self.controller.attempt_budget_status(stage["stage_id"])
         suffix = sha256_json({"blocker": blocker["blocker_id"], "revision": self.controller.revision})[:32]
-        maintenance: dict[str, Any] = {"blocker_classification": blocker, "human_intervention_count": 0, **(dict(inherited) if isinstance(inherited, Mapping) else {})}
-        if action == "WORK_REMAINING" and not budget.get("per_iteration_exhausted") and not budget.get("total_exhausted"):
-            revalidated = None
-            if preserved_blocked:
+        maintenance: dict[str, Any] = {
+            "blocker_classification": blocker,
+            "blocker_ownership": blocker.get("ownership_validation"),
+            "human_intervention_count": 0,
+            **(dict(inherited) if isinstance(inherited, Mapping) else {}),
+        }
+        revalidated = None
+        ownership = blocker.get("ownership_validation", {})
+        automated_ownership_route = bool(
+            isinstance(ownership, Mapping)
+            and ownership.get("authorized_alternative_available") is True
+            and ownership.get("human_only_input_found") is not True
+        )
+        if preserved_blocked and automated_ownership_route:
+            current_attempt_id = self.controller.state.get("stage_runtime", {}).get(stage["stage_id"], {}).get("current_attempt_id")
+            if isinstance(current_attempt_id, str) and current_attempt_id:
                 revalidated = self.controller.revalidate_blocker(
                     stage["stage_id"], blocker_record=blocker, blocker_still_true="NO",
-                    released_attempt_id=self.controller.state["stage_runtime"][stage["stage_id"]].get("current_attempt_id"),
+                    released_attempt_id=current_attempt_id,
+                    reason="MISCLASSIFIED_STAGE_OWNED_WORK",
                     revalidation_id="blocker-revalidation-" + suffix,
                     command_id="command-maintenance-revalidate-" + suffix,
                 )
+                budget = self.controller.attempt_budget_status(stage["stage_id"])
+                maintenance["ownership_revalidation"] = {
+                    "status": "PASS",
+                    "reason": "MISCLASSIFIED_STAGE_OWNED_WORK",
+                    "old_blocker_preserved": True,
+                    "old_blocker_controls_current_state": False,
+                }
+        capability_creation = bool(
+            isinstance(ownership, Mapping)
+            and (
+                ownership.get("stage_owned_work_available") is True
+                or ownership.get("provider_implementable_route_available") is True
+                or ownership.get("gpt_designable_route_available") is True
+            )
+        )
+        ownership_maintenance_route = bool(
+            capability_creation
+            and automated_ownership_route
+            and self.controller.maintenance_recovery_available(stage["stage_id"])
+        )
+        budgeted_provider_route = not budget.get("per_iteration_exhausted") and not budget.get("total_exhausted")
+        if action == "WORK_REMAINING" and (budgeted_provider_route or ownership_maintenance_route):
+            execution_reason = (
+                "MAINTENANCE_OWNERSHIP_RECOVERY"
+                if ownership_maintenance_route and not budgeted_provider_route
+                else "CONTINUE"
+            )
             executed = self._execute_maintenance_provider(
-                context, reason="CONTINUE", suffix=suffix,
+                context, reason=execution_reason, suffix=suffix, capability_creation=capability_creation,
             )
             maintenance.update({
-                "resume_blocker_revalidation": revalidated.get("revalidation"),
-                "technical_recovery": {"status": "PASS", "route": "WORK_REMAINING", "provider": executed["provider_id"]},
+                "resume_blocker_revalidation": revalidated.get("revalidation") if revalidated else None,
+                "technical_recovery": {"status": "PASS", "route": "OWNERSHIP_MAINTENANCE_RECOVERY" if execution_reason == "MAINTENANCE_OWNERSHIP_RECOVERY" else "WORK_REMAINING", "provider": executed["provider_id"]},
                 "provider_execution": executed,
                 "stage_owned_output_missing": True,
                 "generation_started": executed["generation_started"],
+                "s4_generation_started": executed.get("s4_generation_started", False),
+                "capability_creation_started": executed.get("capability_creation_started", False),
+                "ownership_maintenance_route": execution_reason == "MAINTENANCE_OWNERSHIP_RECOVERY",
                 "gpt_technical_escalation": {"status": "NOT_REQUIRED", "reason": "stage-owned work remains"},
             })
             return self._view(**maintenance)
@@ -1012,14 +1178,15 @@ class ProductWorkflowRuntime:
         consulted, decision = self._technical_review_decision(context, blocker, terminal_budget_review=terminal_budget_review)
         choice = consulted["decision"]
         if choice in {"CONTINUE", "REPLAN", "STAGE_READY"}:
-            revalidated = None
             if preserved_blocked and choice != "STAGE_READY":
-                revalidated = self.controller.revalidate_blocker(
-                    stage["stage_id"], blocker_record=blocker, blocker_still_true="NO",
-                    released_attempt_id=self.controller.state["stage_runtime"][stage["stage_id"]].get("current_attempt_id"),
-                    revalidation_id="blocker-revalidation-" + suffix,
-                    command_id="command-maintenance-revalidate-" + suffix,
-                )
+                if revalidated is None:
+                    revalidated = self.controller.revalidate_blocker(
+                        stage["stage_id"], blocker_record=blocker, blocker_still_true="NO",
+                        released_attempt_id=self.controller.state["stage_runtime"][stage["stage_id"]].get("current_attempt_id"),
+                        reason="GPT_TECHNICAL_ROUTE_REVALIDATION",
+                        revalidation_id="blocker-revalidation-" + suffix,
+                        command_id="command-maintenance-revalidate-" + suffix,
+                    )
             apply_kwargs: dict[str, Any] = {}
             if choice == "REPLAN":
                 apply_kwargs.update({"replan_subtype": "ENGINEERING_FIX", "technical_change_digest": "change-" + blocker["failure_signature"]})
@@ -1051,7 +1218,12 @@ class ProductWorkflowRuntime:
             executed = None
             if choice != "STAGE_READY":
                 try:
-                    executed = self._execute_maintenance_provider(context, reason="ENGINEERING_FIX" if choice == "REPLAN" else "CONTINUE", suffix=suffix)
+                    executed = self._execute_maintenance_provider(
+                        context,
+                        reason="ENGINEERING_FIX" if choice == "REPLAN" else "CONTINUE",
+                        suffix=suffix,
+                        capability_creation=capability_creation,
+                    )
                 except (WorkflowRuntimeError, WorkflowV2ControllerError) as exc:
                     # A technical review may be valid while the bounded attempt
                     # budget is already exhausted.  Keep the applied decision and
@@ -1064,6 +1236,8 @@ class ProductWorkflowRuntime:
                 "gpt_decision_applied": applied.get("decision"), "provider_execution": executed,
                 "technical_recovery": {"status": "PASS", "route": choice},
                 "generation_started": executed["generation_started"] if executed else False,
+                "s4_generation_started": executed.get("s4_generation_started", False) if executed else False,
+                "capability_creation_started": executed.get("capability_creation_started", False) if executed else False,
                 "auto_next_iteration": bool(applied.get("auto_next_iteration")),
                 "new_iteration_started": bool(applied.get("auto_next_iteration")),
                 "iteration_transition": {
@@ -1072,13 +1246,14 @@ class ProductWorkflowRuntime:
                 } if applied.get("auto_next_iteration") else None,
             })
             return self._view(**maintenance)
-        revalidated = None
         if preserved_blocked:
-            revalidated = self.controller.revalidate_blocker(
-                stage["stage_id"], blocker_record=blocker, blocker_still_true="YES",
-                revalidation_id="blocker-revalidation-" + suffix,
-                command_id="command-maintenance-revalidate-" + suffix,
-            )
+            if revalidated is None:
+                revalidated = self.controller.revalidate_blocker(
+                    stage["stage_id"], blocker_record=blocker, blocker_still_true="YES",
+                    reason="GPT_TECHNICAL_REVIEW_PENDING",
+                    revalidation_id="blocker-revalidation-" + suffix,
+                    command_id="command-maintenance-revalidate-" + suffix,
+                )
         if choice == "HUMAN_GATE":
             # The bridge returns only the closed decision marker.  Without the
             # required explanation fields it is not legal to emit a gate.
@@ -1087,6 +1262,8 @@ class ProductWorkflowRuntime:
             blocked_validation = {
                 "blocker_still_true": "YES", "auto_recovery_exhausted": True,
                 "gpt_technical_escalation_completed": True, "no_legal_automated_next_action": True,
+                "blocker_id": blocker["blocker_id"],
+                "ownership_validation": blocker["ownership_validation"],
             }
             applied = self.controller.apply_gpt_decision(
                 stage["stage_id"], decision, choice="BLOCKED", strict_blocked_validation=True,
@@ -1111,6 +1288,7 @@ class ProductWorkflowRuntime:
             "legacy_resolution", "old_operation_preserved", "old_operation_redispatched", "side_effect_audit", "self_repair",
             "blocker_classification", "resume_blocker_revalidation", "technical_recovery", "technical_gpt_escalation",
             "gpt_decision_applied", "provider_execution", "stage_owned_output_missing", "generation_started",
+            "capability_creation_started", "s4_generation_started", "ownership_revalidation", "ownership_maintenance_route",
             "blocked_validation", "human_intervention_count", "provider_execution_error", "auto_next_iteration",
             "new_iteration_started", "iteration_transition",
             "budget_route_rejected",
@@ -1219,6 +1397,7 @@ class ProductWorkflowRuntime:
                         "provider_execution": executed,
                         "technical_recovery": {"status": "PASS", "route": "CONTINUE", "provider": executed["provider_id"]},
                         "generation_started": executed["generation_started"],
+                        "s4_generation_started": executed.get("s4_generation_started", False),
                         "human_intervention_count": 0,
                     })
                     supervisor_steps.append({"index": step_index + 1, "action": "ADVANCE_ITERATION", "status": "PASS"})

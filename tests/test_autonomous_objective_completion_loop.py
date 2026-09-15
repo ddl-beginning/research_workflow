@@ -131,10 +131,23 @@ def test_unvalidated_blocked_decision_is_not_genuine_blocked_termination():
             "auto_recovery_exhausted": True,
             "gpt_technical_escalation_completed": True,
             "no_legal_automated_next_action": True,
+            "ownership_validation": {
+                "schema_version": "blocker_ownership.v1",
+                "items": [{
+                    "item": "private input", "class": "HUMAN_ONLY_PRIVATE_INPUT", "owner": "Human",
+                    "expected_producer": "Human", "can_codex_create": False, "can_gpt_design_route": False,
+                    "can_workflow_obtain": False, "requires_human": True, "why": "private input is unavailable",
+                    "evidence_refs": ["evidence-loop-12345678"],
+                }],
+                "stage_owned_work_available": False, "provider_implementable_route_available": False,
+                "gpt_designable_route_available": False, "canonical_lifecycle_route_available": False,
+                "authorized_alternative_available": False, "human_only_input_found": True,
+                "blocker_ownership_validated": True, "genuine_blocked_valid": True,
+                "validated_at": "2026-09-15T00:00:00+00:00", "human_intervention_count": 0,
+            },
         },
         command_id="command-loop-strict-blocked-apply-12345678",
     )
     validation = controller.validate_termination("stage-maintenance-12345678")
     assert validation["allowed"] is True
     assert validation["reason"] == "GENUINE_BLOCKED"
-

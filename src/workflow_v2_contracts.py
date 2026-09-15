@@ -72,6 +72,17 @@ BLOCKER_RECOVERABILITIES = (
     "HUMAN_REQUIRED",
     "EXTERNAL_UNAVAILABLE",
 )
+BLOCKER_OWNERSHIP_CLASSES = (
+    "STAGE_OWNED_WORK",
+    "WORKFLOW_ENGINE_OWNED",
+    "PROVIDER_IMPLEMENTABLE",
+    "GPT_DESIGNABLE",
+    "PUBLIC_OR_AUTOMATICALLY_OBTAINABLE_EXTERNAL",
+    "HUMAN_ONLY_PRIVATE_INPUT",
+    "IRREVERSIBLE_HUMAN_AUTHORIZATION",
+    "TRUE_EXTERNAL_UNAVAILABLE",
+    "UNKNOWN",
+)
 BLOCKER_STILL_TRUE = ("YES", "NO", "UNKNOWN")
 EFFECT_STATES = (
     "INTENT_COMMITTED",
@@ -406,12 +417,252 @@ def derive_failure_signature(
     return "failure-" + sha256_json(body)
 
 
+def validate_blocker_ownership(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate ownership proof before a blocker may authorize termination."""
+
+    evidence = _mapping(value, "ownership_validation")
+    for field in (
+        "schema_version", "items", "stage_owned_work_available",
+        "provider_implementable_route_available", "gpt_designable_route_available",
+        "canonical_lifecycle_route_available", "authorized_alternative_available",
+        "human_only_input_found", "blocker_ownership_validated",
+        "genuine_blocked_valid", "validated_at", "human_intervention_count",
+    ):
+        if field not in evidence:
+            _fail("ownership_validation", f"missing {field}")
+    if evidence["schema_version"] != "blocker_ownership.v1":
+        _fail("ownership_validation.schema_version", "must be blocker_ownership.v1")
+    items = _list(evidence["items"], "ownership_validation.items", minimum=1)
+    for index, item in enumerate(items):
+        item = _mapping(item, f"ownership_validation.items[{index}]")
+        for field in (
+            "item", "class", "owner", "expected_producer", "can_codex_create",
+            "can_gpt_design_route", "can_workflow_obtain", "requires_human", "why",
+            "evidence_refs",
+        ):
+            if field not in item:
+                _fail(f"ownership_validation.items[{index}]", f"missing {field}")
+        _text(item["item"], f"ownership_validation.items[{index}].item")
+        _one_of(item["class"], f"ownership_validation.items[{index}].class", BLOCKER_OWNERSHIP_CLASSES)
+        _text(item["owner"], f"ownership_validation.items[{index}].owner")
+        _text(item["expected_producer"], f"ownership_validation.items[{index}].expected_producer")
+        _bool(item["can_codex_create"], f"ownership_validation.items[{index}].can_codex_create")
+        _bool(item["can_gpt_design_route"], f"ownership_validation.items[{index}].can_gpt_design_route")
+        _bool(item["can_workflow_obtain"], f"ownership_validation.items[{index}].can_workflow_obtain")
+        _bool(item["requires_human"], f"ownership_validation.items[{index}].requires_human")
+        _text(item["why"], f"ownership_validation.items[{index}].why")
+        refs = _list(item["evidence_refs"], f"ownership_validation.items[{index}].evidence_refs", minimum=1)
+        for ref_index, ref in enumerate(refs):
+            _text(ref, f"ownership_validation.items[{index}].evidence_refs[{ref_index}]")
+    for field in (
+        "stage_owned_work_available", "provider_implementable_route_available",
+        "gpt_designable_route_available", "canonical_lifecycle_route_available",
+        "authorized_alternative_available", "human_only_input_found",
+        "blocker_ownership_validated", "genuine_blocked_valid",
+    ):
+        _bool(evidence[field], f"ownership_validation.{field}")
+    _text(evidence["validated_at"], "ownership_validation.validated_at")
+    _int(evidence["human_intervention_count"], "ownership_validation.human_intervention_count", minimum=0)
+    if any(item.get("class") == "UNKNOWN" for item in items):
+        if evidence["blocker_ownership_validated"] or evidence["genuine_blocked_valid"]:
+            _fail("ownership_validation", "UNKNOWN ownership cannot be validated or genuine blocked")
+    automated = any(
+        item["can_codex_create"] or item["can_gpt_design_route"] or item["can_workflow_obtain"]
+        for item in items
+    )
+    if evidence["genuine_blocked_valid"] and (automated or evidence["authorized_alternative_available"]):
+        _fail("ownership_validation.genuine_blocked_valid", "automated or authorized alternatives remain")
+    if evidence["genuine_blocked_valid"] and not evidence["human_only_input_found"] and not any(
+        item["class"] in {"TRUE_EXTERNAL_UNAVAILABLE", "IRREVERSIBLE_HUMAN_AUTHORIZATION"} for item in items
+    ):
+        _fail("ownership_validation.genuine_blocked_valid", "no Human-only or true external reason is proven")
+    return evidence
+
+
+def classify_blocker_ownership(
+    *,
+    assessment: Mapping[str, Any],
+    observation: Mapping[str, Any] | None = None,
+    stage: Mapping[str, Any] | None = None,
+    missing_thing_owner: str | None = None,
+    supplemental: Mapping[str, Any] | None = None,
+    evidence_refs: Sequence[str] = (),
+) -> dict[str, Any]:
+    """Derive a bounded, explicit owner for every observable missing item."""
+
+    checked_assessment = validate_stage_assessment(assessment)
+    observation = observation if isinstance(observation, Mapping) else {}
+    stage = stage if isinstance(stage, Mapping) else {}
+    supplemental = supplemental if isinstance(supplemental, Mapping) else {}
+    refs = [str(item) for item in evidence_refs if isinstance(item, str) and item.strip()]
+    if not refs:
+        refs = ["evidence-" + sha256_json({"assessment_id": checked_assessment["assessment_id"]})]
+    explicit_owner = str(missing_thing_owner or "").strip().upper()
+    items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def add(
+        item: str,
+        klass: str,
+        owner: str,
+        expected_producer: str,
+        *,
+        can_codex: bool,
+        can_gpt: bool,
+        can_workflow: bool,
+        requires_human: bool,
+        why: str,
+    ) -> None:
+        label = str(item).strip()
+        if not label or label in seen:
+            return
+        seen.add(label)
+        items.append({
+            "item": label,
+            "class": klass,
+            "owner": owner,
+            "expected_producer": expected_producer,
+            "can_codex_create": can_codex,
+            "can_gpt_design_route": can_gpt,
+            "can_workflow_obtain": can_workflow,
+            "requires_human": requires_human,
+            "why": why,
+            "evidence_refs": list(refs),
+        })
+
+    if explicit_owner in {"EXTERNAL", "EXTERNAL_SYSTEM", "USER", "HUMAN"}:
+        klass = "HUMAN_ONLY_PRIVATE_INPUT" if explicit_owner in {"USER", "HUMAN"} else "TRUE_EXTERNAL_UNAVAILABLE"
+        add(
+            "explicitly declared external/private input",
+            klass,
+            explicit_owner,
+            "Human or unavailable external system",
+            can_codex=False, can_gpt=False, can_workflow=False,
+            requires_human=klass == "HUMAN_ONLY_PRIVATE_INPUT",
+            why="the current evidence explicitly assigns ownership outside the autonomous workspace",
+        )
+    else:
+        checks = checked_assessment.get("checks", {})
+        outputs = observation.get("outputs", {})
+        required_paths = outputs.get("required_artifact_paths", []) if isinstance(outputs, Mapping) else []
+        if isinstance(required_paths, list):
+            for path in required_paths:
+                if isinstance(path, str) and path.strip():
+                    add(
+                        path,
+                        "STAGE_OWNED_WORK",
+                        "Stage",
+                        "Provider through the current Stage-owned execution route",
+                        can_codex=True, can_gpt=True, can_workflow=False,
+                        requires_human=False,
+                        why="the required output is declared by the current Stage execution contract",
+                    )
+        if isinstance(checks, Mapping) and any(
+            token in str(value).upper() for value in checks.values() for token in ("MISSING", "CAPABILITY")
+        ):
+            add(
+                "required Stage-owned artifact or input",
+                "STAGE_OWNED_WORK",
+                "Stage",
+                "Provider through bounded Stage execution",
+                can_codex=True, can_gpt=True, can_workflow=False,
+                requires_human=False,
+                why="the assessment marks a missing output without proving private or external ownership",
+            )
+
+        claim = observation.get("raw_provider_claim")
+        if not isinstance(claim, Mapping):
+            claim = {}
+        merged_claim = {**dict(claim), **dict(supplemental)}
+        inventory = merged_claim.get("benchmark_inventory")
+        if isinstance(inventory, Mapping):
+            missing_scenes = inventory.get("missing_required_scenes", [])
+            if isinstance(missing_scenes, list):
+                for scene in missing_scenes:
+                    if isinstance(scene, str) and scene.strip():
+                        add(
+                            f"{scene.strip()} synthetic scene",
+                            "STAGE_OWNED_WORK",
+                            "Stage",
+                            "Provider/Codex bounded scene generator",
+                            can_codex=True, can_gpt=True, can_workflow=False,
+                            requires_human=False,
+                            why="the current Stage objective requires the missing synthetic scene as generated evidence",
+                        )
+            missing_capabilities = inventory.get("absent_required_capabilities", [])
+            if isinstance(missing_capabilities, list):
+                for capability in missing_capabilities:
+                    if isinstance(capability, str) and capability.strip():
+                        add(
+                            capability.strip(),
+                            "PROVIDER_IMPLEMENTABLE",
+                            "Provider/Codex",
+                            "Provider/Codex implementation under bounded Stage scope",
+                            can_codex=True, can_gpt=True, can_workflow=False,
+                            requires_human=False,
+                            why="the capability is a technical implementation seam, not a private input",
+                        )
+        if merged_claim.get("s4_s7_scene_assets_present") is False:
+            add(
+                "S4-S7 scene assets",
+                "STAGE_OWNED_WORK",
+                "Stage",
+                "Provider/Codex bounded synthetic-scene generator",
+                can_codex=True, can_gpt=True, can_workflow=False,
+                requires_human=False,
+                why="the provider explicitly reports that the current Stage-owned synthetic assets are absent",
+            )
+        if merged_claim.get("s4_s7_extractors_present") is False:
+            add(
+                "S4-S7 extractor/evaluator capability",
+                "PROVIDER_IMPLEMENTABLE",
+                "Provider/Codex",
+                "Provider/Codex implementation with GPT technical design",
+                can_codex=True, can_gpt=True, can_workflow=False,
+                requires_human=False,
+                why="the provider explicitly reports an absent technical extractor/evaluator, which is implementable in the repository",
+            )
+
+    if not items:
+        add(
+            "unclassified blocker item",
+            "UNKNOWN",
+            "Unknown",
+            "Requires automatic GPT technical ownership review",
+            can_codex=False, can_gpt=False, can_workflow=False,
+            requires_human=False,
+            why="the immutable evidence does not identify the missing item or its owner",
+        )
+    stage_owned = any(item["class"] == "STAGE_OWNED_WORK" for item in items)
+    provider = any(item["class"] == "PROVIDER_IMPLEMENTABLE" for item in items)
+    gpt = any(item["class"] == "GPT_DESIGNABLE" or item["can_gpt_design_route"] for item in items)
+    human_only = any(item["class"] in {"HUMAN_ONLY_PRIVATE_INPUT", "IRREVERSIBLE_HUMAN_AUTHORIZATION"} for item in items)
+    automated = any(item["can_codex_create"] or item["can_gpt_design_route"] or item["can_workflow_obtain"] for item in items)
+    ownership = {
+        "schema_version": "blocker_ownership.v1",
+        "items": items,
+        "stage_owned_work_available": stage_owned,
+        "provider_implementable_route_available": provider,
+        "gpt_designable_route_available": gpt,
+        "canonical_lifecycle_route_available": False,
+        "authorized_alternative_available": automated,
+        "human_only_input_found": human_only,
+        "blocker_ownership_validated": not any(item["class"] == "UNKNOWN" for item in items),
+        "genuine_blocked_valid": bool(not automated and (human_only or any(item["class"] in {"TRUE_EXTERNAL_UNAVAILABLE", "IRREVERSIBLE_HUMAN_AUTHORIZATION"} for item in items))),
+        "validated_at": "derived",
+        "human_intervention_count": 0,
+    }
+    return validate_blocker_ownership(ownership)
+
+
 def classify_blocker(
     *,
     assessment: Mapping[str, Any],
     observation: Mapping[str, Any] | None = None,
     failure: Mapping[str, Any] | None = None,
     missing_thing_owner: str | None = None,
+    stage: Mapping[str, Any] | None = None,
+    supplemental: Mapping[str, Any] | None = None,
     evidence_refs: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Classify one rejected/insufficient result without choosing a route.
@@ -440,8 +691,21 @@ def classify_blocker(
         refs = ["evidence-" + sha256_json({"assessment_id": checked_assessment["assessment_id"]})]
     refs = list(dict.fromkeys(refs))
 
+    ownership = classify_blocker_ownership(
+        assessment=checked_assessment,
+        observation=observation,
+        stage=stage,
+        missing_thing_owner=missing_thing_owner,
+        supplemental=supplemental,
+        evidence_refs=refs,
+    )
+
     normalized_checks = " ".join(str(value).upper() for value in checks.values())
-    stage_owned_missing = "MISSING" in normalized_checks or "CAPABILITY" in normalized_checks
+    stage_owned_missing = bool(
+        ownership["stage_owned_work_available"]
+        or ownership["provider_implementable_route_available"]
+        or ownership["gpt_designable_route_available"]
+    )
     if owner in {"EXTERNAL", "EXTERNAL_SYSTEM", "USER", "HUMAN"}:
         failure_class = "EXTERNAL_BLOCKER"
         recoverability = "EXTERNAL_UNAVAILABLE"
@@ -508,6 +772,7 @@ def classify_blocker(
         "objective_identity": objective_identity,
         "operation_id": operation_id,
         "assessment_id": checked_assessment["assessment_id"],
+        "ownership_validation": ownership,
     }
 
 
@@ -541,6 +806,8 @@ def validate_blocker_record(value: Mapping[str, Any]) -> dict[str, Any]:
         _digest(record["assessment_id"], "assessment_id")
     if record.get("missing_thing_owner") is not None:
         _text(record["missing_thing_owner"], "missing_thing_owner")
+    if record.get("ownership_validation") is not None:
+        validate_blocker_ownership(record["ownership_validation"])
     return record
 
 
@@ -572,7 +839,11 @@ def validate_human_gate(value: Mapping[str, Any]) -> dict[str, Any]:
     return gate
 
 
-def validate_genuine_blocked_evidence(value: Mapping[str, Any]) -> dict[str, Any]:
+def validate_genuine_blocked_evidence(
+    value: Mapping[str, Any],
+    *,
+    require_ownership: bool = True,
+) -> dict[str, Any]:
     """Require proof that a newly emitted BLOCKED is not a relay shortcut."""
 
     evidence = _mapping(value, "blocked_validation")
@@ -584,6 +855,17 @@ def validate_genuine_blocked_evidence(value: Mapping[str, Any]) -> dict[str, Any
         _fail("blocked_validation.gpt_technical_escalation_completed", "must be true")
     if evidence.get("no_legal_automated_next_action") is not True:
         _fail("blocked_validation.no_legal_automated_next_action", "must be true")
+    ownership = evidence.get("ownership_validation")
+    if require_ownership:
+        if not isinstance(ownership, Mapping):
+            _fail("blocked_validation.ownership_validation", "ownership proof is required")
+        checked = validate_blocker_ownership(ownership)
+        if checked.get("blocker_ownership_validated") is not True:
+            _fail("blocked_validation.ownership_validation", "ownership is not validated")
+        if checked.get("genuine_blocked_valid") is not True:
+            _fail("blocked_validation.ownership_validation", "ownership does not prove genuine blocked")
+    elif isinstance(ownership, Mapping):
+        validate_blocker_ownership(ownership)
     return evidence
 
 
@@ -975,6 +1257,7 @@ __all__ = [
     "validate_provider_observation", "validate_semantic_iteration", "validate_stage",
     "validate_stage_assessment", "validate_typed_failure", "validate_typed_replan", "stage_objective_identity",
     "derive_failure_signature", "classify_blocker", "validate_blocker_record", "validate_human_gate",
-    "validate_genuine_blocked_evidence",
+    "validate_genuine_blocked_evidence", "validate_blocker_ownership", "classify_blocker_ownership",
+    "BLOCKER_OWNERSHIP_CLASSES",
     "validate_provider_handoff_manifest", "PROVIDER_HANDOFF_INVARIANT_VERSION",
 ]

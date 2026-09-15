@@ -1,6 +1,6 @@
 # Autonomous Objective Completion Loop
 
-Status: implementation complete; release candidate r3 clean-room validated; stable promotion intentionally pending.
+Status: implementation complete; ownership-audit and bounded facade continuation closure in progress; stable promotion intentionally pending.
 
 This document is a durable architecture and maintenance reference. It is not a
 runtime authority. Runtime authority remains the canonical `StageController`,
@@ -260,6 +260,20 @@ history is preserved and the journal is never edited by hand. An explicit
 Human-owned immutable cap must not be silently overridden and can become a
 Human Gate only when the required authorization is proven.
 
+### Ownership before genuine blocked
+
+Missing artifacts and capabilities are not genuine blockers by label alone.
+Before a new `BLOCKED` can authorize termination, the controller validates an
+append-only ownership proof for every missing item. `STAGE_OWNED_WORK`,
+`PROVIDER_IMPLEMENTABLE`, `GPT_DESIGNABLE`, and other automated routes force
+technical continuation; `UNKNOWN` forces technical review and cannot validate
+genuine blocked. A proven misclassification preserves the old blocker and
+adds a `MISCLASSIFIED_STAGE_OWNED_WORK` revalidation. That revalidation can
+unlock at most two bounded `INFRASTRUCTURE_REPAIR` attempts for capability
+creation/execution; these attempts do not change the ordinary per-iteration or
+total scientific attempt budgets and cannot create an iteration or a second
+lifecycle.
+
 The implementation must remain bounded. It must not replace a finite budget
 with `100`, `unlimited`, or a disabled safety cap.
 
@@ -365,6 +379,16 @@ global budget exhausted
 ```
 
 An ordinary report-and-stop is not acceptable.
+
+### E. Facade S4 ownership-classification gap
+
+The facade's old `GENUINE_BLOCKED` record had no ownership proof. The current
+audit identifies the missing S4-S7 scenes as Stage-owned work and the missing
+scanline/incidence/occlusion/opening routes as provider-implementable work.
+The old record remains immutable history, while the current route is
+revalidated and resumed automatically. The S4 bounded implementation and
+in-memory generator/extractor/evaluator may be created and executed, but a
+synthetic capability result is not benchmark or scientific success evidence.
 
 ## 14. Implementation Plan
 
@@ -515,6 +539,10 @@ NEW_ITERATION_STARTED = YES when lifecycle requires it
 PROVIDER_EXECUTION_AUTHORIZED = YES
 S4_GENERATION_STARTED = YES when the recovered route reaches S4
 ```
+
+For the facade regression, `S4_GENERATION_STARTED` is an explicit provider
+claim backed by the generator route and its generated-input/evidence markers;
+the presence of a runner receipt alone is not sufficient.
 
 After S4 starts, an ordinary timeout, implementation failure, generator bug,
 test failure, or missing Stage-owned evaluator remains intermediate evidence.

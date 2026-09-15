@@ -12,6 +12,7 @@ from src.runtime_composition import load_runtime_composition_config
 from src.workflow_v2_contracts import (
     assess_observation,
     classify_blocker,
+    classify_blocker_ownership,
     validate_genuine_blocked_evidence,
     validate_human_gate,
     observation_identity,
@@ -259,7 +260,21 @@ def test_gpt_human_gate_is_projected_to_human_only_actor():
 def test_genuine_blocked_validator_rejects_human_relay_shortcut():
     with pytest.raises(Exception):
         validate_genuine_blocked_evidence({"blocker_still_true": "YES"})
-    assert validate_genuine_blocked_evidence({"blocker_still_true": "YES", "auto_recovery_exhausted": True, "gpt_technical_escalation_completed": True, "no_legal_automated_next_action": True})["auto_recovery_exhausted"] is True
+    ownership = {
+        "schema_version": "blocker_ownership.v1",
+        "items": [{
+            "item": "private input", "class": "HUMAN_ONLY_PRIVATE_INPUT", "owner": "Human",
+            "expected_producer": "Human", "can_codex_create": False, "can_gpt_design_route": False,
+            "can_workflow_obtain": False, "requires_human": True, "why": "private input is unavailable",
+            "evidence_refs": ["evidence-maintenance-12345678"],
+        }],
+        "stage_owned_work_available": False, "provider_implementable_route_available": False,
+        "gpt_designable_route_available": False, "canonical_lifecycle_route_available": False,
+        "authorized_alternative_available": False, "human_only_input_found": True,
+        "blocker_ownership_validated": True, "genuine_blocked_valid": True,
+        "validated_at": "2026-09-15T00:00:00+00:00", "human_intervention_count": 0,
+    }
+    assert validate_genuine_blocked_evidence({"blocker_still_true": "YES", "auto_recovery_exhausted": True, "gpt_technical_escalation_completed": True, "no_legal_automated_next_action": True, "ownership_validation": ownership})["auto_recovery_exhausted"] is True
 
 
 def test_blocker_history_preserves_original_observation_assessment_and_decision():

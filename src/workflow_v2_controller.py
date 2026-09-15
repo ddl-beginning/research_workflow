@@ -32,6 +32,7 @@ from .workflow_v2_contracts import (
     BLOCKER_RECOVERABILITIES,
     BLOCKER_STILL_TRUE,
     classify_blocker,
+    validate_blocker_ownership,
     dependency_authorization_digest,
     validate_command_envelope,
     validate_correction_receipt,
@@ -399,6 +400,10 @@ class StageController:
                 raise WorkflowV2ControllerError("blocker revalidation identity is invalid")
             if record["blocker_still_true"] not in BLOCKER_STILL_TRUE or record["recoverability"] not in BLOCKER_RECOVERABILITIES:
                 raise WorkflowV2ControllerError("blocker revalidation classification is invalid")
+            if record.get("reason") is not None and (not isinstance(record["reason"], str) or not record["reason"].strip()):
+                raise WorkflowV2ControllerError("blocker revalidation reason is invalid")
+            if record.get("ownership_validation") is not None:
+                validate_blocker_ownership(record["ownership_validation"])
         for record in payload.get("human_gates", []):
             if not isinstance(record, Mapping) or not isinstance(record.get("decision_id"), str) or not isinstance(record.get("gate"), Mapping):
                 raise WorkflowV2ControllerError("human gate record is invalid")
@@ -754,7 +759,11 @@ class StageController:
                 raise WorkflowV2ControllerError("termination validation evidence is incomplete")
         if value.get("human_intervention_count") != 0:
             raise WorkflowV2ControllerError("technical termination validation cannot add Human intervention")
-        validate_genuine_blocked_evidence(value)
+        # Pre-ownership journals remain readable as immutable history, but a
+        # new strict BLOCKED decision must carry ownership proof.
+        validate_genuine_blocked_evidence(value, require_ownership=False)
+        if value.get("ownership_validation") is not None:
+            validate_blocker_ownership(value["ownership_validation"])
         return _copy(dict(value))
 
     def _pending_decisions(self, journal: Mapping[str, Any], subject_id: str) -> list[dict[str, Any]]:
@@ -797,6 +806,7 @@ class StageController:
         return [
             attempt
             for attempt in self._attempts_for(journal, stage_id, iteration_id)
+            if attempt.get("purpose") != "INFRASTRUCTURE_REPAIR"
             if attempt.get("attempt_id") not in released_attempts
             if self._legacy_resolution_for_attempt(journal, attempt["attempt_id"]) is None
             and not any(
@@ -806,6 +816,38 @@ class StageController:
                 for assessment in journal.get("assessments", {}).values()
             )
         ]
+
+    def _maintenance_recovery_available(self, journal: Mapping[str, Any], stage_id: str) -> bool:
+        """Allow one bounded implementation recovery after ownership correction.
+
+        This is not a change to the scientific attempt budget.  It is a
+        two-attempt, append-only maintenance route unlocked only by a durable
+        ownership revalidation that proved the historical blocker was
+        automated work.  The route cannot create iterations or repeat beyond
+        its hard two-attempt ceiling.
+        """
+
+        revalidated = any(
+            isinstance(item, Mapping)
+            and item.get("stage_id") == stage_id
+            and item.get("reason") == "MISCLASSIFIED_STAGE_OWNED_WORK"
+            and item.get("blocker_still_true") == "NO"
+            and isinstance(item.get("ownership_validation"), Mapping)
+            and item["ownership_validation"].get("authorized_alternative_available") is True
+            for item in journal.get("blocker_revalidations", [])
+        )
+        if not revalidated:
+            return False
+        recovery_attempts = sum(
+            1
+            for attempt in journal.get("attempts", {}).values()
+            if attempt.get("stage_id") == stage_id
+            and attempt.get("purpose") == "INFRASTRUCTURE_REPAIR"
+        )
+        # Two is a hard maintenance ceiling: one attempt may create the
+        # capability and the second may execute it after a retryable provider
+        # timeout.  Neither attempt changes the ordinary Stage budget.
+        return recovery_attempts < 2
 
     def _legacy_orphan_operation(self, journal: Mapping[str, Any], stage_id: str) -> tuple[dict[str, Any], dict[str, Any]] | None:
         runtime = journal.get("stage_runtime", {}).get(stage_id, {})
@@ -1005,12 +1047,17 @@ class StageController:
         iteration_id = stage.get("current_iteration_id")
         if not iteration_id or iteration_id not in journal["iterations"]:
             raise WorkflowV2ControllerError("execution requires an opened semantic iteration")
+        reason = str(payload.get("reason", "INITIAL")).upper()
         iteration_attempts = self._attempts_for(journal, stage_id, iteration_id)
         budgeted_iteration_attempts = self._budgeted_attempts_for(journal, stage_id, iteration_id)
-        if len(budgeted_iteration_attempts) >= stage["budgets"]["max_attempts_per_iteration"]:
-            raise WorkflowV2ControllerError("per-iteration attempt budget exhausted")
-        if len(self._budgeted_attempts_for(journal, stage_id)) >= stage["budgets"]["max_attempts_total"]:
-            raise WorkflowV2ControllerError("total attempt budget exhausted")
+        maintenance_recovery = reason == "MAINTENANCE_OWNERSHIP_RECOVERY"
+        if not maintenance_recovery:
+            if len(budgeted_iteration_attempts) >= stage["budgets"]["max_attempts_per_iteration"]:
+                raise WorkflowV2ControllerError("per-iteration attempt budget exhausted")
+            if len(self._budgeted_attempts_for(journal, stage_id)) >= stage["budgets"]["max_attempts_total"]:
+                raise WorkflowV2ControllerError("total attempt budget exhausted")
+        elif not self._maintenance_recovery_available(journal, stage_id):
+            raise WorkflowV2ControllerError("bounded ownership maintenance recovery is unavailable or already used")
         for ancestor_id in self._ancestor_ids(journal, stage_id):
             ancestor = self._stage(journal, ancestor_id)
             descendant_attempts = sum(
@@ -1019,8 +1066,7 @@ class StageController:
             )
             if descendant_attempts >= ancestor["budgets"]["max_descendant_attempts"]:
                 raise WorkflowV2ControllerError("descendant attempt budget exhausted")
-        reason = str(payload.get("reason", "INITIAL")).upper()
-        if iteration_attempts and reason not in {"RETRY", "ENGINEERING_FIX", "CONTINUE", "LEGACY_ORPHAN_RECOVERY", "OBJECTIVE_SUPERSESSION_RECOVERY"}:
+        if iteration_attempts and reason not in {"RETRY", "ENGINEERING_FIX", "CONTINUE", "MAINTENANCE_OWNERSHIP_RECOVERY", "LEGACY_ORPHAN_RECOVERY", "OBJECTIVE_SUPERSESSION_RECOVERY"}:
             raise WorkflowV2ControllerError("a later attempt needs an explicit typed retry/review reason")
         if reason == "LEGACY_ORPHAN_RECOVERY":
             if not any(
@@ -1576,7 +1622,7 @@ class StageController:
         if choice == "HUMAN_GATE":
             human_gate = validate_human_gate(payload.get("human_gate", {}))
         if choice == "BLOCKED" and payload.get("strict_blocked_validation") is True:
-            validate_genuine_blocked_evidence(payload.get("blocked_validation", {}))
+            validate_genuine_blocked_evidence(payload.get("blocked_validation", {}), require_ownership=True)
         decision_record = {**_copy(decision), "resolution": choice}
         existing_decision = journal["decisions"].get(decision["decision_id"])
         if existing_decision is not None:
@@ -1880,6 +1926,10 @@ class StageController:
             "validated_at": now,
             "evidence_refs": _copy(initial["evidence_refs"]),
         }
+        if payload.get("reason") is not None:
+            revalidation["reason"] = str(payload["reason"])
+        if initial.get("ownership_validation") is not None:
+            revalidation["ownership_validation"] = _copy(initial["ownership_validation"])
         if released_attempt_id is not None:
             revalidation["released_attempt_id"] = released_attempt_id
         revalidations.append(revalidation)
@@ -2302,10 +2352,15 @@ class StageController:
                 return {"action": "HUMAN_GATE", "actor": "Human", "canonical": True, "reason": "validated Human Gate is unresolved", "no_legal_automated_next_action": False}
             if resolution == "BLOCKED":
                 valid = any(
-                    item.get("stage_id") == selected and item.get("assessment_id") == assessment_id and item.get("decision_id") == decision.get("decision_id")
+                    item.get("stage_id") == selected
+                    and item.get("assessment_id") == assessment_id
+                    and item.get("decision_id") == decision.get("decision_id")
+                    and isinstance(item.get("ownership_validation"), Mapping)
+                    and item["ownership_validation"].get("blocker_ownership_validated") is True
+                    and item["ownership_validation"].get("genuine_blocked_valid") is True
                     for item in source.get("termination_validations", [])
                 )
-                return {"action": None if valid else "TECHNICAL_GPT_ESCALATION", "actor": "Controller" if valid else "GPT", "canonical": not valid, "reason": "genuine blocked evidence is durable" if valid else "BLOCKED requires a fresh technical route audit", "no_legal_automated_next_action": valid}
+                return {"action": None if valid else "TECHNICAL_GPT_ESCALATION", "actor": "Controller" if valid else "GPT", "canonical": not valid, "reason": "genuine blocked evidence is durable" if valid else "BLOCKED requires ownership and alternative-route audit", "no_legal_automated_next_action": valid}
             if resolution == "CONTINUE":
                 current = source.get("iterations", {}).get(stage.get("current_iteration_id"), {})
                 current_attempts = len(self._budgeted_attempts_for(source, selected, stage.get("current_iteration_id")))
@@ -2364,7 +2419,7 @@ class StageController:
             for record in source.get("termination_validations", []):
                 if record.get("stage_id") == selected and record.get("assessment_id") == assessment_id and record.get("decision_id") == decision.get("decision_id"):
                     try:
-                        validate_genuine_blocked_evidence(record)
+                        validate_genuine_blocked_evidence(record, require_ownership=True)
                     except (ContractValidationError, TypeError, ValueError):
                         continue
                     if not stage_view.get("pending_decisions") and not stage_view.get("open_dependencies") and not runtime.get("in_flight_operation_id"):
@@ -2526,6 +2581,11 @@ class StageController:
                 and current_iteration.get("index", 0) >= stage["budgets"]["max_iterations"]
             ),
         }
+
+    def maintenance_recovery_available(self, stage_id: str) -> bool:
+        """Expose the one-shot ownership-correction route for resume logic."""
+
+        return self._maintenance_recovery_available(self._journal, stage_id)
 
     def migrate_budget(self, stage_id: str, *, payload: Mapping[str, Any] | None = None, command_id: str | None = None, expected_revision: int | None = None, **kwargs: Any) -> dict[str, Any]:
         """Attribute a proven legacy default through the canonical reducer."""
