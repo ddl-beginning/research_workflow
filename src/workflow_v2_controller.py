@@ -203,6 +203,26 @@ LEGACY_ORPHAN_CLASSIFICATION = "ORPHANED_UNRECOVERABLE_PROVIDER_HANDOFF"
 LEGACY_ORPHAN_RESOLUTION = "ABANDON_OLD_OPERATION_AND_CREATE_NEW_ATTEMPT"
 
 
+def continue_iteration_change_digest(
+    *,
+    decision_id: str,
+    assessment_id: str,
+    iteration_id: str,
+    objective_identity: str,
+) -> str:
+    """Bind an automatic CONTINUE handoff to its immutable review identity."""
+
+    return sha256_json(
+        {
+            "kind": "CONTINUE_NEXT_ITERATION",
+            "decision_id": decision_id,
+            "assessment_id": assessment_id,
+            "iteration_id": iteration_id,
+            "objective_identity": objective_identity,
+        }
+    )
+
+
 class StageController:
     """Single transition authority for the Workflow V2 lifecycle schema."""
 
@@ -1366,6 +1386,91 @@ class StageController:
         stage["current_assessment_id"] = assessment["assessment_id"]
         return {"stage": self.show_stage(stage_id, journal=journal), "assessment": _copy(assessment), "observation_present": observation is not None}
 
+    def _auto_advance_continue(
+        self,
+        journal: dict[str, Any],
+        command: Mapping[str, Any],
+        stage: Mapping[str, Any],
+        decision: Mapping[str, Any],
+        assessment: Mapping[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        """Use the canonical iteration transition for an exhausted CONTINUE.
+
+        This is deliberately a narrow projection seam.  A CONTINUE decision
+        never creates an unbounded retry loop: both the per-iteration and
+        total-attempt budgets, as well as the Stage iteration ceiling, remain
+        authoritative.
+        """
+
+        if not isinstance(assessment, Mapping):
+            return None
+        stage_id = command["subject_id"]
+        runtime = self._runtime(journal, stage_id)
+        current = journal["iterations"].get(stage.get("current_iteration_id"))
+        if current is None or runtime.get("in_flight_operation_id") is not None:
+            return None
+        if self._pending_decisions(journal, stage_id) or self._open_dependencies(journal, stage_id):
+            return None
+        if any(
+            item.get("stage_id") == stage_id and item.get("resolved") is not True
+            for item in journal.get("human_gates", [])
+        ):
+            return None
+        if current["index"] >= stage["budgets"]["max_iterations"]:
+            return None
+        if len(self._budgeted_attempts_for(journal, stage_id, current["iteration_id"])) < stage["budgets"]["max_attempts_per_iteration"]:
+            return None
+        if len(self._budgeted_attempts_for(journal, stage_id)) >= stage["budgets"]["max_attempts_total"]:
+            return None
+        if assessment.get("stage_id") != stage_id or assessment.get("iteration_id") != current["iteration_id"]:
+            return None
+        if assessment.get("objective_identity") not in (None, stage_objective_identity(stage)):
+            return None
+
+        observation = next(
+            (
+                item for item in journal.get("observations", {}).values()
+                if item.get("stage_id") == stage_id
+                and item.get("attempt_id") == assessment.get("attempt_id")
+                and item.get("provider_result_digest") == assessment.get("provider_result_digest")
+            ),
+            None,
+        )
+        if not isinstance(observation, Mapping):
+            return None
+        failure = observation.get("failure") if isinstance(observation.get("failure"), Mapping) else None
+        try:
+            blocker = classify_blocker(
+                assessment=assessment,
+                observation=observation,
+                failure=failure,
+                missing_thing_owner=assessment.get("missing_thing_owner") or observation.get("missing_thing_owner"),
+                evidence_refs=[observation.get("evidence_manifest_digest")],
+            )
+        except (ContractValidationError, KeyError, TypeError, ValueError):
+            return None
+        if blocker.get("failure_class") == "EXTERNAL_BLOCKER" or blocker.get("recoverability") == "EXTERNAL_UNAVAILABLE":
+            return None
+
+        decision_id = str(decision["decision_id"])
+        change_digest = continue_iteration_change_digest(
+            decision_id=decision_id,
+            assessment_id=str(assessment["assessment_id"]),
+            iteration_id=current["iteration_id"],
+            objective_identity=stage_objective_identity(stage),
+        )
+        return self._advance_iteration(
+            journal,
+            command,
+            {
+                "auto_advance": True,
+                "requires_next_iteration": True,
+                "review_identity": decision_id,
+                "technical_change_digest": change_digest,
+                "solution_fingerprint": stage_objective_identity(stage),
+            },
+        )
+
     def _apply_gpt_decision(self, journal: dict[str, Any], command: Mapping[str, Any], payload: Mapping[str, Any]) -> dict[str, Any]:
         stage_id = command["subject_id"]
         stage = self._stage(journal, stage_id)
@@ -1445,6 +1550,13 @@ class StageController:
             stage["current_assessment_id"] = None
             self._runtime(journal, stage_id)["execution_authorized"] = True
             self._runtime(journal, stage_id).pop("last_blocker_assessment_id", None)
+            advanced = self._auto_advance_continue(journal, command, stage, decision, assessment)
+            result = {"stage": self.show_stage(stage_id, journal=journal), "decision": _copy(decision), "choice": choice}
+            if advanced is not None:
+                result["iteration"] = advanced["iteration"]
+                result["auto_next_iteration"] = True
+                result["stage"] = advanced["stage"]
+            return result
         return {"stage": self.show_stage(stage_id, journal=journal), "decision": _copy(decision), "choice": choice}
 
     def _advance_iteration(self, journal: dict[str, Any], command: Mapping[str, Any], payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -1466,8 +1578,26 @@ class StageController:
         if not review_identity or not technical_change_digest:
             raise WorkflowV2ControllerError("iteration advance requires review and technical-change identities")
         review = journal["decisions"].get(review_identity)
-        if review is None or review.get("actor_kind") != "GPT" or review.get("boundary") != "TECHNICAL_REVIEW" or review.get("resolution") != "REPLAN":
-            raise WorkflowV2ControllerError("iteration advance requires a resolved GPT REPLAN review")
+        if review is None or review.get("actor_kind") != "GPT" or review.get("boundary") != "TECHNICAL_REVIEW":
+            raise WorkflowV2ControllerError("iteration advance requires a resolved GPT technical review")
+        resolution = review.get("resolution")
+        automatic_continue = resolution == "CONTINUE" and payload.get("auto_advance") is True
+        if resolution != "REPLAN" and not automatic_continue:
+            raise WorkflowV2ControllerError("iteration advance requires a resolved GPT REPLAN review or automatic CONTINUE")
+        if automatic_continue:
+            assessment_id = review.get("subject_id")
+            expected_digest = continue_iteration_change_digest(
+                decision_id=review_identity,
+                assessment_id=str(assessment_id),
+                iteration_id=current["iteration_id"],
+                objective_identity=stage_objective_identity(stage),
+            )
+            if technical_change_digest != expected_digest:
+                raise WorkflowV2ControllerError("automatic CONTINUE iteration change is not bound to the review")
+            if len(self._budgeted_attempts_for(journal, stage_id, current["iteration_id"])) < stage["budgets"]["max_attempts_per_iteration"]:
+                raise WorkflowV2ControllerError("automatic CONTINUE requires an exhausted iteration attempt budget")
+            if len(self._budgeted_attempts_for(journal, stage_id)) >= stage["budgets"]["max_attempts_total"]:
+                raise WorkflowV2ControllerError("automatic CONTINUE exceeds the total attempt budget")
         iteration_id = _id("iteration", command["command_id"] + "-" + str(current["index"] + 1))
         iteration = {
             "schema_version": "semantic_iteration.v2",
@@ -1484,6 +1614,8 @@ class StageController:
         journal["iterations"][iteration_id] = iteration
         stage["current_iteration_id"] = iteration_id
         stage["current_assessment_id"] = None
+        if automatic_continue:
+            runtime["execution_authorized"] = True
         return {"stage": self.show_stage(stage_id, journal=journal), "iteration": _copy(iteration)}
 
     def _request_decision(self, journal: dict[str, Any], command: Mapping[str, Any], payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -2000,6 +2132,33 @@ class StageController:
     def advance_iteration(self, stage_id: str, **kwargs: Any) -> dict[str, Any]:
         return self.dispatch("ADVANCE_ITERATION", subject_id=stage_id, payload=kwargs.pop("payload", kwargs.pop("iteration", {})), **kwargs)
 
+    def attempt_budget_status(self, stage_id: str, *, iteration_id: str | None = None) -> dict[str, Any]:
+        """Expose canonical counted-attempt accounting for audit and resume."""
+
+        stage = self._stage(self._journal, stage_id)
+        selected_iteration_id = iteration_id or stage.get("current_iteration_id")
+        current_iteration = self._journal.get("iterations", {}).get(selected_iteration_id)
+        iteration_attempts = self._budgeted_attempts_for(self._journal, stage_id, selected_iteration_id)
+        total_attempts = self._budgeted_attempts_for(self._journal, stage_id)
+        return {
+            "stage_id": stage_id,
+            "iteration_id": selected_iteration_id,
+            "counted_attempt_ids": [item["attempt_id"] for item in iteration_attempts],
+            "counted_attempts": len(iteration_attempts),
+            "per_iteration_budget": stage["budgets"]["max_attempts_per_iteration"],
+            "per_iteration_exhausted": len(iteration_attempts) >= stage["budgets"]["max_attempts_per_iteration"],
+            "total_counted_attempt_ids": [item["attempt_id"] for item in total_attempts],
+            "total_counted_attempts": len(total_attempts),
+            "total_attempt_budget": stage["budgets"]["max_attempts_total"],
+            "total_exhausted": len(total_attempts) >= stage["budgets"]["max_attempts_total"],
+            "iteration_index": current_iteration.get("index") if isinstance(current_iteration, Mapping) else None,
+            "max_iterations": stage["budgets"]["max_iterations"],
+            "max_iteration_exhausted": (
+                isinstance(current_iteration, Mapping)
+                and current_iteration.get("index", 0) >= stage["budgets"]["max_iterations"]
+            ),
+        }
+
     def request_decision(self, decision: Mapping[str, Any], **kwargs: Any) -> dict[str, Any]:
         return self.dispatch("REQUEST_DECISION", subject_id=decision["subject_id"], payload={"decision": decision}, **kwargs)
 
@@ -2033,5 +2192,6 @@ class StageController:
 
 __all__ = [
     "StageController", "WorkflowV2ControllerError", "build_registration_payload",
-    "build_provider_handoff_manifest", "LEGACY_ORPHAN_CLASSIFICATION", "LEGACY_ORPHAN_RESOLUTION",
+    "build_provider_handoff_manifest", "continue_iteration_change_digest",
+    "LEGACY_ORPHAN_CLASSIFICATION", "LEGACY_ORPHAN_RESOLUTION",
 ]

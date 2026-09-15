@@ -353,3 +353,80 @@ def test_product_resume_starts_stage_owned_generation_without_human_relay(tmp_pa
     assert resumed["human_intervention_count"] == 0
     assert resumed["stage_owned_output_missing"] is True
     assert resumed["technical_recovery"]["status"] == "PASS"
+
+
+def test_product_resume_auto_advances_exhausted_iteration_after_continue(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from tests.test_product_workflow_runtime import _approved_runtime, _stage as product_stage, _write_machine_config
+
+    root = tmp_path / "product-continue-handoff"
+    root.mkdir()
+    config_path = _write_machine_config(root, tmp_path / "machine")
+    runtime = _approved_runtime(root, config_path)
+    stage = product_stage(runtime, stage_id="stage-product-continue-handoff")
+    stage["budgets"] = {**stage["budgets"], "max_attempts_per_iteration": 1, "max_attempts_total": 2}
+    runtime.controller.register_stage(stage, command_id="command-product-continue-register-12345678")
+    runtime.controller.start(stage["stage_id"], command_id="command-product-continue-start-12345678")
+    request = {
+        "stage_id": stage["stage_id"], "objective": "bounded provider recovery", "iteration_index": 1,
+        "allowed_paths": [".tmp"], "protected_paths": [".git", ".workflow-v2", ".research"],
+        "required_changed_path": ".tmp/product-continue-result.json",
+    }
+    submitted = runtime.controller.request_execution(stage["stage_id"], request=request, command_id="command-product-continue-request-12345678")
+    attempt = submitted["attempt"]
+    observation = _failed_observation(attempt, submitted["operation"]["operation_id"])
+    manifest = {
+        **_manifest(attempt["attempt_id"]),
+        "manifest_id": "manifest-product-continue-12345678",
+        "stage_id": stage["stage_id"],
+        "required_artifact_paths": [".tmp/product-continue-result.json"],
+        "changed_paths": [".tmp/product-continue-result.json"],
+        "allowed_paths": [".tmp"],
+        "protected_paths": [".git", ".workflow-v2", ".research"],
+        "path_inventory": [{"path": ".tmp/product-continue-result.json", "sha256": "artifact-product-continue-12345678"}],
+    }
+    observation["evidence_manifest_digest"] = manifest["manifest_id"]
+    observation["observation_id"] = observation_identity(observation)
+    runtime.controller.record_observation(stage["stage_id"], observation, effect_state="SETTLED", command_id="command-product-continue-observe-12345678")
+    assessment = assess_observation(
+        observation, manifest, baseline_digest=stage["baseline_digest"],
+        validator_code_digest="validator-product-continue-12345678", validation_contract_revision="admission.v2",
+    )
+    runtime.controller.assess_result(stage["stage_id"], assessment, command_id="command-product-continue-assess-12345678")
+
+    resumed_runtime = ProductWorkflowRuntime(
+        root, config=load_runtime_composition_config(root, config_path=config_path),
+        maintenance_capability=None,
+    )
+    monkeypatch.setattr(
+        resumed_runtime,
+        "_consult",
+        lambda _request, *, purpose: {
+            "purpose": purpose, "decision": "CONTINUE", "response_digest": "response-product-continue-12345678",
+            "consultation_id": "consultation-product-continue-12345678", "receipt_path": None,
+            "request_count": 1, "conversation_id": "conversation-product-continue-12345678",
+            "conversation_validated": True, "packet_digest": "packet-product-continue-12345678",
+        },
+    )
+
+    class FakeProvider:
+        def execute(self, execution_request):
+            output = Path(execution_request.workspace_root) / execution_request.metadata["required_changed_path"]
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text("generation started\n", encoding="utf-8")
+            return ExecutionResult(provider_id="fixture-provider", result={
+                "schema_version": "codex_result.v1", "plan_id": execution_request.plan_id, "stage_id": execution_request.stage_id,
+                "task_id": execution_request.task_id, "iteration_index": execution_request.iteration_index, "status": "SUCCEEDED",
+                "summary": "bounded generation marker", "changed_files": [], "tests": [], "measurements": {}, "evidence_refs": [],
+                "review_artifacts": [], "problems_discovered": [], "abstraction_layer": "fixture", "stage_ready": False,
+                "user_visible_failure": False, "human_gate_required": False, "decision_reason": "marker only", "stop_reason": "test",
+            })
+
+    resumed_runtime.maintenance_capability = FakeProvider()
+    resumed = resumed_runtime.resume()
+
+    assert resumed["technical_gpt_escalation"]["decision"] == "CONTINUE"
+    assert resumed["technical_recovery"]["status"] == "PASS"
+    assert resumed.get("auto_next_iteration") is not None or resumed["canonical"]["stage"]["iteration_count"] == 2
+    assert resumed["canonical"]["stage"]["iteration_count"] == 2
+    assert resumed["provider_execution"]["attempt"]["iteration_id"] != attempt["iteration_id"]
+    assert resumed["human_intervention_count"] == 0

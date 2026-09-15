@@ -38,7 +38,12 @@ from .workflow_v2_contracts import (
     classify_blocker,
     validate_stage,
 )
-from .workflow_v2_controller import StageController, WorkflowV2ControllerError, build_provider_handoff_manifest
+from .workflow_v2_controller import (
+    StageController,
+    WorkflowV2ControllerError,
+    build_provider_handoff_manifest,
+    continue_iteration_change_digest,
+)
 
 
 STAGE_SCOPED_COMMANDS = frozenset({
@@ -472,6 +477,8 @@ class ProductWorkflowRuntime:
             return None
         assessment_id = stage.get("current_assessment_id")
         state = self.controller.state
+        if not isinstance(assessment_id, str) or not assessment_id:
+            assessment_id = self._latest_continue_assessment_id(stage, state)
         assessment = state.get("assessments", {}).get(assessment_id)
         if not isinstance(assessment, Mapping):
             return None
@@ -490,8 +497,9 @@ class ProductWorkflowRuntime:
             and item.get("subject_id") == assessment_id and item.get("resolution") is not None
         ]
         is_preserved_blocked = any(item.get("resolution") == "BLOCKED" for item in resolved)
+        is_applied_continue = any(item.get("resolution") == "CONTINUE" for item in resolved)
         is_unreviewed_technical_failure = isinstance(observation.get("failure"), Mapping)
-        if not is_preserved_blocked and not is_unreviewed_technical_failure:
+        if not is_preserved_blocked and not is_applied_continue and not is_unreviewed_technical_failure:
             return None
         operation = next(
             (item for item in state.get("operations", {}).values()
@@ -499,6 +507,33 @@ class ProductWorkflowRuntime:
             None,
         )
         return dict(stage), dict(assessment), dict(observation), dict(operation) if isinstance(operation, Mapping) else None
+
+    @staticmethod
+    def _latest_continue_assessment_id(stage: Mapping[str, Any], state: Mapping[str, Any]) -> str | None:
+        """Find an already-applied CONTINUE that still needs lifecycle handoff."""
+
+        stage_id = stage.get("stage_id")
+        iteration_id = stage.get("current_iteration_id")
+        objective_identity = stage.get("objective_fingerprint")
+        assessments = state.get("assessments", {})
+        for decision in reversed(list(state.get("decisions", {}).values())):
+            if (
+                decision.get("actor_kind") != "GPT"
+                or decision.get("boundary") != "TECHNICAL_REVIEW"
+                or decision.get("resolution") != "CONTINUE"
+            ):
+                continue
+            assessment_id = decision.get("subject_id")
+            assessment = assessments.get(assessment_id) if isinstance(assessments, Mapping) else None
+            if not isinstance(assessment, Mapping):
+                continue
+            if (
+                assessment.get("stage_id") == stage_id
+                and assessment.get("iteration_id") == iteration_id
+                and assessment.get("objective_identity") in (None, objective_identity)
+            ):
+                return str(assessment_id)
+        return None
 
     def _maintenance_blocker(self, context: tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any] | None]) -> dict[str, Any]:
         stage, assessment, observation, operation = context
@@ -538,6 +573,65 @@ class ProductWorkflowRuntime:
             "recommended_action": derived["recommended_action"],
         }
 
+    def _auto_advance_continue_iteration(
+        self,
+        context: tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any] | None],
+    ) -> dict[str, Any] | None:
+        """Resume an applied CONTINUE through canonical ADVANCE_ITERATION."""
+
+        stage, assessment, _observation, _operation = context
+        state = self.controller.state
+        decision = next(
+            (
+                item for item in reversed(list(state.get("decisions", {}).values()))
+                if item.get("actor_kind") == "GPT"
+                and item.get("boundary") == "TECHNICAL_REVIEW"
+                and item.get("resolution") == "CONTINUE"
+                and item.get("subject_id") == assessment.get("assessment_id")
+            ),
+            None,
+        )
+        if not isinstance(decision, Mapping):
+            return None
+        if decision.get("objective_identity") not in (None, stage.get("objective_fingerprint")):
+            return None
+        budget = self.controller.attempt_budget_status(stage["stage_id"])
+        if (
+            not budget.get("per_iteration_exhausted")
+            or budget.get("total_exhausted")
+            or budget.get("max_iteration_exhausted")
+        ):
+            return None
+        if stage.get("status") != "ACTIVE" or stage.get("pending_decisions") or stage.get("open_dependencies"):
+            return None
+        blocker = self._maintenance_blocker(context)
+        if blocker.get("failure_class") == "EXTERNAL_BLOCKER" or blocker.get("recoverability") == "EXTERNAL_UNAVAILABLE":
+            return None
+        change_digest = continue_iteration_change_digest(
+            decision_id=str(decision["decision_id"]),
+            assessment_id=str(assessment["assessment_id"]),
+            iteration_id=str(stage["current_iteration_id"]),
+            objective_identity=str(stage["objective_fingerprint"]),
+        )
+        command_id = "command-auto-advance-continue-" + sha256_json(
+            {
+                "stage_id": stage["stage_id"],
+                "decision_id": decision["decision_id"],
+                "iteration_id": stage["current_iteration_id"],
+            }
+        )[:32]
+        return self.controller.advance_iteration(
+            stage["stage_id"],
+            command_id=command_id,
+            payload={
+                "auto_advance": True,
+                "requires_next_iteration": True,
+                "review_identity": decision["decision_id"],
+                "technical_change_digest": change_digest,
+                "solution_fingerprint": stage["objective_fingerprint"],
+            },
+        )
+
     @staticmethod
     def _bounded_result(result: Mapping[str, Any]) -> dict[str, Any]:
         """Keep provider claims small before they become journal evidence."""
@@ -550,6 +644,11 @@ class ProductWorkflowRuntime:
 
     def _maintenance_request(self, context: tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any] | None], *, suffix: str) -> dict[str, Any]:
         stage, assessment, _observation, operation = context
+        # The CONTINUE handoff may have opened a new iteration immediately
+        # before this provider request.  Re-read the canonical stage so the
+        # bounded request carries the new iteration index, while retaining the
+        # old operation descriptor as immutable recovery provenance.
+        stage = self.controller.resolve_canonical_stage(stage["stage_id"])
         descriptor = (operation or {}).get("provider_handoff_manifest", {}).get("reconstructible_request_descriptor", {})
         original = descriptor.get("request", {}) if isinstance(descriptor, Mapping) else {}
         request = copy.deepcopy(dict(original)) if isinstance(original, Mapping) else {}
@@ -835,9 +934,17 @@ class ProductWorkflowRuntime:
             and item.get("subject_id") == assessment["assessment_id"] and item.get("resolution") == "BLOCKED"
             for item in state.get("decisions", {}).values()
         )
+        applied_continue = any(
+            item.get("actor_kind") == "GPT"
+            and item.get("boundary") == "TECHNICAL_REVIEW"
+            and item.get("subject_id") == assessment["assessment_id"]
+            and item.get("resolution") == "CONTINUE"
+            for item in state.get("decisions", {}).values()
+        )
+        budget = self.controller.attempt_budget_status(stage["stage_id"])
         suffix = sha256_json({"blocker": blocker["blocker_id"], "revision": self.controller.revision})[:32]
         maintenance: dict[str, Any] = {"blocker_classification": blocker, "human_intervention_count": 0, **(dict(inherited) if isinstance(inherited, Mapping) else {})}
-        if action == "WORK_REMAINING":
+        if action == "WORK_REMAINING" and not (applied_continue and budget.get("per_iteration_exhausted")):
             revalidated = None
             if preserved_blocked:
                 revalidated = self.controller.revalidate_blocker(
@@ -890,6 +997,12 @@ class ProductWorkflowRuntime:
                 "gpt_decision_applied": applied.get("decision"), "provider_execution": executed,
                 "technical_recovery": {"status": "PASS" if executed else "BOUNDED_LIMIT", "route": choice},
                 "generation_started": executed["generation_started"] if executed else False,
+                "auto_next_iteration": bool(applied.get("auto_next_iteration")),
+                "new_iteration_started": bool(applied.get("auto_next_iteration")),
+                "iteration_transition": {
+                    "iteration": copy.deepcopy(applied.get("iteration")),
+                    "stage": copy.deepcopy(applied.get("stage")),
+                } if applied.get("auto_next_iteration") else None,
             })
             return self._view(**maintenance)
         revalidated = None
@@ -953,6 +1066,33 @@ class ProductWorkflowRuntime:
                     )
         context = self._maintenance_context()
         if context is not None:
+            advanced = self._auto_advance_continue_iteration(context)
+            if advanced is not None:
+                next_stage = advanced.get("stage", {})
+                suffix = sha256_json(
+                    {
+                        "stage_id": next_stage.get("stage_id"),
+                        "iteration_id": next_stage.get("current_iteration_id"),
+                        "revision": self.controller.revision,
+                    }
+                )[:32]
+                executed = self._execute_maintenance_provider(
+                    context, reason="CONTINUE", suffix=suffix,
+                )
+                return self._view(
+                    **inherited,
+                    auto_next_iteration=True,
+                    new_iteration_started=True,
+                    iteration_transition=advanced,
+                    provider_execution=executed,
+                    technical_recovery={
+                        "status": "PASS",
+                        "route": "CONTINUE",
+                        "provider": executed["provider_id"],
+                    },
+                    generation_started=executed["generation_started"],
+                    human_intervention_count=0,
+                )
             return self._resume_blocked_maintenance(context, inherited=inherited)
         return self._view(**inherited)
 
