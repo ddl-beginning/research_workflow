@@ -12,7 +12,6 @@ from src.runtime_composition import load_runtime_composition_config
 from src.workflow_v2_contracts import (
     assess_observation,
     classify_blocker,
-    classify_blocker_ownership,
     validate_genuine_blocked_evidence,
     validate_human_gate,
     observation_identity,

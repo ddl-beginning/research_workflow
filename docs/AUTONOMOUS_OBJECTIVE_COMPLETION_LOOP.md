@@ -1,6 +1,6 @@
 # Autonomous Objective Completion Loop
 
-Status: implementation complete; ownership-audit and bounded facade continuation closure in progress; stable promotion intentionally pending.
+Status: implementation and ownership-audit closure complete; release evidence passed; stable promotion complete.
 
 This document is a durable architecture and maintenance reference. It is not a
 runtime authority. Runtime authority remains the canonical `StageController`,
@@ -594,12 +594,12 @@ After implementation, reopen this document and update the compact evidence
 index below. Do not paste large logs into the document.
 
 ```text
-IMPLEMENTED_IN_COMMIT: 6b76fd1 (implementation; docs-first commit 7132780; prior implementation 7d27e1c)
-TEST_EVIDENCE: focused 6 passed; compileall passed; full suite excluding historical self-test fixture 624 passed, 1 skipped; full suite 624 passed, 1 skipped, 2 proven baseline fixture failures
-REAL_E2E_EVIDENCE: facade journal revision 33 ended with genuine BLOCKED and allowed termination; clean-room PASS at D:/work/workflow-v2.1.4-release-validation-20260915-r3.json from candidate r3
-FINAL_INVARIANTS: PASS; unfinished objectives do not terminate for ordinary technical failure; termination is validator-gated; no Human technical relay; facade human_intervention_count=0
-KNOWN_LIMITATIONS: historical self-test fixture is missing .consultations/CONSULT-20260906-070055-bef2fdb6/receipt.json; facade remains scientifically incomplete but has no legal automated next action; stable tag not promoted
-CURRENT_STABLE_TAG: workflow-v2.1.3-stable
+IMPLEMENTED_IN_COMMIT: b02d761 (ownership implementation; docs-first commit 7132780; prior implementation 7d27e1c; terminal budget review 6b76fd1)
+TEST_EVIDENCE: focused ownership/S4 suite 32 passed; compileall passed; full suite excluding historical self-test fixture 635 passed, 1 skipped; full suite 635 passed, 1 skipped, 2 proven baseline fixture failures
+REAL_E2E_EVIDENCE: facade journal revision 43 preserved the old blocker append-only, invalidated its termination authority, completed two bounded INFRASTRUCTURE_REPAIR attempts, and observed attempt 8 with explicit s4_generation_started=true; clean-room PASS at D:/work/workflow-v2.1.4-release-validation-20260915-r5-final.json from candidate r5
+FINAL_INVARIANTS: PASS; unfinished objectives do not terminate for ordinary technical failure; ownership is required before genuine blocked; termination is validator-gated; no Human technical relay; facade human_intervention_count=0; ordinary budget remains max_iterations=2/max_attempts_per_iteration=1/max_attempts_total=2
+KNOWN_LIMITATIONS: historical self-test fixture is missing .consultations/CONSULT-20260906-070055-bef2fdb6/receipt.json; facade S5-S7 scientific work remains incomplete and no scientific success is inferred from the bounded S4 marker
+CURRENT_STABLE_TAG: workflow-v2.1.4-stable
 ```
 
 The final Human summary must answer, in ordinary Chinese:
