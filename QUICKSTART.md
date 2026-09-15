@@ -6,7 +6,7 @@ checkout includes the Browser Bridge; setup provisions it automatically.
 ## Another computer
 
 ```powershell
-git clone --branch workflow-v2.1.1-stable <PRODUCT_REPOSITORY_URL> C:\work\workflow-v2-product
+git clone --branch workflow-v2.1.2-stable <PRODUCT_REPOSITORY_URL> C:\work\workflow-v2-product
 Set-Location C:\work\workflow-v2-product
 .\install.ps1
 workflow.exe setup
