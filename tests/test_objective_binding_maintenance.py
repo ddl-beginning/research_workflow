@@ -205,6 +205,20 @@ def test_misaligned_assessment_is_superseded_append_only_and_restores_execution(
         assert current["decisions"] == before["decisions"]
         assert current["stages"][STAGE_ID]["current_assessment_id"] is None
         epoch = result["supersession"]["new_assessment_epoch_id"]
+        replay = controller.supersede_assessment(
+            STAGE_ID,
+            assessment_id=legacy_assessment["assessment_id"],
+            consultation_id=proof["consultation_id"],
+            reason="STAGE_OBJECTIVE_EVIDENCE_MISALIGNMENT",
+            misalignment_proof=proof,
+            misalignment_evidence_digest=sha256_json(proof),
+            maintenance_authority="maintenance-authority-objective-12345678",
+            supersession_id="assessment-supersession-objective-12345678",
+            new_assessment_epoch_id=epoch,
+            new_attempt_id=result["supersession"]["new_attempt_id"],
+            command_id="command-objective-supersede-replay-12345678",
+        )
+        assert replay["supersession"] == result["supersession"]
         requested_again = controller.request_execution(STAGE_ID, reason="OBJECTIVE_SUPERSESSION_RECOVERY", command_id="command-objective-recovery-request-12345678")
         assert requested_again["attempt"]["assessment_epoch_id"] == epoch
         assert controller.show_stage(STAGE_ID)["next_action"] == "RECORD_OBSERVATION"

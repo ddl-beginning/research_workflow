@@ -1052,6 +1052,10 @@ class StageController:
                     payload.get("new_assessment_epoch_id") is not None
                     and existing.get("new_assessment_epoch_id") != payload.get("new_assessment_epoch_id")
                 )
+                or (
+                    payload.get("new_attempt_id") is not None
+                    and existing.get("new_attempt_id") != payload.get("new_attempt_id")
+                )
             ):
                 raise WorkflowV2ControllerError("assessment supersession identity collision")
             return {"stage": self.show_stage(stage_id, journal=journal), "supersession": _copy(existing)}
