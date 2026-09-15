@@ -414,7 +414,10 @@ def _resume(args: argparse.Namespace, workspace: Path) -> dict[str, Any]:
         "blocker_classification", "resume_blocker_revalidation", "technical_recovery",
         "technical_gpt_escalation", "gpt_decision_applied", "provider_execution",
         "stage_owned_output_missing", "generation_started", "blocked_validation",
-        "human_intervention_count", "human_action",
+        "human_intervention_count", "human_action", "budget_authority", "budget_migration",
+        "termination_validation", "legal_next_action", "outer_supervisory_loop", "outer_loop_contract",
+        "provider_execution_error", "auto_next_iteration", "new_iteration_started", "iteration_transition",
+        "budget_route_rejected",
     )
     result = {
         "schema_version": "workflow_resume.v1",

@@ -199,6 +199,11 @@ def build_registration_payload(stage: Mapping[str, Any]) -> dict[str, Any]:
 
 TERMINAL_EFFECTS = {"NOT_SENT_PROVEN", "SETTLED"}
 UNSETTLED_EFFECTS = {"INTENT_COMMITTED", "SENT_UNSETTLED", "UNKNOWN", "CONFLICT"}
+BUDGET_FIELDS = (
+    "max_iterations", "max_attempts_per_iteration", "max_attempts_total",
+    "max_revalidation_ops", "max_validator_revisions", "max_dependency_nodes",
+    "max_dependency_depth", "max_descendant_attempts",
+)
 LEGACY_ORPHAN_CLASSIFICATION = "ORPHANED_UNRECOVERABLE_PROVIDER_HANDOFF"
 LEGACY_ORPHAN_RESOLUTION = "ABANDON_OLD_OPERATION_AND_CREATE_NEW_ATTEMPT"
 
@@ -299,6 +304,8 @@ class StageController:
             "blocker_records": [],
             "blocker_revalidations": [],
             "human_gates": [],
+            "budget_audits": [],
+            "termination_validations": [],
         }
 
     def _read_journal(self, path: Path) -> dict[str, Any]:
@@ -377,7 +384,7 @@ class StageController:
         for key in ("commands", "stages", "stage_runtime", "iterations", "attempts", "observations", "assessments", "decisions", "dependencies", "operations", "correction_decisions", "blockers"):
             if not isinstance(payload.get(key), dict):
                 raise WorkflowV2ControllerError(f"journal collection is invalid: {key}")
-        for key in ("blocker_records", "blocker_revalidations", "human_gates"):
+        for key in ("blocker_records", "blocker_revalidations", "human_gates", "budget_audits", "termination_validations"):
             if key in payload and not isinstance(payload[key], list):
                 raise WorkflowV2ControllerError(f"journal collection is invalid: {key}")
         for record in payload.get("blocker_records", []):
@@ -395,6 +402,10 @@ class StageController:
         for record in payload.get("human_gates", []):
             if not isinstance(record, Mapping) or not isinstance(record.get("decision_id"), str) or not isinstance(record.get("gate"), Mapping):
                 raise WorkflowV2ControllerError("human gate record is invalid")
+        for record in payload.get("budget_audits", []):
+            StageController._validate_budget_audit(record)
+        for record in payload.get("termination_validations", []):
+            StageController._validate_termination_validation(record)
         supersessions = payload.get("assessment_supersessions", {})
         if not isinstance(supersessions, dict):
             raise WorkflowV2ControllerError("journal collection is invalid: assessment_supersessions")
@@ -518,6 +529,10 @@ class StageController:
             keys.insert(len(keys) - 2, "blocker_revalidations")
         if "human_gates" in journal:
             keys.insert(len(keys) - 2, "human_gates")
+        if "budget_audits" in journal:
+            keys.insert(len(keys) - 2, "budget_audits")
+        if "termination_validations" in journal:
+            keys.insert(len(keys) - 2, "termination_validations")
         return sha256_json({key: _copy(journal.get(key)) for key in keys})
 
     def _persist(self, payload: Mapping[str, Any]) -> None:
@@ -687,6 +702,61 @@ class StageController:
             raise WorkflowV2ControllerError("assessment supersession new_attempt_id is invalid")
         return _copy(dict(value))
 
+    @staticmethod
+    def _validate_budget_audit(value: Mapping[str, Any]) -> dict[str, Any]:
+        if not isinstance(value, Mapping):
+            raise WorkflowV2ControllerError("budget authority audit is invalid")
+        required = (
+            "schema_version", "budget_audit_id", "stage_id", "authority", "origin",
+            "explicit_or_default", "profile_name", "profile_version", "configured_at",
+            "before", "after", "migratable", "human_intervention_count", "reason",
+        )
+        if any(not isinstance(value.get(field), str) or not value[field].strip() for field in required if field not in {"before", "after", "migratable", "human_intervention_count"}):
+            raise WorkflowV2ControllerError("budget authority audit is incomplete")
+        if value.get("schema_version") != "budget_authority_audit.v1":
+            raise WorkflowV2ControllerError("budget authority audit schema is invalid")
+        for field in ("before", "after"):
+            budget = value.get(field)
+            if not isinstance(budget, Mapping) or set(budget) != set(BUDGET_FIELDS):
+                raise WorkflowV2ControllerError("budget authority audit budget shape is invalid")
+            if any(not isinstance(budget[item], int) or isinstance(budget[item], bool) or budget[item] < 0 for item in BUDGET_FIELDS):
+                raise WorkflowV2ControllerError("budget authority audit budget value is invalid")
+        if value.get("authority") != "PROJECT_BRIEF":
+            raise WorkflowV2ControllerError("budget authority audit must bind PROJECT_BRIEF authority")
+        if value.get("explicit_or_default") not in {"EXPLICIT", "DEFAULT"}:
+            raise WorkflowV2ControllerError("budget authority audit explicit/default classification is invalid")
+        if value.get("migratable") is not True:
+            raise WorkflowV2ControllerError("budget authority audit must record a migratable decision")
+        if value.get("human_intervention_count") != 0:
+            raise WorkflowV2ControllerError("automatic budget migration cannot add Human intervention")
+        return _copy(dict(value))
+
+    @staticmethod
+    def _validate_termination_validation(value: Mapping[str, Any]) -> dict[str, Any]:
+        if not isinstance(value, Mapping):
+            raise WorkflowV2ControllerError("termination validation is invalid")
+        required = (
+            "schema_version", "validation_id", "stage_id", "assessment_id", "decision_id",
+            "blocker_still_true", "auto_recovery_exhausted", "gpt_technical_escalation_completed",
+            "no_legal_automated_next_action", "validated_at", "human_intervention_count",
+        )
+        if any(field not in value for field in required):
+            raise WorkflowV2ControllerError("termination validation is incomplete")
+        if value.get("schema_version") != "termination_validation.v1":
+            raise WorkflowV2ControllerError("termination validation schema is invalid")
+        for field in ("validation_id", "stage_id", "assessment_id", "decision_id", "validated_at"):
+            if not isinstance(value.get(field), str) or not value[field].strip():
+                raise WorkflowV2ControllerError("termination validation identity is invalid")
+        if value.get("blocker_still_true") != "YES":
+            raise WorkflowV2ControllerError("termination validation blocker state is invalid")
+        for field in ("auto_recovery_exhausted", "gpt_technical_escalation_completed", "no_legal_automated_next_action"):
+            if value.get(field) is not True:
+                raise WorkflowV2ControllerError("termination validation evidence is incomplete")
+        if value.get("human_intervention_count") != 0:
+            raise WorkflowV2ControllerError("technical termination validation cannot add Human intervention")
+        validate_genuine_blocked_evidence(value)
+        return _copy(dict(value))
+
     def _pending_decisions(self, journal: Mapping[str, Any], subject_id: str) -> list[dict[str, Any]]:
         return [
             decision
@@ -849,6 +919,7 @@ class StageController:
             "APPLY_RECEIPT": self._apply_receipt,
             "COMMIT_INTEGRATION": self._commit_integration,
             "CLOSEOUT": self._closeout,
+            "MIGRATE_BUDGET": self._migrate_budget,
             "STOP": self._stop,
         }
         return handlers[command_type](journal, command, payload)
@@ -1520,6 +1591,20 @@ class StageController:
                 "gate": _copy(dict(human_gate)),
                 "resolved": False,
             })
+        if choice == "BLOCKED" and payload.get("strict_blocked_validation") is True:
+            evidence = _copy(dict(payload.get("blocked_validation", {})))
+            validation = {
+                "schema_version": "termination_validation.v1",
+                "validation_id": "termination-validation-" + sha256_json({"stage_id": stage_id, "assessment_id": assessment_id, "decision_id": decision["decision_id"]}),
+                "stage_id": stage_id,
+                "assessment_id": assessment_id,
+                "decision_id": decision["decision_id"],
+                **evidence,
+                "validated_at": _utc_now(),
+                "human_intervention_count": 0,
+            }
+            self._validate_termination_validation(validation)
+            journal.setdefault("termination_validations", []).append(validation)
         if choice == "STAGE_READY":
             assessment = journal["assessments"].get(assessment_id)
             if assessment is None or assessment.get("verdict") != "ADMISSIBLE":
@@ -1917,10 +2002,87 @@ class StageController:
             journal["executable_owner_stage_id"] = None
         return {"stage": self.show_stage(stage_id, journal=journal), "closeout": _copy(runtime["closeout"])}
 
+    def _migrate_budget(self, journal: dict[str, Any], command: Mapping[str, Any], payload: Mapping[str, Any]) -> dict[str, Any]:
+        """Attribute and migrate a legacy/default Stage budget canonically.
+
+        The reducer is the only writer of the Stage budget.  Migration is
+        intentionally narrow: an unattributed all-ones registration may be
+        raised to the current bounded execution-profile policy, while the
+        per-iteration boundary is preserved exactly.
+        """
+
+        stage_id = command["subject_id"]
+        stage = self._stage(journal, stage_id)
+        self._require_status(stage, {"PLANNED", "ACTIVE"})
+        if payload.get("authorization") != "CURRENT_EXECUTION_PROFILE_MIGRATION":
+            raise WorkflowV2ControllerError("budget migration requires current execution-profile authority")
+        if payload.get("authority") != "PROJECT_BRIEF":
+            raise WorkflowV2ControllerError("budget migration must bind PROJECT_BRIEF authority")
+        profile_name = _text(payload.get("profile_name"), "profile_name")
+        profile_version = _text(payload.get("profile_version"), "profile_version")
+        proposed = payload.get("budget_policy")
+        if not isinstance(proposed, Mapping) or set(proposed) != set(BUDGET_FIELDS):
+            raise WorkflowV2ControllerError("budget migration policy shape is invalid")
+        after = {field: proposed[field] for field in BUDGET_FIELDS}
+        if any(not isinstance(after[field], int) or isinstance(after[field], bool) or after[field] < 0 for field in BUDGET_FIELDS):
+            raise WorkflowV2ControllerError("budget migration policy contains an invalid value")
+        before = {field: stage["budgets"][field] for field in BUDGET_FIELDS}
+        if after["max_attempts_per_iteration"] != before["max_attempts_per_iteration"]:
+            raise WorkflowV2ControllerError("budget migration cannot change the per-iteration attempt boundary")
+        if after["max_iterations"] < 1 or after["max_attempts_total"] < 1:
+            raise WorkflowV2ControllerError("budget migration must leave a usable bounded route")
+        for field in ("max_revalidation_ops", "max_validator_revisions", "max_dependency_nodes", "max_dependency_depth", "max_descendant_attempts"):
+            if after[field] < before[field]:
+                raise WorkflowV2ControllerError(f"budget migration cannot reduce {field}")
+        existing = [
+            item for item in journal.get("budget_audits", [])
+            if item.get("stage_id") == stage_id
+        ]
+        if existing:
+            audit = existing[-1]
+            if audit.get("after") != after or audit.get("profile_name") != profile_name or audit.get("profile_version") != profile_version:
+                raise WorkflowV2ControllerError("Stage already has a different budget authority")
+            return {"stage": self.show_stage(stage_id, journal=journal), "budget_audit": _copy(audit), "migrated": False}
+        legacy_default = all(value == 1 for value in before.values())
+        if not legacy_default:
+            raise WorkflowV2ControllerError("budget origin is unattributed and not a proven legacy default")
+        audit_id = "budget-audit-" + sha256_json({"stage_id": stage_id, "before": before, "after": after, "profile": profile_name, "version": profile_version})
+        audit = {
+            "schema_version": "budget_authority_audit.v1",
+            "budget_audit_id": audit_id,
+            "stage_id": stage_id,
+            "authority": "PROJECT_BRIEF",
+            "origin": "LEGACY_DEFAULT_STAGE_REGISTRATION",
+            "explicit_or_default": "DEFAULT",
+            "profile_name": profile_name,
+            "profile_version": profile_version,
+            "configured_at": _utc_now(),
+            "before": before,
+            "after": after,
+            "migratable": True,
+            "human_intervention_count": 0,
+            "reason": "initial all-ones Stage budget had no Human-authored budget provenance",
+        }
+        self._validate_budget_audit(audit)
+        journal.setdefault("budget_audits", []).append(audit)
+        stage["budgets"] = _copy(after)
+        return {"stage": self.show_stage(stage_id, journal=journal), "budget_audit": _copy(audit), "migrated": True}
+
     def _stop(self, journal: dict[str, Any], command: Mapping[str, Any], payload: Mapping[str, Any]) -> dict[str, Any]:
         stage_id = command["subject_id"]
         stage = self._stage(journal, stage_id)
         self._require_status(stage, {"PLANNED", "ACTIVE", "READY"})
+        explicit_cancel = (
+            payload.get("explicit_human_termination") is True
+            and payload.get("termination_reason") == "EXPLICIT_HUMAN_CANCELLATION"
+        )
+        termination = self.validate_termination(
+            stage_id,
+            journal=journal,
+            explicit_host_termination=explicit_cancel,
+        )
+        if not termination.get("allowed"):
+            raise WorkflowV2ControllerError("AUTOMATED_STOP_FORBIDDEN_UNFINISHED_OBJECTIVE")
         for operation in journal["operations"].values():
             operation_stage = operation.get("subject_id") == stage_id or any(
                 attempt.get("attempt_id") == operation.get("subject_id") and attempt.get("stage_id") == stage_id
@@ -1930,6 +2092,9 @@ class StageController:
                 raise WorkflowV2ControllerError("STOP requires all external effects settled or proven not sent")
         stage["status"] = "STOPPED"
         stage["owner_stage_id"] = None
+        self._runtime(journal, stage_id)["termination_reason"] = (
+            "EXPLICIT_HUMAN_CANCELLATION" if explicit_cancel else termination.get("reason")
+        )
         if journal.get("executable_owner_stage_id") == stage_id:
             journal["executable_owner_stage_id"] = None
         for edge in journal["dependencies"].values():
@@ -2028,7 +2193,210 @@ class StageController:
                 )
                 if gate is not None:
                     projection["human_gate"] = _copy(gate)
+        projection["legal_next_action"] = self.resolve_legal_next_action(stage.get("stage_id"))
+        projection["termination_validation"] = self.validate_termination(stage.get("stage_id"))
         return projection
+
+    def budget_authority_status(
+        self,
+        stage_id: str,
+        *,
+        execution_profile: Mapping[str, Any] | None = None,
+        journal: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Audit the durable budget without mutating the lifecycle journal."""
+
+        source = self._journal if journal is None else journal
+        stage = self._stage(source, stage_id)
+        current = {field: stage["budgets"][field] for field in BUDGET_FIELDS}
+        audits = [item for item in source.get("budget_audits", []) if item.get("stage_id") == stage_id]
+        profile = execution_profile if isinstance(execution_profile, Mapping) else {}
+        proposed = profile.get("budget_policy") if isinstance(profile.get("budget_policy"), Mapping) else None
+        if proposed is not None and set(proposed) == set(BUDGET_FIELDS):
+            recommended = {field: proposed[field] for field in BUDGET_FIELDS}
+        else:
+            recommended = None
+        legacy_default = all(value == 1 for value in current.values())
+        explicit = bool(audits) and audits[-1].get("explicit_or_default") == "EXPLICIT"
+        migratable = (
+            not audits
+            and legacy_default
+            and recommended is not None
+            and recommended["max_attempts_per_iteration"] == current["max_attempts_per_iteration"]
+            and recommended["max_iterations"] >= current["max_iterations"]
+            and recommended["max_attempts_total"] >= current["max_attempts_total"]
+        )
+        if audits:
+            origin = audits[-1].get("origin")
+            authority = audits[-1].get("authority")
+            source_kind = "CURRENT"
+        elif legacy_default:
+            origin = "LEGACY_UNATTRIBUTED_STAGE_REGISTRATION"
+            authority = "UNATTRIBUTED_UNTIL_MIGRATED"
+            source_kind = "LEGACY_DEFAULT"
+        else:
+            origin = "UNATTRIBUTED_STAGE_REGISTRATION"
+            authority = "UNATTRIBUTED"
+            source_kind = "UNATTRIBUTED"
+        return {
+            "stage_id": stage_id,
+            "budget_value": current,
+            "BUDGET_VALUE": current,
+            "budget_authority": authority,
+            "BUDGET_AUTHORITY": authority,
+            "budget_origin": origin,
+            "BUDGET_ORIGIN": origin,
+            "configured_at": audits[-1].get("configured_at") if audits else None,
+            "explicit_or_default": "EXPLICIT" if explicit else "DEFAULT",
+            "execution_profile": {
+                "name": profile.get("name"),
+                "version": profile.get("version"),
+                "authority": profile.get("authority"),
+            },
+            "source_kind": source_kind,
+            "recommended_budget": recommended,
+            "migratable": migratable,
+            "reason": (
+                "current execution profile can canonically migrate the unattributed all-ones legacy default"
+                if migratable else "budget migration is not currently authorized"
+            ),
+            "human_intervention_count": 0,
+        }
+
+    def resolve_legal_next_action(
+        self,
+        stage_id: str | None = None,
+        *,
+        journal: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return the next legal controller/supervisor action, never a stop shortcut."""
+
+        source = self._journal if journal is None else journal
+        stage_view = self.show_stage(stage_id, journal=source)
+        selected = stage_view.get("stage_id")
+        if selected is None:
+            return {"action": "REGISTER_STAGE", "actor": "Controller", "canonical": True, "reason": "no Stage is registered", "no_legal_automated_next_action": False}
+        stage = self._stage(source, selected)
+        status = stage.get("status")
+        if status == "PLANNED":
+            action = "START" if not stage_view.get("open_dependencies") and not stage_view.get("pending_decisions") else "WAIT"
+            return {"action": action, "actor": "Controller", "canonical": True, "reason": "planned Stage lifecycle precondition", "no_legal_automated_next_action": False}
+        if status in {"CLOSED", "STOPPED"}:
+            return {"action": None, "actor": "Controller", "canonical": True, "reason": "Stage is terminal", "no_legal_automated_next_action": True}
+        if status == "READY":
+            action = "CLOSEOUT" if source.get("stage_runtime", {}).get(selected, {}).get("integration_operation_id") else "COMMIT_INTEGRATION"
+            return {"action": action, "actor": "Controller", "canonical": True, "reason": "objective reached READY; integration remains bounded", "no_legal_automated_next_action": False}
+        if stage_view.get("pending_decisions"):
+            return {"action": "APPLY_DECISION", "actor": "Controller", "canonical": True, "reason": "pending decision must be reduced", "no_legal_automated_next_action": False}
+        runtime = source.get("stage_runtime", {}).get(selected, {})
+        if runtime.get("in_flight_operation_id"):
+            action = "RESOLVE_LEGACY_ORPHAN" if self._legacy_orphan_operation(source, selected) is not None else "RECORD_OBSERVATION"
+            return {"action": action, "actor": "Provider" if action == "RECORD_OBSERVATION" else "Controller", "canonical": True, "reason": "external effect must be settled", "no_legal_automated_next_action": False}
+        assessment_id = stage.get("current_assessment_id")
+        if assessment_id:
+            decision = self._resolved_gpt_decision(source, assessment_id)
+            if decision is None:
+                return {"action": "TECHNICAL_GPT_ESCALATION", "actor": "GPT", "canonical": False, "reason": "current assessment requires technical review", "no_legal_automated_next_action": False}
+            resolution = decision.get("resolution")
+            if resolution == "HUMAN_GATE":
+                return {"action": "HUMAN_GATE", "actor": "Human", "canonical": True, "reason": "validated Human Gate is unresolved", "no_legal_automated_next_action": False}
+            if resolution == "BLOCKED":
+                valid = any(
+                    item.get("stage_id") == selected and item.get("assessment_id") == assessment_id and item.get("decision_id") == decision.get("decision_id")
+                    for item in source.get("termination_validations", [])
+                )
+                return {"action": None if valid else "TECHNICAL_GPT_ESCALATION", "actor": "Controller" if valid else "GPT", "canonical": not valid, "reason": "genuine blocked evidence is durable" if valid else "BLOCKED requires a fresh technical route audit", "no_legal_automated_next_action": valid}
+            if resolution == "CONTINUE":
+                current = source.get("iterations", {}).get(stage.get("current_iteration_id"), {})
+                current_attempts = len(self._budgeted_attempts_for(source, selected, stage.get("current_iteration_id")))
+                total_attempts = len(self._budgeted_attempts_for(source, selected))
+                if current_attempts >= stage["budgets"]["max_attempts_per_iteration"] and total_attempts < stage["budgets"]["max_attempts_total"] and current.get("index", 0) < stage["budgets"]["max_iterations"]:
+                    digest = continue_iteration_change_digest(
+                        decision_id=decision["decision_id"], assessment_id=assessment_id,
+                        iteration_id=str(current.get("iteration_id")), objective_identity=stage_objective_identity(stage),
+                    )
+                    return {"action": "ADVANCE_ITERATION", "actor": "Controller", "canonical": True, "reason": "CONTINUE is authorized and the iteration boundary is exhausted", "payload": {"auto_advance": True, "requires_next_iteration": True, "review_identity": decision["decision_id"], "technical_change_digest": digest}, "no_legal_automated_next_action": False}
+                if total_attempts >= stage["budgets"]["max_attempts_total"]:
+                    return {"action": "MIGRATE_BUDGET", "actor": "Controller", "canonical": True, "reason": "current bounded total budget is exhausted; authority audit precedes any new attempt", "no_legal_automated_next_action": False}
+                return {"action": "REQUEST_EXECUTION", "actor": "Provider", "canonical": True, "reason": "CONTINUE authorizes the next bounded execution", "no_legal_automated_next_action": False}
+            return {"action": "TECHNICAL_GPT_ESCALATION", "actor": "GPT", "canonical": False, "reason": "resolved technical decision needs supervisory reduction", "no_legal_automated_next_action": False}
+        current_attempts = len(self._budgeted_attempts_for(source, selected, stage.get("current_iteration_id")))
+        total_attempts = len(self._budgeted_attempts_for(source, selected))
+        if current_attempts >= stage["budgets"]["max_attempts_per_iteration"] or total_attempts >= stage["budgets"]["max_attempts_total"]:
+            return {"action": "ASSESS_RESULT", "actor": "Controller", "canonical": True, "reason": "attempt budget requires an immutable assessment", "no_legal_automated_next_action": False}
+        return {"action": "REQUEST_EXECUTION", "actor": "Provider", "canonical": True, "reason": "bounded execution is authorized", "no_legal_automated_next_action": False}
+
+    # Naming aliases keep the supervisory contract explicit to callers while
+    # preserving one implementation and one source of truth.
+    derive_legal_next_action = resolve_legal_next_action
+
+    def validate_termination(
+        self,
+        stage_id: str | None = None,
+        *,
+        journal: Mapping[str, Any] | None = None,
+        explicit_host_termination: bool = False,
+    ) -> dict[str, Any]:
+        """Apply the one termination validator used by STOP and reporting."""
+
+        source = self._journal if journal is None else journal
+        stage_view = self.show_stage(stage_id, journal=source)
+        selected = stage_view.get("stage_id")
+        if selected is None:
+            return {"allowed": False, "reason": "NO_STAGE", "objective_complete": False, "valid_human_gate": False, "genuine_blocked": False, "no_legal_automated_next_action": False}
+        stage = self._stage(source, selected)
+        status = stage.get("status")
+        runtime = source.get("stage_runtime", {}).get(selected, {})
+        objective_complete = status in {"READY", "CLOSED"}
+        valid_human_gate = False
+        for item in source.get("human_gates", []):
+            if item.get("stage_id") == selected and item.get("resolved") is not True:
+                try:
+                    validate_human_gate(item.get("gate", {}))
+                except (ContractValidationError, TypeError, ValueError):
+                    continue
+                valid_human_gate = True
+                break
+        genuine_blocked = False
+        assessment_id = stage.get("current_assessment_id")
+        decision = self._resolved_gpt_decision(source, assessment_id)
+        if decision is not None and decision.get("resolution") == "BLOCKED":
+            for record in source.get("termination_validations", []):
+                if record.get("stage_id") == selected and record.get("assessment_id") == assessment_id and record.get("decision_id") == decision.get("decision_id"):
+                    try:
+                        validate_genuine_blocked_evidence(record)
+                    except (ContractValidationError, TypeError, ValueError):
+                        continue
+                    if not stage_view.get("pending_decisions") and not stage_view.get("open_dependencies") and not runtime.get("in_flight_operation_id"):
+                        genuine_blocked = True
+                        break
+        explicit = bool(explicit_host_termination or runtime.get("termination_reason") == "EXPLICIT_HUMAN_CANCELLATION")
+        allowed = bool(objective_complete or valid_human_gate or genuine_blocked or explicit)
+        if objective_complete:
+            reason = "OBJECTIVE_COMPLETE"
+        elif valid_human_gate:
+            reason = "VALID_HUMAN_GATE"
+        elif genuine_blocked:
+            reason = "GENUINE_BLOCKED"
+        elif explicit:
+            reason = "EXPLICIT_HUMAN_CANCELLATION"
+        else:
+            reason = "UNFINISHED_OBJECTIVE"
+        legal = self.resolve_legal_next_action(selected, journal=source)
+        return {
+            "allowed": allowed,
+            "reason": reason,
+            "stage_id": selected,
+            "objective_complete": objective_complete,
+            "valid_human_gate": valid_human_gate,
+            "genuine_blocked": genuine_blocked,
+            "no_legal_automated_next_action": genuine_blocked,
+            "legal_next_action": legal,
+            "human_intervention_count": 0,
+        }
+
+    # Compatibility spelling for integrations that use validator language.
+    termination_validation = validate_termination
 
     def register_stage(self, stage: Mapping[str, Any], **kwargs: Any) -> dict[str, Any]:
         payload = build_registration_payload(stage)
@@ -2158,6 +2526,12 @@ class StageController:
                 and current_iteration.get("index", 0) >= stage["budgets"]["max_iterations"]
             ),
         }
+
+    def migrate_budget(self, stage_id: str, *, payload: Mapping[str, Any] | None = None, command_id: str | None = None, expected_revision: int | None = None, **kwargs: Any) -> dict[str, Any]:
+        """Attribute a proven legacy default through the canonical reducer."""
+
+        body = _copy(payload if payload is not None else kwargs)
+        return self.dispatch("MIGRATE_BUDGET", subject_id=stage_id, payload=body, command_id=command_id, expected_revision=expected_revision)
 
     def request_decision(self, decision: Mapping[str, Any], **kwargs: Any) -> dict[str, Any]:
         return self.dispatch("REQUEST_DECISION", subject_id=decision["subject_id"], payload={"decision": decision}, **kwargs)

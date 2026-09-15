@@ -260,7 +260,12 @@ class AttemptExhaustionRecoveryRegression(unittest.TestCase):
     def test_terminal_stop_preserves_terminal_semantics_after_exhaustion(self):
         controller, stage_id, _, _ = self._exhaust_current_iteration()
 
-        result = controller.stop(stage_id, command_id="command-stop-after-exhaustion-12345678")
+        result = controller.stop(
+            stage_id,
+            explicit_human_termination=True,
+            termination_reason="EXPLICIT_HUMAN_CANCELLATION",
+            command_id="command-stop-after-exhaustion-12345678",
+        )
 
         self.assertEqual(result["stage"]["status"], "STOPPED")
         self.assertIsNone(result["stage"]["next_action"])

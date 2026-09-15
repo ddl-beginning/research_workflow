@@ -149,7 +149,7 @@ class WorkflowV2ContractMatrix(unittest.TestCase):
 
     def test_state_and_command_hard_limits(self):
         self.assertEqual(STAGE_STATES, ("PLANNED", "ACTIVE", "READY", "CLOSED", "STOPPED"))
-        self.assertEqual(len(PUBLIC_COMMANDS), 18)
+        self.assertEqual(len(PUBLIC_COMMANDS), 19)
         self.assertNotIn("BLOCKED", STAGE_STATES)
         self.assertNotIn("SUSPENDED", STAGE_STATES)
         self.assertNotIn("OPEN_ITERATION", PUBLIC_COMMANDS)

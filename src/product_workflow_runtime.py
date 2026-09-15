@@ -53,7 +53,7 @@ STAGE_SCOPED_COMMANDS = frozenset({
     "OBSERVE_RESULT", "ASSESS_RESULT", "APPLY_GPT_DECISION", "ADVANCE_ITERATION",
     "REQUEST_DECISION", "APPLY_DECISION", "RESOLVE_BLOCKER", "APPLY_RECEIPT",
     "COMMIT_INTEGRATION", "CLOSEOUT", "CLOSE_STAGE", "STOP", "ADD_DEPENDENCY",
-    "SATISFY_DEPENDENCY",
+    "SATISFY_DEPENDENCY", "MIGRATE_BUDGET",
 })
 _COMMAND_WIRE_NAMES = {
     "START_STAGE": "START",
@@ -235,6 +235,7 @@ def initialize_product_runtime(workspace: str | Path, config_path: str | Path | 
 class ProductWorkflowRuntime:
     """MCP read/submit adapter; no legacy Bootstrap or Core V1 state routing."""
     lifecycle_version = "v2"
+    supervisor_step_limit = 8
 
     def __init__(self, workspace: str | Path, *, config: RuntimeCompositionConfig,
                  maintenance_capability: Any | None = None) -> None:
@@ -443,8 +444,19 @@ class ProductWorkflowRuntime:
         if brief is None:
             raise WorkflowRuntimeError("WORKFLOW_NOT_FOUND", "workflow has not been started")
         projection = self.controller.resume_projection()
+        contract_path = Path(__file__).resolve().parents[1] / "docs" / "AUTONOMOUS_OBJECTIVE_COMPLETION_LOOP.md"
+        try:
+            contract_text = contract_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise WorkflowRuntimeError("OUTER_LOOP_CONTEXT_MISSING", "outer supervisory contract is not available") from exc
+        outer_loop_contract = {
+            "path": str(contract_path),
+            "digest": "contract-" + hashlib.sha256(contract_text.encode("utf-8")).hexdigest(),
+            "loaded": True,
+            "authority": "DESIGN_CONTEXT_ONLY",
+        }
         presentation = build_human_presentation(
-            metadata=extra,
+            metadata={**extra, "outer_loop_contract": outer_loop_contract},
             canonical_state=projection,
             artifact_root=self.root,
         )
@@ -456,14 +468,15 @@ class ProductWorkflowRuntime:
                     "presentation": presentation,
                     "schema_version": "product_workflow_result.v1", "next_action": action,
                     "next_tool": "workflow_answer", "question_id": question.get("question_id") if question else None,
-                    "question": question, "brief_state": brief["state"], "canonical": projection, **extra}
+                    "question": question, "brief_state": brief["state"], "canonical": projection,
+                    "outer_loop_contract": outer_loop_contract, **extra}
         return {"human_summary": presentation["human_summary"],
                 "machine_details": presentation["machine_details"],
                 "presentation": presentation,
                 "schema_version": "product_workflow_result.v1", "lifecycle_version": "v2",
                 "workspace_root": str(self.root), "project_id": brief["project_id"],
                 "brief_state": brief["state"], "canonical": projection, **projection, "next_tool": "workflow_answer" if projection["next_actor"] == "Human" else "workflow_run",
-                "question_id": None, **extra}
+                "question_id": None, "outer_loop_contract": outer_loop_contract, **extra}
 
     def status(self) -> dict[str, Any]:
         return self._view()
@@ -499,7 +512,7 @@ class ProductWorkflowRuntime:
         is_preserved_blocked = any(item.get("resolution") == "BLOCKED" for item in resolved)
         is_applied_continue = any(item.get("resolution") == "CONTINUE" for item in resolved)
         is_unreviewed_technical_failure = isinstance(observation.get("failure"), Mapping)
-        if not is_preserved_blocked and not is_applied_continue and not is_unreviewed_technical_failure:
+        if not assessment_id:
             return None
         operation = next(
             (item for item in state.get("operations", {}).values()
@@ -507,6 +520,30 @@ class ProductWorkflowRuntime:
             None,
         )
         return dict(stage), dict(assessment), dict(observation), dict(operation) if isinstance(operation, Mapping) else None
+
+    def _rebind_latest_live_assessment(self, stage_id: str) -> dict[str, Any] | None:
+        """Recover a cleared assessment projection without rewriting evidence."""
+
+        stage = self.controller.resolve_canonical_stage(stage_id)
+        runtime = self.controller.state.get("stage_runtime", {}).get(stage_id, {})
+        attempt_id = runtime.get("current_attempt_id")
+        if not isinstance(attempt_id, str) or not attempt_id:
+            return None
+        candidates = [
+            item for item in self.controller.state.get("assessments", {}).values()
+            if item.get("stage_id") == stage_id
+            and item.get("attempt_id") == attempt_id
+            and item.get("iteration_id") == stage.get("current_iteration_id")
+        ]
+        if not candidates:
+            return None
+        assessment = copy.deepcopy(candidates[-1])
+        receipt = self.controller.assess_result(
+            stage_id,
+            assessment,
+            command_id="command-supervisor-assessment-rebind-" + sha256_json({"stage_id": stage_id, "assessment_id": assessment["assessment_id"], "revision": self.controller.revision})[:32],
+        )
+        return receipt.get("assessment") if isinstance(receipt.get("assessment"), Mapping) else assessment
 
     @staticmethod
     def _latest_continue_assessment_id(stage: Mapping[str, Any], state: Mapping[str, Any]) -> str | None:
@@ -944,7 +981,7 @@ class ProductWorkflowRuntime:
         budget = self.controller.attempt_budget_status(stage["stage_id"])
         suffix = sha256_json({"blocker": blocker["blocker_id"], "revision": self.controller.revision})[:32]
         maintenance: dict[str, Any] = {"blocker_classification": blocker, "human_intervention_count": 0, **(dict(inherited) if isinstance(inherited, Mapping) else {})}
-        if action == "WORK_REMAINING" and not (applied_continue and budget.get("per_iteration_exhausted")):
+        if action == "WORK_REMAINING" and not budget.get("per_iteration_exhausted") and not budget.get("total_exhausted"):
             revalidated = None
             if preserved_blocked:
                 revalidated = self.controller.revalidate_blocker(
@@ -967,9 +1004,9 @@ class ProductWorkflowRuntime:
             return self._view(**maintenance)
         consulted, decision = self._technical_review_decision(context, blocker)
         choice = consulted["decision"]
-        if choice in {"CONTINUE", "REPLAN"}:
+        if choice in {"CONTINUE", "REPLAN", "STAGE_READY"}:
             revalidated = None
-            if preserved_blocked:
+            if preserved_blocked and choice != "STAGE_READY":
                 revalidated = self.controller.revalidate_blocker(
                     stage["stage_id"], blocker_record=blocker, blocker_still_true="NO",
                     released_attempt_id=self.controller.state["stage_runtime"][stage["stage_id"]].get("current_attempt_id"),
@@ -979,23 +1016,46 @@ class ProductWorkflowRuntime:
             apply_kwargs: dict[str, Any] = {}
             if choice == "REPLAN":
                 apply_kwargs.update({"replan_subtype": "ENGINEERING_FIX", "technical_change_digest": "change-" + blocker["failure_signature"]})
+            budget_before_apply = self.controller.attempt_budget_status(stage["stage_id"])
+            continue_can_open_next_iteration = (
+                choice == "CONTINUE"
+                and budget_before_apply.get("per_iteration_exhausted")
+                and not budget_before_apply.get("total_exhausted")
+                and not budget_before_apply.get("max_iteration_exhausted")
+            )
+            if budget_before_apply.get("total_exhausted") or (
+                budget_before_apply.get("per_iteration_exhausted") and not continue_can_open_next_iteration
+            ):
+                # A valid GPT marker is not permission to bypass the
+                # controller's attempt budget.  Preserve the assessment and
+                # leave a non-terminal technical continuation point for the
+                # next supervisory resume.
+                maintenance.update({
+                    "technical_gpt_escalation": {"status": "PASS", "decision": choice, "consultation_id": consulted["consultation_id"]},
+                    "technical_recovery": {"status": "BOUNDED_LIMIT", "route": choice},
+                    "provider_execution": None,
+                    "generation_started": False,
+                    "budget_route_rejected": "ATTEMPT_BUDGET_EXHAUSTED",
+                })
+                return self._view(**maintenance)
             applied = self.controller.apply_gpt_decision(
                 stage["stage_id"], decision, choice=choice, command_id="command-maintenance-gpt-apply-" + suffix, **apply_kwargs,
             )
             executed = None
-            try:
-                executed = self._execute_maintenance_provider(context, reason="ENGINEERING_FIX" if choice == "REPLAN" else "CONTINUE", suffix=suffix)
-            except WorkflowRuntimeError as exc:
-                # A technical review may be valid while the bounded attempt
-                # budget is already exhausted.  Keep the applied decision and
-                # expose the controller's typed limit without relaying it as a
-                # new Human decision.
-                maintenance["provider_execution_error"] = {"code": exc.code, "message": str(exc)[:256]}
+            if choice != "STAGE_READY":
+                try:
+                    executed = self._execute_maintenance_provider(context, reason="ENGINEERING_FIX" if choice == "REPLAN" else "CONTINUE", suffix=suffix)
+                except (WorkflowRuntimeError, WorkflowV2ControllerError) as exc:
+                    # A technical review may be valid while the bounded attempt
+                    # budget is already exhausted.  Keep the applied decision and
+                    # expose the controller's typed limit without relaying it as a
+                    # new Human decision.
+                    maintenance["provider_execution_error"] = {"code": getattr(exc, "code", type(exc).__name__), "message": str(exc)[:256]}
             maintenance.update({
                 "resume_blocker_revalidation": revalidated.get("revalidation") if revalidated else None,
                 "technical_gpt_escalation": {"status": "PASS", "decision": choice, "consultation_id": consulted["consultation_id"]},
                 "gpt_decision_applied": applied.get("decision"), "provider_execution": executed,
-                "technical_recovery": {"status": "PASS" if executed else "BOUNDED_LIMIT", "route": choice},
+                "technical_recovery": {"status": "PASS", "route": choice},
                 "generation_started": executed["generation_started"] if executed else False,
                 "auto_next_iteration": bool(applied.get("auto_next_iteration")),
                 "new_iteration_started": bool(applied.get("auto_next_iteration")),
@@ -1036,65 +1096,226 @@ class ProductWorkflowRuntime:
 
     @_boundary
     def resume(self) -> dict[str, Any]:
-        projection = self.controller.resume_projection()
         inherited: dict[str, Any] = {}
-        if projection.get("next_action") == "RESOLVE_LEGACY_ORPHAN":
-            stage = projection.get("stage", {})
-            operation_id = stage.get("in_flight_operation_id")
-            if isinstance(operation_id, str) and operation_id:
-                audit = self.controller.audit_legacy_side_effects(stage.get("stage_id"), search_roots=[self.root])
-                if audit.get("classification") == "NONE" and audit.get("complete") is True:
-                    resolution = self.controller.resolve_legacy_orphan(
-                        stage["stage_id"],
-                        operation_id=operation_id,
-                        effect_class="REVERSIBLE_LOCAL_RESEARCH",
-                        side_effect_audit=audit,
-                        command_id="command-legacy-orphan-resolution-" + operation_id[-32:],
-                    )
-                    inherited = {
-                        "legacy_resolution": resolution.get("legacy_resolution"),
-                        "old_operation_preserved": True,
-                        "old_operation_redispatched": False,
-                        "side_effect_audit": audit,
-                        "self_repair": {"status": "PASS", "human_intervention_count": 0},
-                    }
-                else:
+        supervisor_steps: list[dict[str, Any]] = []
+        budget_authority: dict[str, Any] | None = None
+        budget_migration: dict[str, Any] | None = None
+        carry_keys = (
+            "legacy_resolution", "old_operation_preserved", "old_operation_redispatched", "side_effect_audit", "self_repair",
+            "blocker_classification", "resume_blocker_revalidation", "technical_recovery", "technical_gpt_escalation",
+            "gpt_decision_applied", "provider_execution", "stage_owned_output_missing", "generation_started",
+            "blocked_validation", "human_intervention_count", "provider_execution_error", "auto_next_iteration",
+            "new_iteration_started", "iteration_transition",
+            "budget_route_rejected",
+        )
+
+        def carry(result: Mapping[str, Any]) -> None:
+            for key in carry_keys:
+                if key in result:
+                    inherited[key] = copy.deepcopy(result[key])
+
+        for step_index in range(self.supervisor_step_limit):
+            projection = self.controller.resume_projection()
+            termination = projection.get("termination_validation", {})
+            stage = projection.get("stage") if isinstance(projection.get("stage"), Mapping) else {}
+            stage_id = stage.get("stage_id")
+            if termination.get("allowed"):
+                return self._view(
+                    **inherited,
+                    budget_authority=budget_authority,
+                    budget_migration=budget_migration,
+                    termination_validation=termination,
+                    legal_next_action=projection.get("legal_next_action"),
+                    outer_supervisory_loop={
+                        "status": "TERMINATED_BY_ALLOWED_CONDITION",
+                        "steps": supervisor_steps,
+                        "step_limit": self.supervisor_step_limit,
+                        "human_intervention_count": 0,
+                    },
+                )
+
+            if projection.get("next_action") == "RESOLVE_LEGACY_ORPHAN" and isinstance(stage_id, str):
+                operation_id = stage.get("in_flight_operation_id")
+                if isinstance(operation_id, str) and operation_id:
+                    audit = self.controller.audit_legacy_side_effects(stage_id, search_roots=[self.root])
+                    if audit.get("classification") == "NONE" and audit.get("complete") is True:
+                        resolution = self.controller.resolve_legacy_orphan(
+                            stage_id,
+                            operation_id=operation_id,
+                            effect_class="REVERSIBLE_LOCAL_RESEARCH",
+                            side_effect_audit=audit,
+                            command_id="command-legacy-orphan-resolution-" + operation_id[-32:],
+                        )
+                        inherited.update({
+                            "legacy_resolution": resolution.get("legacy_resolution"),
+                            "old_operation_preserved": True,
+                            "old_operation_redispatched": False,
+                            "side_effect_audit": audit,
+                            "self_repair": {"status": "PASS", "human_intervention_count": 0},
+                        })
+                        supervisor_steps.append({"index": step_index + 1, "action": "RESOLVE_LEGACY_ORPHAN", "status": "PASS"})
+                        continue
                     return self._view(
+                        **inherited,
                         legacy_resolution={"status": "REQUIRES_BOUNDED_AUDIT", "operation_id": operation_id},
                         side_effect_audit=audit,
                         self_repair={"status": "NOT_SAFE_TO_ABANDON", "human_intervention_count": 0},
+                        termination_validation=termination,
+                        legal_next_action=projection.get("legal_next_action"),
+                        outer_supervisory_loop={
+                            "status": "NON_TERMINAL_REQUIRES_BOUNDED_AUDIT",
+                            "steps": supervisor_steps,
+                            "step_limit": self.supervisor_step_limit,
+                            "human_intervention_count": 0,
+                        },
                     )
-        context = self._maintenance_context()
-        if context is not None:
-            advanced = self._auto_advance_continue_iteration(context)
-            if advanced is not None:
-                next_stage = advanced.get("stage", {})
-                suffix = sha256_json(
-                    {
+
+            if isinstance(stage_id, str):
+                brief = self.intake.state or {}
+                profile = brief.get("execution_profile") if isinstance(brief, Mapping) else None
+                budget_authority = self.controller.budget_authority_status(stage_id, execution_profile=profile if isinstance(profile, Mapping) else None)
+                if budget_authority.get("migratable"):
+                    recommended = budget_authority.get("recommended_budget")
+                    profile_view = budget_authority.get("execution_profile", {})
+                    migrated = self.controller.migrate_budget(
+                        stage_id,
+                        payload={
+                            "authorization": "CURRENT_EXECUTION_PROFILE_MIGRATION",
+                            "authority": "PROJECT_BRIEF",
+                            "profile_name": profile_view.get("name") or "autonomous_research",
+                            "profile_version": profile_view.get("version") or "1",
+                            "budget_policy": recommended,
+                            "migration_reason": "resume audit of unattributed legacy/default Stage budget",
+                        },
+                        command_id="command-supervisor-budget-migration-" + sha256_json({"stage_id": stage_id, "before": budget_authority.get("budget_value"), "after": recommended})[:32],
+                    )
+                    budget_migration = migrated.get("budget_audit")
+                    budget_authority = self.controller.budget_authority_status(stage_id, execution_profile=profile if isinstance(profile, Mapping) else None)
+                    supervisor_steps.append({"index": step_index + 1, "action": "MIGRATE_BUDGET", "status": "PASS", "budget_audit_id": budget_migration.get("budget_audit_id") if isinstance(budget_migration, Mapping) else None})
+                    continue
+
+            context = self._maintenance_context()
+            if context is not None:
+                advanced = self._auto_advance_continue_iteration(context)
+                if advanced is not None:
+                    next_stage = advanced.get("stage", {})
+                    suffix = sha256_json({
                         "stage_id": next_stage.get("stage_id"),
                         "iteration_id": next_stage.get("current_iteration_id"),
                         "revision": self.controller.revision,
-                    }
-                )[:32]
-                executed = self._execute_maintenance_provider(
-                    context, reason="CONTINUE", suffix=suffix,
-                )
-                return self._view(
-                    **inherited,
-                    auto_next_iteration=True,
-                    new_iteration_started=True,
-                    iteration_transition=advanced,
-                    provider_execution=executed,
-                    technical_recovery={
-                        "status": "PASS",
-                        "route": "CONTINUE",
-                        "provider": executed["provider_id"],
-                    },
-                    generation_started=executed["generation_started"],
-                    human_intervention_count=0,
-                )
-            return self._resume_blocked_maintenance(context, inherited=inherited)
-        return self._view(**inherited)
+                    })[:32]
+                    executed = self._execute_maintenance_provider(context, reason="CONTINUE", suffix=suffix)
+                    inherited.update({
+                        "auto_next_iteration": True,
+                        "new_iteration_started": True,
+                        "iteration_transition": advanced,
+                        "provider_execution": executed,
+                        "technical_recovery": {"status": "PASS", "route": "CONTINUE", "provider": executed["provider_id"]},
+                        "generation_started": executed["generation_started"],
+                        "human_intervention_count": 0,
+                    })
+                    supervisor_steps.append({"index": step_index + 1, "action": "ADVANCE_ITERATION", "status": "PASS"})
+                    continue
+                maintenance_result = self._resume_blocked_maintenance(context, inherited=inherited)
+                carry(maintenance_result)
+                supervisor_steps.append({
+                    "index": step_index + 1,
+                    "action": "TECHNICAL_SUPERVISORY_RECOVERY",
+                    "status": maintenance_result.get("technical_recovery", {}).get("status", "PASS"),
+                })
+                provider_execution = maintenance_result.get("provider_execution")
+                if "provider_execution_error" in maintenance_result:
+                    current_projection = self.controller.resume_projection()
+                    return self._view(
+                        **inherited,
+                        budget_authority=budget_authority,
+                        budget_migration=budget_migration,
+                        termination_validation=current_projection.get("termination_validation"),
+                        legal_next_action=current_projection.get("legal_next_action"),
+                        outer_supervisory_loop={
+                            "status": "NON_TERMINAL_PROVIDER_ROUTE_EXHAUSTED",
+                            "steps": supervisor_steps,
+                            "step_limit": self.supervisor_step_limit,
+                            "human_intervention_count": 0,
+                        },
+                    )
+                if "budget_route_rejected" in maintenance_result:
+                    current_projection = self.controller.resume_projection()
+                    return self._view(
+                        **inherited,
+                        budget_authority=budget_authority,
+                        budget_migration=budget_migration,
+                        termination_validation=current_projection.get("termination_validation"),
+                        legal_next_action=current_projection.get("legal_next_action"),
+                        outer_supervisory_loop={
+                            "status": "NON_TERMINAL_BUDGET_ROUTE_REJECTED",
+                            "steps": supervisor_steps,
+                            "step_limit": self.supervisor_step_limit,
+                            "human_intervention_count": 0,
+                        },
+                    )
+                if isinstance(provider_execution, Mapping) and isinstance(provider_execution.get("provider_result"), Mapping) and provider_execution["provider_result"].get("status") == "SUCCEEDED":
+                    # One successful bounded Provider action is enough for this
+                    # resume call.  The resulting admissible assessment is a
+                    # non-terminal continuation point; a later resume may ask
+                    # the technical reviewer for STAGE_READY without making a
+                    # second provider attempt in the same turn.
+                    current_projection = self.controller.resume_projection()
+                    return self._view(
+                        **inherited,
+                        budget_authority=budget_authority,
+                        budget_migration=budget_migration,
+                        termination_validation=current_projection.get("termination_validation"),
+                        legal_next_action=current_projection.get("legal_next_action"),
+                        outer_supervisory_loop={
+                            "status": "NON_TERMINAL_ASSESSMENT_PENDING",
+                            "steps": supervisor_steps,
+                            "step_limit": self.supervisor_step_limit,
+                            "human_intervention_count": 0,
+                        },
+                    )
+                continue
+
+            legal = self.controller.resolve_legal_next_action(stage_id)
+            action = legal.get("action")
+            if action == "START" and isinstance(stage_id, str):
+                started = self.controller.start(stage_id, command_id="command-supervisor-start-" + sha256_json({"stage_id": stage_id})[:32])
+                supervisor_steps.append({"index": step_index + 1, "action": "START", "status": "PASS"})
+                continue
+            if action == "ASSESS_RESULT" and isinstance(stage_id, str):
+                rebound = self._rebind_latest_live_assessment(stage_id)
+                if rebound is not None:
+                    supervisor_steps.append({"index": step_index + 1, "action": "ASSESS_RESULT", "status": "PASS", "assessment_id": rebound.get("assessment_id")})
+                    continue
+            supervisor_steps.append({"index": step_index + 1, "action": action, "status": "NON_TERMINAL"})
+            return self._view(
+                **inherited,
+                budget_authority=budget_authority,
+                budget_migration=budget_migration,
+                termination_validation=self.controller.validate_termination(stage_id),
+                legal_next_action=legal,
+                outer_supervisory_loop={
+                    "status": "NON_TERMINAL_CONTINUATION_REQUIRED",
+                    "steps": supervisor_steps,
+                    "step_limit": self.supervisor_step_limit,
+                    "human_intervention_count": 0,
+                },
+            )
+
+        final_projection = self.controller.resume_projection()
+        return self._view(
+            **inherited,
+            budget_authority=budget_authority,
+            budget_migration=budget_migration,
+            termination_validation=final_projection.get("termination_validation"),
+            legal_next_action=final_projection.get("legal_next_action"),
+            outer_supervisory_loop={
+                "status": "NON_TERMINAL_CONTINUATION_REQUIRED",
+                "steps": supervisor_steps,
+                "step_limit": self.supervisor_step_limit,
+                "human_intervention_count": 0,
+            },
+        )
 
     @_boundary
     def start(self, **kwargs: Any) -> dict[str, Any]:

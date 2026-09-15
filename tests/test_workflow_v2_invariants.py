@@ -265,7 +265,12 @@ class CanonicalWorkflowV2Invariants(unittest.TestCase):
 
     def test_stop_invariants(self):
         controller = self._active("stage-stop-12345678")
-        result = controller.stop("stage-stop-12345678", command_id="command-stop-12345678")
+        result = controller.stop(
+            "stage-stop-12345678",
+            explicit_human_termination=True,
+            termination_reason="EXPLICIT_HUMAN_CANCELLATION",
+            command_id="command-stop-12345678",
+        )
         self.assertEqual(result["stage"]["status"], "STOPPED")
 
 
