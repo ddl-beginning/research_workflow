@@ -1,6 +1,6 @@
 # Autonomous Objective Completion Loop
 
-Status: implementation and ownership-audit closure complete; bounded project-plan ingestion added; local release evidence complete; stable promotion held by the external clean-room review gate.
+Status: implementation and ownership-audit closure complete; bounded project-plan ingestion added; clean-room release evidence complete; `workflow-v2.1.5-stable` promoted.
 
 This document is a durable architecture and maintenance reference. It is not a
 runtime authority. Runtime authority remains the canonical `StageController`,
@@ -726,17 +726,21 @@ the existing controller.
 ### 25.1 Bounded Project Plan Ingestion Release Evidence
 
 ```text
-IMPLEMENTED_IN_COMMIT: 1f9ae89 (plan ingestion implementation 502b1d3; CLI missing-source boundary fix 1f9ae89)
+IMPLEMENTED_IN_COMMIT: aa8e477 (plan ingestion and fixed Stage-card implementation); ca579f9 (pre-prompt attachment recovery contract); 99ca484 (bounded clean-room transport recovery)
 PLAN_CONTRACT: docs/PROJECT_PLAN_INGESTION_CONTRACT.md
-PLAN_TEST_EVIDENCE: 41 focused plan/runtime tests passed; plan E2E subset 5 passed
-FULL_REGRESSION: 660 passed, 1 skipped, 2 deselected known historical self-test fixture failures
-PORTABLE_VALIDATION: PASS; destructive_actions=0; resume_idempotence=YES; frozen_kernel_unchanged=YES
-DOCUMENTATION_AUDIT: PASS
-CLEANROOM: FAIL_WITH_EXTERNAL_REVIEW_LIMITATION; first bounded run stopped at ATTACHMENT_UPLOAD_FAILED before prompt; one controlled retry uploaded attachments and stopped at GPT_DECISION_INVALID during planning review; current product worktree writes=NO
-CURRENT_RELEASE_CANDIDATE: workflow-v2.1.5-release-candidate-r2
-CURRENT_STABLE_TAG: NOT_PROMOTED; stable promotion requires clean-room PASS
-KNOWN_LIMITATIONS: historical self-test fixture is missing .consultations/CONSULT-20260906-070055-bef2fdb6/receipt.json; the external bridge/GPT decision contract did not provide clean-room release evidence
-NEXT_ACTION: retry clean-room only after the external bridge/GPT response state changes; no Human technical relay is required
+PLAN_TEST_EVIDENCE: focused plan-ingestion/runtime/bridge/discovery/blueprint suite 108 passed; focused plan-ingestion suite 34 passed
+CODEX_STAGE_PLAN_COMPREHENSION_E2E: PASS; fresh disposable workspace, inline WORKFLOW_PLAN.md content, no prior chat, report D:/work/workflow-v2.1.5-codex-plan-comprehension-20260915-r7.json
+FULL_REGRESSION: 671 passed, 1 skipped, 2 deselected; the two deselected cases require the missing historical architecture receipt .consultations/CONSULT-20260906-070055-bef2fdb6/receipt.json
+NODE_BRIDGE_REGRESSION: 122 passed, 0 failed; node --check PASS; compileall and git diff --check PASS
+PORTABLE_VALIDATION: PASS at D:/work/workflow-v2.1.5-portable-validation-20260915-r9.json; destructive_actions=0; project_ab_isolation=YES; relocated_engine=YES; resume_idempotence=YES; frozen_kernel_unchanged=YES
+DOCUMENTATION_AUDIT: PASS; writes_performed=NO
+ATTACHMENT_TRANSPORT_RECOVERY: PASS; ATTACHMENT_UPLOAD_FAILED is recoverable only for strict failed_before_prompt/request_count=0 diagnostics; previous r8 receipt preserved no-effect evidence; recovery is bounded to one retry and fails closed on ambiguity
+CLEANROOM: PASS at D:/work/workflow-v2.1.5-release-validation-20260915-r9.json; source candidate r9; real planning CONTINUE, STANDARD/gpt-5.6-luna/max/chatgpt provider, technical STAGE_READY, settled integration, restart resume, duplicate closeout, and relocated-engine checks all passed; current product worktree writes=NO
+HUMAN_INTERVENTION_COUNT: 0
+CURRENT_RELEASE_CANDIDATE: workflow-v2.1.5-release-candidate-r10 (docs-only final evidence revision after validated r9)
+CURRENT_STABLE_TAG: workflow-v2.1.5-stable (promoted only after all required gates passed; workflow-v2.1.4-stable unchanged)
+KNOWN_LIMITATIONS: historical self-test fixture remains absent and its two evidence-dependent tests remain deselected; this does not affect the bounded maintenance gates above
+NEXT_ACTION: none; Workflow is in STABLE -> MAINTENANCE MODE
 ```
 
 ### 25.2 Per-project ChatGPT browser target maintenance evidence
@@ -755,13 +759,14 @@ not rewritten. Derived views expose only `BOUND_PROJECT`/`CONFIGURED` and a
 digest, never the full URL. No account, quota, rotation, or profile switching
 was added; authentication material remains machine-local.
 
-IMPLEMENTED_IN_COMMIT: aa8e477 (fixed Project Roadmap + self-contained Stage Card normalization, bounded structural analysis, and focused tests; per-project ChatGPT browser target implementation remains f80eed1)
+IMPLEMENTED_IN_COMMIT: aa8e477 (fixed Project Roadmap + self-contained Stage Card normalization, bounded structural analysis, and focused tests; per-project ChatGPT browser target implementation remains f80eed1); ca579f9 and 99ca484 close transport recovery
 TARGET_TEST_EVIDENCE: focused Python plan/runtime/bridge/discovery/blueprint suite 108 passed; focused plan-ingestion suite 34 passed; Node bridge suite 122 passed; compileall, node --check, and git diff --check passed
-FULL_REGRESSION: 670 passed, 1 skipped, 2 deselected known historical self-test fixture failures
-PORTABLE_VALIDATION: PASS at D:/work/workflow-v2.1.5-portable-validation-20260915-r6.json; destructive_actions=0; project_ab_isolation=YES; relocated_engine=YES; resume_idempotence=YES; frozen_kernel_unchanged=YES
+FULL_REGRESSION: 671 passed, 1 skipped, 2 deselected known historical self-test fixture failures
+PORTABLE_VALIDATION: PASS at D:/work/workflow-v2.1.5-portable-validation-20260915-r9.json; destructive_actions=0; project_ab_isolation=YES; relocated_engine=YES; resume_idempotence=YES; frozen_kernel_unchanged=YES
 CARD_STRUCTURE: PASS; fixed LEVEL 1 PROJECT ROADMAP and LEVEL 2 STAGE CARDS; eleven-section Stage cards; stable Task IDs; data maturity/GT/reference bindings; ordinary debug/coding steps remain Tasks; STAGE_SELF_CONTAINED_EXECUTION_READINESS=PASS
 DOCUMENTATION_AUDIT: PASS; writes_performed=NO
-CLEANROOM: FAIL_WITH_EXTERNAL_ATTACHMENT_LIMITATION; one post-implementation run at D:/work/workflow-v2.1.5-release-validation-20260915-r3.json stopped at ATTACHMENT_UPLOAD_FAILED before prompt; receipt request_count=0 with all 3 attachments failed; current product worktree writes=NO
-CURRENT_RELEASE_CANDIDATE: workflow-v2.1.5-release-candidate-r6
-CURRENT_STABLE_TAG: NOT_PROMOTED; workflow-v2.1.4-stable unchanged; stable promotion requires clean-room PASS
-KNOWN_LIMITATIONS: historical self-test fixture is missing .consultations/CONSULT-20260906-070055-bef2fdb6/receipt.json; external browser attachment readiness did not provide clean-room release evidence; no additional retry or Human technical relay was used
+CLEANROOM: PASS at D:/work/workflow-v2.1.5-release-validation-20260915-r9.json; the earlier r8 ATTACHMENT_UPLOAD_FAILED receipt had request_count=0 and no conversation effect; r9 passed the full clean-room route with current product worktree writes=NO
+CURRENT_RELEASE_CANDIDATE: workflow-v2.1.5-release-candidate-r10
+CURRENT_STABLE_TAG: workflow-v2.1.5-stable; workflow-v2.1.4-stable unchanged
+HUMAN_INTERVENTION_COUNT: 0
+KNOWN_LIMITATIONS: historical self-test fixture is missing .consultations/CONSULT-20260906-070055-bef2fdb6/receipt.json; its two evidence-dependent tests remain deselected and do not weaken the current clean-room or plan-ingestion gates
