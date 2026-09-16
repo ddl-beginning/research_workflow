@@ -668,6 +668,15 @@ class ProductWorkflowRuntime:
         if not candidates:
             return None
         assessment = copy.deepcopy(candidates[-1])
+        resolved = any(
+            item.get("actor_kind") == "GPT"
+            and item.get("boundary") == "TECHNICAL_REVIEW"
+            and item.get("subject_id") == assessment.get("assessment_id")
+            and item.get("resolution") in {"CONTINUE", "REPLAN", "STAGE_READY", "BLOCKED", "HUMAN_GATE"}
+            for item in self.controller.state.get("decisions", {}).values()
+        )
+        if resolved:
+            return None
         receipt = self.controller.assess_result(
             stage_id,
             assessment,
@@ -1285,11 +1294,15 @@ class ProductWorkflowRuntime:
                 and not budget_before_apply.get("total_exhausted")
                 and not budget_before_apply.get("max_iteration_exhausted")
             )
-            if budget_before_apply.get("total_exhausted") or (
+            # CONTINUE may open another iteration only when its canonical
+            # budget predicate permits it. REPLAN is an application of a GPT
+            # decision and does not itself consume an attempt; the controller
+            # remains the authority for its typed replan boundary.
+            if choice == "CONTINUE" and (budget_before_apply.get("total_exhausted") or (
                 budget_before_apply.get("per_iteration_exhausted") and not continue_can_open_next_iteration
-            ):
-                # A valid GPT marker is not permission to bypass the
-                # controller's attempt budget.  Preserve the assessment and
+            )):
+                # A valid CONTINUE marker is not permission to bypass the
+                # controller's attempt budget. Preserve the assessment and
                 # leave a non-terminal technical continuation point for the
                 # next supervisory resume.
                 maintenance.update({
@@ -1675,13 +1688,22 @@ class ProductWorkflowRuntime:
         # profile from ``project_id`` when no explicit project override is
         # supplied.
         project_profile_dir = None if effective_project_url is not None else cfg.bridge_profile_dir
-        # Transport identity survives browser/owner restarts. It is derived
-        # from the canonical request, never from a PID, tab, or timestamp.
-        intent_key = sha256_json({
+        # Transport identity survives browser/owner restarts. A generated
+        # packet id is deliberately excluded: it is transport evidence, not
+        # a new reviewer intent. The canonical pack hash is the stable
+        # content identity for a bounded technical review.
+        pack_hash = pack.get("pack_sha256") or pack.get("pack_hash") or pack.get("packSha256")
+        intent_material: dict[str, Any] = {
             "project_id": self.intake.state["project_id"],
-            "project_url": effective_project_url, "purpose": purpose,
-            "request": dict(request),
-        })
+            "project_url": effective_project_url,
+            "purpose": purpose,
+            "objective_identity": request.get("objective_identity"),
+        }
+        if isinstance(pack_hash, str) and pack_hash.strip():
+            intent_material["pack_sha256"] = pack_hash.strip()
+        else:
+            intent_material["request"] = dict(request)
+        intent_key = sha256_json(intent_material)
         recover_consultation_id = None
         recovery_path = self.root / ".consultations" / "intent-recovery" / f"{intent_key}.json"
         if recovery_path.exists():
@@ -1698,6 +1720,38 @@ class ProductWorkflowRuntime:
                     or not isinstance(migration.get("consultation_id"), str)):
                 raise WorkflowRuntimeError("CONSULTATION_RECOVERY_BINDING_INVALID", "legacy recovery does not bind the canonical request")
             recover_consultation_id = migration["consultation_id"]
+        elif purpose == "TECHNICAL_ESCALATION_REVIEW":
+            # Earlier maintenance revisions derived the key from the full
+            # request, which included regenerated packet ids. Reconcile one
+            # already-counted intent by stable project/pack identity so a
+            # restart cannot send another copy of the same review. Only
+            # bounded intent metadata is inspected; response text is never
+            # used for this lookup.
+            intent_root = self.root / ".consultations" / "intent-recovery"
+            candidates: list[tuple[float, str]] = []
+            if intent_root.is_dir() and isinstance(pack_hash, str) and pack_hash.strip():
+                for candidate_path in intent_root.glob("*.json"):
+                    try:
+                        candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
+                    except (OSError, UnicodeError, ValueError):
+                        continue
+                    if (
+                        not isinstance(candidate, Mapping)
+                        or candidate.get("project_id") != self.intake.state["project_id"]
+                        or candidate.get("project_url") != effective_project_url
+                        or candidate.get("pack_sha256") != pack_hash.strip()
+                        or not isinstance(candidate.get("consultation_id"), str)
+                        or not isinstance(candidate.get("request_count"), int)
+                        or candidate.get("request_count") < 1
+                    ):
+                        continue
+                    try:
+                        modified = candidate_path.stat().st_mtime
+                    except OSError:
+                        modified = 0.0
+                    candidates.append((modified, candidate["consultation_id"]))
+            if candidates:
+                recover_consultation_id = max(candidates, key=lambda item: item[0])[1]
         try:
             raw = subprocess_bridge_runner(prompt, mode="fresh", continue_from=None, context_pack=pack,
                     root_dir=str(self.root), profile_dir=project_profile_dir, bridge_root=cfg.bridge_root,
