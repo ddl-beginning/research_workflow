@@ -580,7 +580,7 @@ def run_installation_validation(args: argparse.Namespace) -> dict[str, Any]:
         engine_python = engine_env / "Scripts" / "python.exe"
         if not engine_python.is_file():
             raise ValidationFailure("clean checkout virtualenv Python was not created")
-        run([engine_python, "-m", "pip", "install", "--disable-pip-version-check", "--no-deps", "--editable", str(engine)], cwd=validation_root, timeout=300)
+        run([engine_python, "-m", "pip", "install", "--disable-pip-version-check", "--no-deps", "--no-build-isolation", "--editable", str(engine)], cwd=validation_root, timeout=300)
         fixture_project(project, label="clean-release")
         temporary_mcp_registration(codex, python=engine_python, launcher=engine / "scripts" / "workflow_mcp.py", config=config, cwd=validation_root)
         doctor = json.loads(run([engine_python, engine / "scripts" / "product_doctor.py", "--workspace", project, "--runtime-config", config, "--json"], cwd=project, timeout=90).stdout)
@@ -791,7 +791,7 @@ def run_installation_validation(args: argparse.Namespace) -> dict[str, Any]:
         run(["git", "clone", "--no-local", "--branch", tag, str(PRODUCT_ROOT), str(relocated_engine)], cwd=validation_root, timeout=180)
         run([sys.executable, "-m", "venv", "--system-site-packages", str(relocated_env)], cwd=validation_root, timeout=180)
         relocated_python = relocated_env / "Scripts" / "python.exe"
-        run([relocated_python, "-m", "pip", "install", "--disable-pip-version-check", "--no-deps", "--editable", str(relocated_engine)], cwd=validation_root, timeout=300)
+        run([relocated_python, "-m", "pip", "install", "--disable-pip-version-check", "--no-deps", "--no-build-isolation", "--editable", str(relocated_engine)], cwd=validation_root, timeout=300)
         fixture_project(relocated_project, label="relocated-engine")
         temporary_mcp_registration(codex, python=relocated_python, launcher=relocated_engine / "scripts" / "workflow_mcp.py", config=config, cwd=validation_root)
         relocation_doctor = json.loads(run([relocated_python, relocated_engine / "scripts" / "product_doctor.py", "--workspace", relocated_project, "--runtime-config", config, "--json"], cwd=relocated_project, timeout=90).stdout)
