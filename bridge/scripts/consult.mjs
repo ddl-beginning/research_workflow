@@ -4,7 +4,6 @@ import path from 'node:path';
 import process from 'node:process';
 import {
   consultOnce,
-  DEFAULT_PROFILE_DIR,
   FAILURE_CODES,
   resolveResponseTimeoutMs,
 } from '../src/bridge.mjs';
@@ -24,7 +23,7 @@ function readOptions(name) {
 }
 
 function usage() {
-  console.error('Usage: npm run consult -- --prompt "Reply with exactly: BRIDGE_OK" [--project-url https://chatgpt.com/<project-path>] [--attachment PATH ...] [--mode fresh|continue] [--continue-from CONSULTATION_ID]');
+  console.error('Usage: npm run consult -- --prompt "Reply with exactly: BRIDGE_OK" [--project-url https://chatgpt.com/g/g-p-.../project] [--project-id PROJECT_ID] [--profile-dir PATH] [--attachment PATH ...] [--mode fresh|continue] [--continue-from CONSULTATION_ID]');
 }
 
 const prompt = readOption('--prompt');
@@ -32,7 +31,9 @@ if (!prompt) {
   usage();
   process.exitCode = 1;
 } else {
-  const profileDir = path.resolve(readOption('--profile-dir') || DEFAULT_PROFILE_DIR);
+  const profileOption = readOption('--profile-dir');
+  const profileDir = profileOption === undefined ? undefined : path.resolve(profileOption);
+  const projectId = readOption('--project-id');
   const timeoutValue = readOption('--timeout-ms');
   const mode = readOption('--mode') || 'fresh';
   const continueFrom = readOption('--continue-from');
@@ -40,12 +41,13 @@ if (!prompt) {
   const attachments = readOptions('--attachment');
   const log = (message) => console.log(message);
   console.log('CONSULTATION_STARTED');
-  console.log(`profile=${profileDir}`);
+  console.log(`profile=${profileDir || 'project-resolved'}`);
 
   try {
     const responseTimeoutMs = timeoutValue === undefined ? undefined : resolveResponseTimeoutMs(timeoutValue);
     const result = await consultOnce(prompt, {
-      profileDir,
+      ...(profileDir === undefined ? {} : { profileDir }),
+      ...(projectId === undefined ? {} : { projectId }),
       mode,
       ...(continueFrom === undefined ? {} : { continueFrom }),
       ...(projectUrl === undefined ? {} : { projectUrl }),

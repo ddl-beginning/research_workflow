@@ -1675,11 +1675,35 @@ class ProductWorkflowRuntime:
         # profile from ``project_id`` when no explicit project override is
         # supplied.
         project_profile_dir = None if effective_project_url is not None else cfg.bridge_profile_dir
+        # Transport identity survives browser/owner restarts. It is derived
+        # from the canonical request, never from a PID, tab, or timestamp.
+        intent_key = sha256_json({
+            "project_id": self.intake.state["project_id"],
+            "project_url": effective_project_url, "purpose": purpose,
+            "request": dict(request),
+        })
+        recover_consultation_id = None
+        recovery_path = self.root / ".consultations" / "intent-recovery" / f"{intent_key}.json"
+        if recovery_path.exists():
+            # An explicit legacy migration binds historical evidence to this
+            # exact request. Generic pack hashes or recency cannot prove it.
+            try:
+                migration = json.loads(recovery_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                raise WorkflowRuntimeError("CONSULTATION_RECOVERY_BINDING_INVALID", "legacy recovery binding is unreadable") from exc
+            if (not isinstance(migration, Mapping)
+                    or migration.get("intent_key") != intent_key
+                    or migration.get("project_id") != self.intake.state["project_id"]
+                    or migration.get("project_url") != effective_project_url
+                    or not isinstance(migration.get("consultation_id"), str)):
+                raise WorkflowRuntimeError("CONSULTATION_RECOVERY_BINDING_INVALID", "legacy recovery does not bind the canonical request")
+            recover_consultation_id = migration["consultation_id"]
         try:
             raw = subprocess_bridge_runner(prompt, mode="fresh", continue_from=None, context_pack=pack,
                     root_dir=str(self.root), profile_dir=project_profile_dir, bridge_root=cfg.bridge_root,
                     node_executable=cfg.node_executable, project_url=effective_project_url,
                     project_id=str(self.intake.state["project_id"]), transport=effective_transport,
+                    consultation_intent_key=intent_key, recover_consultation_id=recover_consultation_id,
                     timeout_ms=min(int(cfg.timeout_seconds * 1000), 300000))
         except StageIntegrationError as exc:
             raise WorkflowRuntimeError(exc.code, str(exc), details=exc.details) from exc

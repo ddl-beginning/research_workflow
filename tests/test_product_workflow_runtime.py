@@ -294,6 +294,27 @@ def test_bound_project_targets_are_isolated_and_each_review_is_fresh(
     assert [first_result["conversation_id"], second_result["conversation_id"]] == [
         "conversation-project-target-1", "conversation-project-target-2"
     ]
+    assert calls[0]["consultation_intent_key"] != calls[1]["consultation_intent_key"]
+    first._consult({"prompt": "review A", "context_pack": pack}, purpose="technical")
+    assert calls[0]["consultation_intent_key"] == calls[2]["consultation_intent_key"]
+    assert calls[2]["recover_consultation_id"] is None
+
+    recovery_path = first_root / ".consultations" / "intent-recovery" / f"{calls[0]['consultation_intent_key']}.json"
+    recovery_path.parent.mkdir(parents=True)
+    migration = {
+        "intent_key": calls[0]["consultation_intent_key"],
+        "project_id": first.intake.state["project_id"],
+        "project_url": first_url,
+        "consultation_id": "CONSULT-20260916-020743-57666118",
+    }
+    recovery_path.write_text(json.dumps(migration), encoding="utf-8")
+    first._consult({"prompt": "review A", "context_pack": pack}, purpose="technical")
+    assert calls[-1]["recover_consultation_id"] == migration["consultation_id"]
+    migration["project_url"] = second_url
+    recovery_path.write_text(json.dumps(migration), encoding="utf-8")
+    with pytest.raises(WorkflowRuntimeError, match="legacy recovery"):
+        first._consult({"prompt": "review A", "context_pack": pack}, purpose="technical")
+    assert len(calls) == 4
 
 
 def test_pre_prompt_attachment_upload_failure_can_be_recovered_once(tmp_path: Path) -> None:

@@ -1223,6 +1223,8 @@ def subprocess_bridge_runner(
     project_url: str | None = None,
     project_id: str | None = None,
     transport: str | None = None,
+    consultation_intent_key: str | None = None,
+    recover_consultation_id: str | None = None,
 ) -> dict[str, Any]:
     """Invoke the existing one-request Node bridge for disposable E2E.
 
@@ -1255,6 +1257,10 @@ def subprocess_bridge_runner(
         "conversation_mode": mode_value,
         "pack": dict(context_pack),
     }
+    if consultation_intent_key is not None:
+        spec["consultation_intent_key"] = _bounded_text(consultation_intent_key, "consultation_intent_key", maximum=128)
+    if recover_consultation_id is not None:
+        spec["recover_consultation_id"] = _bounded_text(recover_consultation_id, "recover_consultation_id", maximum=128)
     if transport is not None:
         if transport != "homepage_fallback" or project_url is not None:
             raise StageIntegrationError("TRANSPORT_INVALID", "homepage fallback must not claim Project UI scope")

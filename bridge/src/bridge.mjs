@@ -24,16 +24,24 @@ import {
   waitForNewAssistantResponse,
   RESPONSE_FAILURE_CLASSES,
 } from './chatgpt-ui.mjs';
+import {
+  DEFAULT_PROJECT_BROWSER_RUNTIME_ROOT,
+  ProjectBrowserError,
+  ProjectBrowserManager,
+  defaultProjectBrowserProfileDir,
+  resolveProjectIdentity,
+} from './project-browser-manager.mjs';
 
 export const CHATGPT_URL = 'https://chatgpt.com/';
 export const CHATGPT_ORIGIN = 'https://chatgpt.com';
-// A per-project binding is accepted only as ChatGPT's canonical Project
-// landing route. Conversation routes are validated separately against the
-// bound Project slug.
+// ChatGPT project URLs are a UI navigation contract, not an API endpoint.
+// Keep the accepted shape deliberately narrow: a concrete project route
+// under the trusted origin, with no query/hash/credential material.
 export const PROJECT_ROUTE_PATTERN = /^\/g\/(g-p-[A-Za-z0-9][A-Za-z0-9._~-]*)\/project\/?$/;
 export const PROJECT_URL_MAX_CHARS = 512;
 export const BRIDGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const DEFAULT_PROFILE_DIR = path.resolve(process.cwd(), '.auth', 'chatgpt-profile');
+export const DEFAULT_MACHINE_RUNTIME_ROOT = DEFAULT_PROJECT_BROWSER_RUNTIME_ROOT;
 // Keep the normal one-shot wait near the observed three-minute response time,
 // with one explicit five-minute upper bound for every bridge entry point.
 export const DEFAULT_RESPONSE_TIMEOUT_MS = 180_000;
@@ -42,11 +50,11 @@ export const MAX_CHATGPT_REQUESTS_PER_INVOCATION = 1;
 export const MAX_ATTACHMENTS = 9;
 // Project navigation is allowed one browser-navigation-only retry.  This is
 // deliberately separate from the one-prompt budget: retrying page.goto must
-// never retry semantic Stage work, upload, or sendOnePrompt().
+// never retry consultOnce(), upload, or sendOnePrompt().
 export const MAX_PROJECT_NAVIGATION_RETRIES = 1;
 // A failed navigation or pre-prompt UI preparation may be retried by the
-// consultation wrapper, but never by the semantic Stage controller. Two
-// fresh browser cycles is the hard infrastructure bound for one intent.
+// legacy consultation wrapper, but never by the semantic recovery path. The
+// bound is deliberately small and infrastructure-only.
 export const MAX_PRE_PROMPT_RECOVERY_CYCLES = 2;
 export const PROJECT_NAVIGATION_RETRY_SETTLE_MS = 750;
 export const MAX_PROJECT_NAVIGATION_ELAPSED_MS = 120_000;
@@ -120,6 +128,14 @@ export const FAILURE_CODES = Object.freeze({
   PROJECT_SCOPE_REQUIRED: 'PROJECT_SCOPE_REQUIRED',
   PROJECT_SCOPE_MISMATCH: 'PROJECT_SCOPE_MISMATCH',
   PROJECT_NAVIGATION_FAILED: 'PROJECT_NAVIGATION_FAILED',
+  PROJECT_BROWSER_BUSY: 'PROJECT_BROWSER_BUSY',
+  PROFILE_ALREADY_IN_USE: 'PROFILE_ALREADY_IN_USE',
+  PROFILE_IN_REPOSITORY: 'PROFILE_IN_REPOSITORY',
+  PROJECT_BROWSER_PROFILE_MISMATCH: 'PROJECT_BROWSER_PROFILE_MISMATCH',
+  PROJECT_BROWSER_URL_MISMATCH: 'PROJECT_BROWSER_URL_MISMATCH',
+  BROWSER_START_TIMEOUT: 'BROWSER_START_TIMEOUT',
+  BROWSER_CONTEXT_UNAVAILABLE: 'BROWSER_CONTEXT_UNAVAILABLE',
+  BROWSER_NOT_ALIVE: 'BROWSER_NOT_ALIVE',
   ATTACHMENT_INVALID: 'ATTACHMENT_INVALID',
   ATTACHMENT_NOT_FOUND: 'ATTACHMENT_NOT_FOUND',
   ATTACHMENT_NOT_REGULAR_FILE: 'ATTACHMENT_NOT_REGULAR_FILE',
@@ -212,10 +228,18 @@ function failureMessage(code) {
     [FAILURE_CODES.CONTINUATION_CHAT_NOT_FOUND]: 'The continuation conversation could not be opened.',
     [FAILURE_CODES.FRESH_CHAT_CREATION_FAILED]: 'Could not explicitly create a fresh ChatGPT conversation.',
     [FAILURE_CODES.CONVERSATION_IDENTITY_MISMATCH]: 'The ChatGPT conversation identity did not match the requested lineage.',
-    [FAILURE_CODES.PROJECT_URL_INVALID]: 'The project URL must be an explicit safe https://chatgpt.com target.',
+    [FAILURE_CODES.PROJECT_URL_INVALID]: 'The project URL must be an explicit ChatGPT project route on https://chatgpt.com.',
     [FAILURE_CODES.PROJECT_SCOPE_REQUIRED]: 'A project-scoped consultation cannot use homepage fallback transport.',
     [FAILURE_CODES.PROJECT_SCOPE_MISMATCH]: 'The requested ChatGPT project does not match the receipt project scope.',
     [FAILURE_CODES.PROJECT_NAVIGATION_FAILED]: 'Could not open the requested ChatGPT project page.',
+    [FAILURE_CODES.PROJECT_BROWSER_BUSY]: 'The bound Project Browser is busy with another consultation.',
+    [FAILURE_CODES.PROFILE_ALREADY_IN_USE]: 'The configured browser profile is already used by another Project Browser.',
+    [FAILURE_CODES.PROFILE_IN_REPOSITORY]: 'Project Browser profiles must be outside the business repository.',
+    [FAILURE_CODES.PROJECT_BROWSER_PROFILE_MISMATCH]: 'The retained Project Browser profile does not match the requested binding.',
+    [FAILURE_CODES.PROJECT_BROWSER_URL_MISMATCH]: 'The retained Project Browser binding does not match the requested binding.',
+    [FAILURE_CODES.BROWSER_START_TIMEOUT]: 'The Project Browser did not become ready before the bounded startup timeout.',
+    [FAILURE_CODES.BROWSER_CONTEXT_UNAVAILABLE]: 'The Project Browser did not expose a usable browser context.',
+    [FAILURE_CODES.BROWSER_NOT_ALIVE]: 'The retained Project Browser process is not alive.',
     [FAILURE_CODES.ATTACHMENT_INVALID]: 'The attachment path is invalid.',
     [FAILURE_CODES.ATTACHMENT_NOT_FOUND]: 'The attachment file was not found.',
     [FAILURE_CODES.ATTACHMENT_NOT_REGULAR_FILE]: 'Attachments must be regular files, not directories.',
@@ -254,6 +278,14 @@ function failureClassForCode(code) {
     [FAILURE_CODES.PROJECT_NAVIGATION_FAILED]: 'PROJECT_SCOPE_NOT_FOUND',
     [FAILURE_CODES.PROJECT_SCOPE_MISMATCH]: 'PROJECT_SCOPE_NOT_FOUND',
     [FAILURE_CODES.PROJECT_SCOPE_REQUIRED]: 'PROJECT_SCOPE_NOT_FOUND',
+    [FAILURE_CODES.PROJECT_BROWSER_BUSY]: 'PROJECT_BROWSER_LEASE_BUSY',
+    [FAILURE_CODES.PROFILE_ALREADY_IN_USE]: 'PROJECT_PROFILE_IN_USE',
+    [FAILURE_CODES.PROFILE_IN_REPOSITORY]: 'PROJECT_PROFILE_IN_REPOSITORY',
+    [FAILURE_CODES.PROJECT_BROWSER_PROFILE_MISMATCH]: 'PROJECT_PROFILE_MISMATCH',
+    [FAILURE_CODES.PROJECT_BROWSER_URL_MISMATCH]: 'PROJECT_BROWSER_BINDING_MISMATCH',
+    [FAILURE_CODES.BROWSER_START_TIMEOUT]: 'PROJECT_BROWSER_START_FAILED',
+    [FAILURE_CODES.BROWSER_CONTEXT_UNAVAILABLE]: 'PROJECT_BROWSER_CONTEXT_FAILED',
+    [FAILURE_CODES.BROWSER_NOT_ALIVE]: 'PROJECT_BROWSER_CRASHED',
     [FAILURE_CODES.PROMPT_INPUT_NOT_FOUND]: 'COMPOSER_NOT_READY',
     [FAILURE_CODES.FRESH_CHAT_CREATION_FAILED]: 'FRESH_CHAT_CREATION_FAILED',
     [FAILURE_CODES.ATTACHMENT_NOT_READY]: 'ATTACHMENT_NOT_READY',
@@ -283,6 +315,32 @@ function safeBrowserCheckpoints(value) {
     if (result.length >= 32) break;
   }
   return result.length > 0 ? result : null;
+}
+
+function safeBrowserProcessEvidence(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const safe = {};
+  if (typeof value.project_id === 'string' && /^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$/.test(value.project_id)) {
+    safe.project_id = value.project_id;
+  }
+  if (typeof value.runtime_instance_id === 'string' && /^[A-Za-z0-9][A-Za-z0-9._~-]{0,191}$/.test(value.runtime_instance_id)) {
+    safe.runtime_instance_id = value.runtime_instance_id;
+  }
+  if (Number.isInteger(value.process_id) && value.process_id > 0) safe.process_id = value.process_id;
+  if (typeof value.profile_path === 'string' && value.profile_path.length <= 512 && !/[\u0000\r\n]/.test(value.profile_path)) {
+    safe.profile_path = value.profile_path;
+  }
+  if (typeof value.profile_path_digest === 'string' && /^[0-9a-f]{64}$/i.test(value.profile_path_digest)) {
+    safe.profile_path_digest = value.profile_path_digest.toLowerCase();
+  }
+  if (typeof value.start_timestamp === 'string' && value.start_timestamp.length <= 64 && !/[\u0000\r\n]/.test(value.start_timestamp)) {
+    safe.start_timestamp = value.start_timestamp;
+  }
+  for (const field of ['restart_count', 'consultation_count']) {
+    if (Number.isInteger(value[field]) && value[field] >= 0) safe[field] = Math.min(value[field], 1_000_000);
+  }
+  if (typeof value.reused === 'boolean') safe.reused = value.reused;
+  return Object.keys(safe).length > 0 ? safe : null;
 }
 
 export function assertRequestBudget(requestCount) {
@@ -333,8 +391,10 @@ export function extractConversationIdFromUrl(value) {
   if (parsed.origin !== CHATGPT_ORIGIN) return null;
   const segments = parsed.pathname.split('/').filter(Boolean);
   const globalConversationRoute = segments.length === 2 && segments[0] === 'c';
-  const projectConversationRoute = segments.length >= 3
-    && segments.at(-2) === 'c';
+  const projectConversationRoute = segments.length === 4
+    && segments[0] === 'g'
+    && PROJECT_ROUTE_PATTERN.test(`/g/${segments[1]}/project`)
+    && segments[2] === 'c';
   if ((!globalConversationRoute && !projectConversationRoute) || !CONVERSATION_ID_PATTERN.test(segments.at(-1))) {
     return null;
   }
@@ -409,9 +469,10 @@ function projectUrlError(message, cause) {
 /**
  * Normalize and validate the explicit ChatGPT project URL contract.
  *
- * This validates only the minimum safe target contract. The browser owns the
- * product-specific Project page check, so no Project identifier or route
- * structure is inferred here.
+ * This intentionally accepts only the current project landing route used by
+ * the browser UI. Relative paths, arbitrary chat URLs, alternate hosts,
+ * query/hash-bearing URLs, credentials, and path-normalization tricks are all
+ * rejected before a browser is opened.
  */
 export function normalizeProjectUrl(value) {
   if (typeof value !== 'string' || !value || value.length > PROJECT_URL_MAX_CHARS || value !== value.trim()) {
@@ -437,7 +498,7 @@ export function normalizeProjectUrl(value) {
   }
 
   // URL parsing normalizes dot segments and escaped characters. Compare the
-  // raw path as well so an ambiguous spelling cannot pass as a target URL.
+  // raw path as well so an ambiguous spelling cannot pass as a project route.
   const authorityEnd = value.indexOf('/', value.indexOf('://') + 3);
   const rawPathAndSuffix = authorityEnd === -1 ? '' : value.slice(authorityEnd);
   const rawPath = rawPathAndSuffix.split(/[?#]/, 1)[0];
@@ -449,17 +510,9 @@ export function normalizeProjectUrl(value) {
     throw projectUrlError();
   }
 
-  if (
-    parsed.pathname === '/'
-    || parsed.pathname.endsWith('/.')
-    || parsed.pathname.endsWith('/..')
-    || parsed.pathname.includes('\\')
-    || [...parsed.pathname].some((character) => character.charCodeAt(0) < 0x20 || character.charCodeAt(0) === 0x7f)
-  ) {
-    throw projectUrlError();
-  }
-  if (!PROJECT_ROUTE_PATTERN.test(parsed.pathname)) throw projectUrlError();
-  return `${CHATGPT_ORIGIN}${parsed.pathname.endsWith('/') ? parsed.pathname.slice(0, -1) : parsed.pathname}`;
+  const match = parsed.pathname.match(PROJECT_ROUTE_PATTERN);
+  if (!match) throw projectUrlError();
+  return `${CHATGPT_ORIGIN}/g/${match[1]}/project`;
 }
 
 export function isValidProjectUrl(value) {
@@ -481,10 +534,16 @@ function parseProjectConversationUrl(value) {
   }
   if (parsed.origin !== CHATGPT_ORIGIN || parsed.search || parsed.hash) return null;
   const segments = parsed.pathname.split('/').filter(Boolean);
-  if (segments.length < 3 || segments.at(-2) !== 'c' || !CONVERSATION_ID_PATTERN.test(segments.at(-1))) return null;
+  if (
+    segments.length !== 4
+    || segments[0] !== 'g'
+    || segments[2] !== 'c'
+    || !PROJECT_ROUTE_PATTERN.test(`/g/${segments[1]}/project`)
+    || !CONVERSATION_ID_PATTERN.test(segments[3])
+  ) return null;
   return {
-    projectSlug: segments.at(-3),
-    conversationId: segments.at(-1),
+    projectSlug: segments[1],
+    conversationId: segments[3],
   };
 }
 
@@ -498,14 +557,12 @@ export function isValidProjectConversationUrl(value, projectUrl, expectedConvers
   let expectedProjectSlug;
   try {
     const normalizedProjectUrl = normalizeProjectUrl(projectUrl);
-    const targetPath = new URL(normalizedProjectUrl).pathname;
-    const knownTarget = targetPath.match(PROJECT_ROUTE_PATTERN);
-    expectedProjectSlug = knownTarget ? knownTarget[1] : null;
+    expectedProjectSlug = new URL(normalizedProjectUrl).pathname.split('/')[2];
   } catch {
     return false;
   }
   const parsed = parseProjectConversationUrl(value);
-  if (!parsed || (expectedProjectSlug !== null && parsed.projectSlug !== expectedProjectSlug)) return false;
+  if (!parsed || parsed.projectSlug !== expectedProjectSlug) return false;
   return expectedConversationId === undefined || parsed.conversationId === expectedConversationId;
 }
 
@@ -556,10 +613,6 @@ export function classifyProjectNavigationError(error) {
   const message = typeof error?.message === 'string' ? error.message.toLowerCase() : '';
   const code = typeof error?.code === 'string' ? error.code.toLowerCase() : '';
   const combined = `${name} ${message} ${code}`;
-  if (error?.failureClass === PROJECT_NAVIGATION_FAILURE_CLASSES.FRONTEND_BOOTSTRAP
-      || combined.includes('project_frontend_bootstrap_failure')) {
-    return PROJECT_NAVIGATION_FAILURE_CLASSES.FRONTEND_BOOTSTRAP;
-  }
   if (
     name.includes('targetclosed')
     || /target(?: page| context)?[^\n]*closed|page[^\n]*closed|context[^\n]*closed|browser[^\n]*closed|has been closed/.test(combined)
@@ -582,8 +635,7 @@ export function classifyProjectNavigationError(error) {
 
 export function isRetryableProjectNavigationError(error) {
   const failureClass = classifyProjectNavigationError(error);
-  return failureClass === PROJECT_NAVIGATION_FAILURE_CLASSES.FRONTEND_BOOTSTRAP
-    || failureClass === PROJECT_NAVIGATION_FAILURE_CLASSES.TIMEOUT
+  return failureClass === PROJECT_NAVIGATION_FAILURE_CLASSES.TIMEOUT
     || failureClass === PROJECT_NAVIGATION_FAILURE_CLASSES.NETWORK
     || failureClass === PROJECT_NAVIGATION_FAILURE_CLASSES.TARGET_CLOSED;
 }
@@ -713,7 +765,7 @@ function projectNavigationDiagnosticsForAttempt({
   bootstrapUsed = false,
   bootstrapUrl = null,
 }) {
-  const diagnostics = {
+  return safeProjectNavigationDiagnostics({
     requested_url: requestedUrl,
     attempt_count: attemptCount,
     retry_count: retryCount,
@@ -723,14 +775,10 @@ function projectNavigationDiagnosticsForAttempt({
     landing_url: landingUrl,
     failure_class: failureClass,
     error_hash: error ? navigationErrorHash(error) : null,
-  };
-  // Keep the legacy lightweight page doubles backward-compatible while
-  // recording bootstrap provenance for real Playwright navigations.
-  if (bootstrapUsed === true) {
-    diagnostics.bootstrap_used = true;
-    diagnostics.bootstrap_url = bootstrapUrl;
-  }
-  return safeProjectNavigationDiagnostics(diagnostics);
+    ...(bootstrapUsed === true
+      ? { bootstrap_used: true, bootstrap_url: bootstrapUrl || CHATGPT_URL }
+      : {}),
+  });
 }
 
 function resolveProjectUrlAlias({ projectUrl, project_url } = {}) {
@@ -824,9 +872,9 @@ export function validateChatgptTargetMetadata(receipt) {
   const projectUrl = safeProjectScopeUrl(receipt.project_url);
   if (receipt.chatgpt_target_mode === 'PROJECT') {
     if (!projectUrl || receipt.project_url !== projectUrl) return false;
-    if (typeof receipt.chatgpt_target_url_digest !== 'string' || !/^[0-9a-f]{64}$/.test(receipt.chatgpt_target_url_digest)) return false;
+    if (typeof receipt.chatgpt_target_url_digest !== 'string' || !/^[0-9a-f]{64}$/i.test(receipt.chatgpt_target_url_digest)) return false;
     const expectedDigest = crypto.createHash('sha256').update(projectUrl, 'utf8').digest('hex');
-    if (receipt.chatgpt_target_url_digest !== expectedDigest) return false;
+    if (receipt.chatgpt_target_url_digest.toLowerCase() !== expectedDigest) return false;
     if (receipt.chatgpt_project_target_verified !== 'YES') return false;
     if (receipt.fresh_project_chat_created === 'YES' && (
       receipt.mode !== CONVERSATION_MODES.FRESH
@@ -841,6 +889,48 @@ export function validateChatgptTargetMetadata(receipt) {
     || receipt.fresh_project_chat_created !== 'NO'
   ) return false;
   return true;
+}
+
+function safeChatgptTargetMetadata(value, projectUrl = undefined) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const source = value.receipt && typeof value.receipt === 'object' ? value.receipt : value;
+  const candidate = source.chatgpt_target_mode === 'PROJECT'
+    && source.project_url === undefined
+    && projectUrl
+    ? { ...source, project_url: projectUrl }
+    : source;
+  if (!hasChatgptTargetFields(candidate) || !validateChatgptTargetMetadata(candidate)) return null;
+  return {
+    chatgpt_target_mode: candidate.chatgpt_target_mode,
+    chatgpt_target_url_digest: candidate.chatgpt_target_url_digest,
+    chatgpt_target_origin: candidate.chatgpt_target_origin,
+    chatgpt_project_target_verified: candidate.chatgpt_project_target_verified,
+    fresh_project_chat_created: candidate.fresh_project_chat_created,
+  };
+}
+
+function safeMetadataHash(value) {
+  return typeof value === 'string' && /^[0-9a-f]{64}$/i.test(value)
+    ? value.toLowerCase()
+    : null;
+}
+
+function safeConsultationIntentKey(value) {
+  return typeof value === 'string' && /^[0-9a-f]{64}$/i.test(value)
+    ? value.toLowerCase()
+    : null;
+}
+
+function safeAssistantBaselineMetadata(value) {
+  if (!validateAssistantBaselineMetadata(value)) return null;
+  return {
+    schema_version: value.schema_version,
+    assistant_count: value.assistant_count,
+    id_hashes: [...value.id_hashes],
+    slot_hashes: [...value.slot_hashes],
+    text_hashes: [...value.text_hashes],
+    text_lengths: [...value.text_lengths],
+  };
 }
 
 /** Validate optional receipt project-scope metadata without requiring it for legacy receipts. */
@@ -920,7 +1010,6 @@ export function validateContinuationReceipt(receipt, expectedConsultationId) {
   if (!Number.isInteger(receipt.response_char_count) || receipt.response_char_count < 0) return false;
   if (!validateReceiptAttachments(receipt.attachments, { complete: true })) return false;
   if (receipt.context_pack !== undefined && !validateContextPackReceiptMetadata(receipt.context_pack)) return false;
-  if (!validateChatgptTargetMetadata(receipt)) return false;
   const receiptTransport = safeTransport(receipt.transport);
   if (receipt.transport !== undefined && receiptTransport === null) return false;
   if (receiptTransport === TRANSPORTS.HOMEPAGE_FALLBACK) {
@@ -939,6 +1028,7 @@ export function validateContinuationReceipt(receipt, expectedConsultationId) {
     && !safeProjectNavigationDiagnostics(receipt.project_navigation_diagnostics)
   ) return false;
   if (!validateProjectScopeMetadata(receipt, { requireVerified: hasProjectScopeFields(receipt) })) return false;
+  if (!validateChatgptTargetMetadata(receipt)) return false;
   if (receipt.conversation_validated !== true) return false;
   if (!isValidConsultationId(receipt.conversation_root_consultation_id)) return false;
   if (!isValidConversationUrl(receipt.chat_url, receipt.conversation_id)) return false;
@@ -1567,6 +1657,123 @@ export async function prepareAttachments(
   return { files, metadata };
 }
 
+function receiptRootError(code, message, cause = undefined) {
+  return new BridgeError(code, message, cause);
+}
+
+function validateStoredReceiptShape(receipt, expectedConsultationId) {
+  if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) return false;
+  if (!isValidConsultationId(expectedConsultationId) || receipt.consultation_id !== expectedConsultationId) return false;
+  if (!isValidConsultationId(receipt.consultation_id)) return false;
+  if (!Object.values(CONVERSATION_MODES).includes(receipt.mode)) return false;
+  if (!Number.isInteger(receipt.request_count) || receipt.request_count < 0 || receipt.request_count > MAX_CHATGPT_REQUESTS_PER_INVOCATION) return false;
+  if (typeof receipt.created_at !== 'string' || !receipt.created_at) return false;
+  if (typeof receipt.profile !== 'string' || !receipt.profile) return false;
+  if (typeof receipt.status !== 'string' || !receipt.status) return false;
+  if (!Number.isInteger(receipt.response_char_count) || receipt.response_char_count < 0) return false;
+  if (!validateReceiptAttachments(receipt.attachments, { complete: receipt.status === 'complete' })) return false;
+  if (receipt.context_pack !== undefined && !validateContextPackReceiptMetadata(receipt.context_pack)) return false;
+  if (!validateProjectScopeMetadata(receipt, { requireVerified: hasProjectScopeFields(receipt) })) return false;
+  if (!validateChatgptTargetMetadata(receipt)) return false;
+  const receiptTransport = safeTransport(receipt.transport);
+  if (receipt.transport !== undefined && receiptTransport === null) return false;
+  if (receipt.conversation_id !== null && !CONVERSATION_ID_PATTERN.test(String(receipt.conversation_id))) return false;
+  if (receipt.chat_url !== CHATGPT_URL && !isValidConversationUrl(receipt.chat_url, receipt.conversation_id || undefined)) return false;
+  if (typeof receipt.conversation_validated !== 'boolean') return false;
+  if (receipt.conversation_validated && !isValidConversationUrl(receipt.chat_url, receipt.conversation_id)) return false;
+  if (receipt.conversation_root_consultation_id !== null && !isValidConsultationId(receipt.conversation_root_consultation_id)) return false;
+  if (receipt.mode === CONVERSATION_MODES.FRESH) {
+    if (receipt.parent_consultation_id !== null) return false;
+  } else if (receipt.parent_consultation_id !== null && !isValidConsultationId(receipt.parent_consultation_id)) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Read any bridge consultation receipt, including an interrupted/in-flight
+ * receipt. Unlike readContinuationReceipt this intentionally does not require
+ * status=complete, so exactly-once recovery can inspect a durable write-ahead
+ * record without treating it as a continuation authorization.
+ */
+export async function readConsultationReceipt({ rootDir, consultationId, allowMissing = false } = {}) {
+  if (!isValidConsultationId(consultationId)) {
+    throw receiptRootError(
+      FAILURE_CODES.CONTINUATION_RECEIPT_INVALID,
+      'consultation_id must be a bridge consultation id.',
+    );
+  }
+  const consultationsRoot = path.resolve(rootDir, '.consultations');
+  let realRoot;
+  try {
+    realRoot = await fs.realpath(consultationsRoot);
+  } catch (error) {
+    if (error?.code === 'ENOENT' && allowMissing) return null;
+    if (error?.code === 'ENOENT') {
+      throw receiptRootError(
+        FAILURE_CODES.CONTINUATION_RECEIPT_NOT_FOUND,
+        'The consultation receipt directory was not found.',
+        error,
+      );
+    }
+    throw receiptRootError(
+      FAILURE_CODES.CONTINUATION_RECEIPT_INVALID,
+      'The consultation receipt directory could not be verified.',
+      error,
+    );
+  }
+  if (path.resolve(realRoot) !== consultationsRoot) {
+    throw receiptRootError(
+      FAILURE_CODES.CONTINUATION_RECEIPT_INVALID,
+      'The consultation receipt directory resolves outside the bridge root.',
+    );
+  }
+  const expectedReceiptPath = path.join(consultationsRoot, consultationId, 'receipt.json');
+  let realReceiptPath;
+  try {
+    realReceiptPath = await fs.realpath(expectedReceiptPath);
+  } catch (error) {
+    if (error?.code === 'ENOENT' && allowMissing) return null;
+    if (error?.code === 'ENOENT') {
+      throw receiptRootError(
+        FAILURE_CODES.CONTINUATION_RECEIPT_NOT_FOUND,
+        'The consultation receipt was not found.',
+        error,
+      );
+    }
+    throw receiptRootError(
+      FAILURE_CODES.CONTINUATION_RECEIPT_INVALID,
+      'The consultation receipt path could not be verified.',
+      error,
+    );
+  }
+  const expectedRelative = path.join(consultationId, 'receipt.json');
+  const actualRelative = path.relative(realRoot, realReceiptPath);
+  if (!isPathInside(realRoot, realReceiptPath) || actualRelative !== expectedRelative) {
+    throw receiptRootError(
+      FAILURE_CODES.CONTINUATION_RECEIPT_INVALID,
+      'The consultation receipt path is outside its consultation directory.',
+    );
+  }
+  let receipt;
+  try {
+    receipt = JSON.parse(await fs.readFile(realReceiptPath, 'utf8'));
+  } catch (error) {
+    throw receiptRootError(
+      FAILURE_CODES.CONTINUATION_RECEIPT_INVALID,
+      'The consultation receipt is not valid JSON.',
+      error,
+    );
+  }
+  if (!validateStoredReceiptShape(receipt, consultationId)) {
+    throw receiptRootError(
+      FAILURE_CODES.CONTINUATION_RECEIPT_INVALID,
+      'The consultation receipt is incomplete or not bridge-created.',
+    );
+  }
+  return { receipt, receiptPath: realReceiptPath };
+}
+
 export async function readContinuationReceipt({ rootDir, consultationId }) {
   if (!isValidConsultationId(consultationId)) {
     throw new BridgeError(
@@ -1709,6 +1916,17 @@ export function buildReceipt({
   project_scope_evidence = undefined,
   requestedProjectUrl = undefined,
   requested_project_url = undefined,
+  browserProcessEvidence = undefined,
+  browser_process_evidence = undefined,
+  chatgptTargetMetadata = undefined,
+  chatgpt_target_metadata = undefined,
+  includeTargetMetadata = false,
+  consultationIntentKey = undefined,
+  consultation_intent_key = undefined,
+  promptSha256 = undefined,
+  prompt_sha256 = undefined,
+  assistantBaselineMetadata = undefined,
+  assistant_baseline = undefined,
 }) {
   const receipt = {
     consultation_id: consultationId,
@@ -1761,32 +1979,60 @@ export function buildReceipt({
     const safeProjectEvidence = safeProjectScopeEvidence(evidence, normalizedProjectUrl);
     if (safeProjectEvidence) receipt.project_scope_evidence = safeProjectEvidence;
   }
-  const boundTargetUrl = normalizedTransport === TRANSPORTS.HOMEPAGE_FALLBACK
-    ? null
-    : normalizedProjectUrl;
-  receipt.chatgpt_target_mode = boundTargetUrl ? 'PROJECT' : 'DEFAULT';
-  receipt.chatgpt_target_url_digest = boundTargetUrl
-    ? crypto.createHash('sha256').update(boundTargetUrl, 'utf8').digest('hex')
-    : null;
-  receipt.chatgpt_target_origin = CHATGPT_ORIGIN;
-  receipt.chatgpt_project_target_verified = boundTargetUrl && projectScopeVerified === true ? 'YES' : 'NO';
-  receipt.fresh_project_chat_created = boundTargetUrl
-    && mode === CONVERSATION_MODES.FRESH
-    && status === 'complete'
-    && conversationValidated === true
-    ? 'YES'
-    : 'NO';
+  const targetMetadata = chatgptTargetMetadata === undefined
+    ? chatgpt_target_metadata
+    : chatgptTargetMetadata;
+  const preservedTargetMetadata = safeChatgptTargetMetadata(targetMetadata, normalizedProjectUrl);
+  if (preservedTargetMetadata) {
+    Object.assign(receipt, preservedTargetMetadata);
+  } else {
+    const boundTargetUrl = normalizedTransport === TRANSPORTS.HOMEPAGE_FALLBACK
+      ? null
+      : normalizedProjectUrl;
+    receipt.chatgpt_target_mode = boundTargetUrl ? 'PROJECT' : 'DEFAULT';
+    receipt.chatgpt_target_url_digest = boundTargetUrl
+      ? crypto.createHash('sha256').update(boundTargetUrl, 'utf8').digest('hex')
+      : null;
+    receipt.chatgpt_target_origin = CHATGPT_ORIGIN;
+    receipt.chatgpt_project_target_verified = boundTargetUrl && projectScopeVerified === true ? 'YES' : 'NO';
+    receipt.fresh_project_chat_created = boundTargetUrl
+      && mode === CONVERSATION_MODES.FRESH
+      && status === 'complete'
+      && conversationValidated === true
+      ? 'YES'
+      : 'NO';
+  }
+  const intentKey = safeConsultationIntentKey(
+    consultationIntentKey === undefined ? consultation_intent_key : consultationIntentKey,
+  );
+  if (intentKey) receipt.consultation_intent_key = intentKey;
+  const promptHash = safeMetadataHash(
+    promptSha256 === undefined ? prompt_sha256 : promptSha256,
+  );
+  if (promptHash) receipt.prompt_sha256 = promptHash;
+  const baselineMetadata = safeAssistantBaselineMetadata(
+    assistantBaselineMetadata === undefined ? assistant_baseline : assistantBaselineMetadata,
+  );
+  if (baselineMetadata) receipt.assistant_baseline = baselineMetadata;
   const safeDiagnostics = safeAttachmentDiagnostics(diagnostics);
   if (safeDiagnostics) receipt.attachment_diagnostics = safeDiagnostics;
   const safeResponseDiagnostics = safeResponseForensic(responseForensic);
   if (safeResponseDiagnostics) receipt.response_forensic = safeResponseDiagnostics;
   const safeCheckpoints = safeBrowserCheckpoints(browserCheckpoints);
   if (safeCheckpoints) receipt.browser_checkpoints = safeCheckpoints;
+  const processEvidence = browserProcessEvidence === undefined
+    ? browser_process_evidence
+    : browserProcessEvidence;
+  const safeProcessEvidence = safeBrowserProcessEvidence(processEvidence);
+  if (safeProcessEvidence) receipt.browser_process_evidence = safeProcessEvidence;
   const navigationDiagnostics = projectNavigationDiagnostics === undefined
     ? project_navigation_diagnostics
     : projectNavigationDiagnostics;
   const safeNavigationDiagnostics = safeProjectNavigationDiagnostics(navigationDiagnostics);
   if (safeNavigationDiagnostics) receipt.project_navigation_diagnostics = safeNavigationDiagnostics;
+  if (safeNavigationDiagnostics?.failure_class === PROJECT_NAVIGATION_FAILURE_CLASSES.CHALLENGE) {
+    receipt.browser_failure_class = 'BROWSER_HUMAN_VERIFICATION_REQUIRED';
+  }
   if (failureCode) {
     receipt.failure_code = failureCode;
     receipt.failure_class = failureClassForCode(failureCode);
@@ -1796,6 +2042,41 @@ export function buildReceipt({
 
 async function writePrivateFile(filePath, contents) {
   await fs.writeFile(filePath, contents, { encoding: 'utf8', mode: 0o600 });
+}
+
+function mergeReceiptPreservingKnownMetadata(receipt, previous) {
+  if (!previous || typeof previous !== 'object' || Array.isArray(previous)) return receipt;
+  const merged = { ...receipt };
+  const previousRoute = isValidConversationUrl(previous.chat_url, previous.conversation_id)
+    ? sanitizedConversationRoute(previous.chat_url)
+    : null;
+  if (merged.chat_url === CHATGPT_URL && previousRoute) merged.chat_url = previousRoute;
+  if (merged.conversation_id === null && CONVERSATION_ID_PATTERN.test(String(previous.conversation_id || ''))) {
+    merged.conversation_id = previous.conversation_id;
+  }
+  if (merged.conversation_validated !== true && previous.conversation_validated === true && merged.conversation_id === previous.conversation_id) {
+    merged.conversation_validated = true;
+  }
+  if (
+    Number.isInteger(previous.request_count)
+    && previous.request_count >= merged.request_count
+    && previous.request_count <= MAX_CHATGPT_REQUESTS_PER_INVOCATION
+  ) {
+    merged.request_count = previous.request_count;
+  }
+  if (previous.browser_failure_class && !merged.browser_failure_class) {
+    if (typeof previous.browser_failure_class === 'string' && /^[A-Z0-9_]{1,96}$/.test(previous.browser_failure_class)) {
+      merged.browser_failure_class = previous.browser_failure_class;
+    }
+  }
+  if (!merged.project_navigation_diagnostics && safeProjectNavigationDiagnostics(previous.project_navigation_diagnostics)) {
+    merged.project_navigation_diagnostics = safeProjectNavigationDiagnostics(previous.project_navigation_diagnostics);
+  }
+  if (!hasChatgptTargetFields(merged)) {
+    const target = safeChatgptTargetMetadata(previous);
+    if (target) Object.assign(merged, target);
+  }
+  return merged;
 }
 
 export async function writeConsultationArtifacts({
@@ -1832,6 +2113,18 @@ export async function writeConsultationArtifacts({
   project_scope_evidence = undefined,
   requestedProjectUrl = undefined,
   requested_project_url = undefined,
+  browserProcessEvidence = undefined,
+  browser_process_evidence = undefined,
+  chatgptTargetMetadata = undefined,
+  chatgpt_target_metadata = undefined,
+  includeTargetMetadata = false,
+  consultationIntentKey = undefined,
+  consultation_intent_key = undefined,
+  promptSha256 = undefined,
+  prompt_sha256 = undefined,
+  assistantBaselineMetadata = undefined,
+  assistant_baseline = undefined,
+  preserveExistingReceipt = undefined,
 }) {
   const consultationDir = path.join(rootDir, '.consultations', consultationId);
   await fs.mkdir(consultationDir, { recursive: true, mode: 0o700 });
@@ -1873,23 +2166,44 @@ export async function writeConsultationArtifacts({
     project_scope_evidence,
     requestedProjectUrl,
     requested_project_url,
+    browserProcessEvidence,
+    browser_process_evidence,
+    chatgptTargetMetadata,
+    chatgpt_target_metadata,
+    includeTargetMetadata,
+    consultationIntentKey,
+    consultation_intent_key,
+    promptSha256,
+    prompt_sha256,
+    assistantBaselineMetadata,
+    assistant_baseline,
   });
-  await writePrivateFile(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
-  return { consultationDir, requestPath, responsePath, receiptPath, receipt };
+  const mergedReceipt = mergeReceiptPreservingKnownMetadata(receipt, preserveExistingReceipt);
+  await writePrivateFile(receiptPath, `${JSON.stringify(mergedReceipt, null, 2)}\n`);
+  return { consultationDir, requestPath, responsePath, receiptPath, receipt: mergedReceipt };
 }
 
 export class ChatGPTBridge {
   constructor({
     profileDir = DEFAULT_PROFILE_DIR,
+    projectId = undefined,
+    projectUrl = undefined,
+    machineRuntimeRoot = DEFAULT_MACHINE_RUNTIME_ROOT,
+    repositoryRoot = undefined,
     mode = undefined,
     responseTimeoutMs = DEFAULT_RESPONSE_TIMEOUT_MS,
     navigationTimeoutMs = 60_000,
     stabilityMs = 1_500,
     pollMs = 500,
     attachmentUploadTimeoutMs = 30_000,
+    projectBrowserManagerFactory = (options) => new ProjectBrowserManager(options),
     log = () => {},
   } = {}) {
     this.profileDir = path.resolve(profileDir);
+    this.projectId = projectId;
+    this.projectUrl = projectUrl;
+    this.machineRuntimeRoot = path.resolve(machineRuntimeRoot);
+    this.repositoryRoot = repositoryRoot === undefined ? undefined : path.resolve(repositoryRoot);
     this.mode = mode;
     this.responseTimeoutMs = normalizeResponseTimeoutMs(responseTimeoutMs);
     this.navigationTimeoutMs = navigationTimeoutMs;
@@ -1903,11 +2217,44 @@ export class ChatGPTBridge {
     this.browserProcess = null;
     this.requestCount = 0;
     this.projectNavigationDiagnostics = null;
+    this.projectBrowserManager = null;
+    this.projectBrowserHandle = null;
+    this.projectBrowserReused = false;
+    this.browserProcessEvidence = null;
+    this.projectBrowserManagerFactory = projectBrowserManagerFactory;
   }
 
   async open() {
     this.log(`launching profile=${this.profileDir}`);
     await fs.mkdir(this.profileDir, { recursive: true, mode: 0o700 });
+    if (this.projectId && this.projectUrl) {
+      try {
+        this.projectBrowserManager = this.projectBrowserManagerFactory({
+          projectId: this.projectId,
+          projectUrl: this.projectUrl,
+          profileDir: this.profileDir,
+          repositoryRoot: this.repositoryRoot,
+          machineRuntimeRoot: this.machineRuntimeRoot,
+          log: this.log,
+        });
+        const handle = await this.projectBrowserManager.acquire();
+        this.projectBrowserHandle = handle;
+        this.browser = handle.browser;
+        this.context = handle.context;
+        this.page = handle.page;
+        this.browserProcess = handle.browserProcess;
+        this.projectBrowserReused = handle.reused === true;
+        this.browserProcessEvidence = handle.evidence;
+        this.page.setDefaultTimeout(10_000);
+        this.page.setDefaultNavigationTimeout(this.navigationTimeoutMs);
+        return this;
+      } catch (error) {
+        if (error instanceof ProjectBrowserError) {
+          throw new BridgeError(error.code, error.message, error);
+        }
+        throw new BridgeError(FAILURE_CODES.UNEXPECTED_PAGE_STATE, 'Could not acquire the Project Browser.', error);
+      }
+    }
     try {
       const port = await findFreePort();
       const executable = chromium.executablePath();
@@ -1932,11 +2279,6 @@ export class ChatGPTBridge {
       this.page.setDefaultNavigationTimeout(this.navigationTimeoutMs);
       return this;
     } catch (error) {
-      // A browser that never exposes its CDP endpoint is a bounded
-      // pre-prompt transport failure.  Preserve the established generic
-      // launch error for other configuration failures, but classify the
-      // readiness timeout so consultOnce can perform its small, explicit
-      // fresh-cycle recovery instead of consuming the semantic request.
       const message = String(error?.message || '');
       if (message.includes('Chromium CDP did not become ready')) {
         const failure = new BridgeError(
@@ -1969,6 +2311,17 @@ export class ChatGPTBridge {
   }
 
   async close() {
+    if (this.projectBrowserManager && this.projectBrowserHandle) {
+      const handle = this.projectBrowserHandle;
+      this.browser = null;
+      this.browserProcess = null;
+      this.context = null;
+      this.page = null;
+      this.projectBrowserHandle = null;
+      this.projectBrowserReused = false;
+      await this.projectBrowserManager.release(handle);
+      return true;
+    }
     const browser = this.browser;
     const browserProcess = this.browserProcess;
     this.browser = null;
@@ -2005,8 +2358,20 @@ export class ChatGPTBridge {
     return exited;
   }
 
-  releaseForManualLogin() {
-    // Keep the headed window available for the user; the CLI exits immediately after reporting LOGIN_REQUIRED.
+  async releaseForManualLogin() {
+    // Keep the Project Browser process and profile available for the user;
+    // release only this consultation's lease and CDP connection.
+    if (this.projectBrowserManager && this.projectBrowserHandle) {
+      const handle = this.projectBrowserHandle;
+      this.browser = null;
+      this.browserProcess = null;
+      this.context = null;
+      this.page = null;
+      this.projectBrowserHandle = null;
+      await this.projectBrowserManager.release(handle);
+      return;
+    }
+    // Legacy non-project mode retains its old manual-login semantics.
     this.browser = null;
     this.browserProcess = null;
     this.context = null;
@@ -2017,10 +2382,10 @@ export class ChatGPTBridge {
     return this.navigateTo(CHATGPT_URL, FAILURE_CODES.CHATGPT_NAVIGATION_FAILED);
   }
 
-  async navigateTo(url, failureCode = FAILURE_CODES.CHATGPT_NAVIGATION_FAILED) {
+  async navigateTo(url, failureCode = FAILURE_CODES.CHATGPT_NAVIGATION_FAILED, options = {}) {
     this.#assertOpen();
     if (failureCode === FAILURE_CODES.PROJECT_NAVIGATION_FAILED) {
-      return this.navigateToProject(url);
+      return this.navigateToProject(url, options);
     }
     this.log(`opening ${url}`);
     try {
@@ -2042,7 +2407,7 @@ export class ChatGPTBridge {
    * reject query/hash/redirect mismatches; only the receipt diagnostics are
    * sanitized.
    */
-  async navigateToProject(url) {
+  async navigateToProject(url, { bootstrap = !this.projectBrowserReused } = {}) {
     this.#assertOpen();
     let requestedUrl;
     try {
@@ -2068,76 +2433,20 @@ export class ChatGPTBridge {
     // capability check also keeps this method deterministic for the bounded
     // page doubles used by the offline navigation tests.
     const canBootstrapRoot = typeof this.page?.locator === 'function';
-    const bootstrapUrl = canBootstrapRoot ? CHATGPT_URL : null;
-    if (canBootstrapRoot) {
+    if (canBootstrapRoot && bootstrap) {
       this.log('bootstrapping ChatGPT root before project navigation');
-      let bootstrapResponse;
-      try {
-        bootstrapResponse = await this.page.goto(CHATGPT_URL, {
-          waitUntil: 'domcontentloaded',
-          timeout: this.navigationTimeoutMs,
-        });
-      } catch (error) {
-        const classified = classifyProjectNavigationError(error);
-        const failureClass = classified === PROJECT_NAVIGATION_FAILURE_CLASSES.UNKNOWN
-          ? PROJECT_NAVIGATION_FAILURE_CLASSES.FRONTEND_BOOTSTRAP
-          : classified;
-        const diagnostics = projectNavigationDiagnosticsForAttempt({
-          requestedUrl,
-          attemptCount: 0,
-          retryCount: 0,
-          startedAt,
-          landingUrl: safePageUrl(this.page),
-          title: await safePageTitle(this.page),
-          failureClass,
-          error,
-          bootstrapUsed: true,
-          bootstrapUrl,
-        });
-        this.projectNavigationDiagnostics = diagnostics;
-        const failure = new BridgeError(
-          FAILURE_CODES.PROJECT_NAVIGATION_FAILED,
-          failureMessage(FAILURE_CODES.PROJECT_NAVIGATION_FAILED),
-          error,
-        );
-        failure.failureClass = failureClass;
-        failure.diagnostics = diagnostics;
-        failure.projectNavigationDiagnostics = diagnostics;
-        throw failure;
-      }
-      const bootstrapStatus = safeNavigationStatus(bootstrapResponse);
-      if (bootstrapStatus !== null && bootstrapStatus >= 400) {
-        const diagnostics = projectNavigationDiagnosticsForAttempt({
-          requestedUrl,
-          attemptCount: 0,
-          retryCount: 0,
-          startedAt,
-          status: bootstrapStatus,
-          landingUrl: safePageUrl(this.page),
-          title: await safePageTitle(this.page),
-          failureClass: bootstrapStatus === 403
-            ? PROJECT_NAVIGATION_FAILURE_CLASSES.CHALLENGE
-            : PROJECT_NAVIGATION_FAILURE_CLASSES.HTTP_ERROR,
-          bootstrapUsed: true,
-          bootstrapUrl,
-        });
-        this.projectNavigationDiagnostics = diagnostics;
-        const failure = new BridgeError(
-          FAILURE_CODES.PROJECT_NAVIGATION_FAILED,
-          failureMessage(FAILURE_CODES.PROJECT_NAVIGATION_FAILED),
-        );
-        failure.diagnostics = diagnostics;
-        failure.projectNavigationDiagnostics = diagnostics;
-        throw failure;
-      }
+      await this.page.goto(CHATGPT_URL, {
+        waitUntil: 'domcontentloaded',
+        timeout: this.navigationTimeoutMs,
+      });
       const rootReady = await waitForComposerOrLogin(this.page, {
         timeoutMs: COMPOSER_READY_TIMEOUT_MS,
         pollMs: 250,
       });
-      if (rootReady.loginRequired) {
+      if (rootReady.loginRequired || !rootReady.composer) {
         const failure = new BridgeError(
-          FAILURE_CODES.LOGIN_REQUIRED,
-          failureMessage(FAILURE_CODES.LOGIN_REQUIRED),
+          FAILURE_CODES.PROJECT_NAVIGATION_FAILED,
+          'ChatGPT root bootstrap did not produce an authenticated composer.',
         );
         failure.projectNavigationDiagnostics = projectNavigationDiagnosticsForAttempt({
           requestedUrl,
@@ -2146,32 +2455,42 @@ export class ChatGPTBridge {
           startedAt,
           landingUrl: safePageUrl(this.page),
           title: await safePageTitle(this.page),
-          failureClass: PROJECT_NAVIGATION_FAILURE_CLASSES.CHALLENGE,
+          failureClass: rootReady.loginRequired
+            ? PROJECT_NAVIGATION_FAILURE_CLASSES.CHALLENGE
+            : PROJECT_NAVIGATION_FAILURE_CLASSES.UNKNOWN,
           bootstrapUsed: true,
-          bootstrapUrl,
+          bootstrapUrl: CHATGPT_URL,
         });
         failure.diagnostics = failure.projectNavigationDiagnostics;
         throw failure;
       }
-      if (!rootReady.composer) {
-        const failure = new BridgeError(
-          FAILURE_CODES.UNEXPECTED_PAGE_STATE,
-          'ChatGPT root bootstrap did not produce a visible composer.',
-        );
-        failure.failureClass = PROJECT_NAVIGATION_FAILURE_CLASSES.FRONTEND_BOOTSTRAP;
-        failure.projectNavigationDiagnostics = projectNavigationDiagnosticsForAttempt({
-          requestedUrl,
-          attemptCount: 0,
-          retryCount: 0,
-          startedAt,
-          landingUrl: safePageUrl(this.page),
-          title: await safePageTitle(this.page),
-          failureClass: PROJECT_NAVIGATION_FAILURE_CLASSES.FRONTEND_BOOTSTRAP,
-          bootstrapUsed: true,
-          bootstrapUrl,
+    }
+    if (!bootstrap) {
+      let currentProject;
+      try {
+        currentProject = normalizeProjectUrl(safePageUrl(this.page));
+      } catch {
+        currentProject = null;
+      }
+      if (currentProject === requestedUrl) {
+        const currentReady = await waitForComposerOrLogin(this.page, {
+          timeoutMs: COMPOSER_READY_TIMEOUT_MS,
+          pollMs: 250,
         });
-        failure.diagnostics = failure.projectNavigationDiagnostics;
-        throw failure;
+        if (currentReady.composer) {
+          const diagnostics = projectNavigationDiagnosticsForAttempt({
+            requestedUrl,
+            attemptCount: 0,
+            retryCount: 0,
+            startedAt,
+            status: 200,
+            title: await safePageTitle(this.page),
+            landingUrl: safePageUrl(this.page),
+            failureClass: PROJECT_NAVIGATION_FAILURE_CLASSES.NONE,
+          });
+          this.projectNavigationDiagnostics = diagnostics;
+          return safePageUrl(this.page) || requestedUrl;
+        }
       }
     }
     while (attemptCount <= MAX_PROJECT_NAVIGATION_RETRIES) {
@@ -2222,8 +2541,6 @@ export class ChatGPTBridge {
             title,
             landingUrl: rawLandingUrl,
             failureClass,
-            bootstrapUsed: canBootstrapRoot,
-            bootstrapUrl,
           });
           this.projectNavigationDiagnostics = diagnostics;
           const failure = new BridgeError(
@@ -2242,21 +2559,11 @@ export class ChatGPTBridge {
             pollMs: 250,
           })
           : { loginRequired: false, composer: true };
-        if (projectReady.loginRequired) {
-          const failure = new BridgeError(
-            FAILURE_CODES.LOGIN_REQUIRED,
-            failureMessage(FAILURE_CODES.LOGIN_REQUIRED),
-          );
-          failure.failureClass = PROJECT_NAVIGATION_FAILURE_CLASSES.CHALLENGE;
-          throw failure;
-        }
-        if (!projectReady.composer) {
-          const failure = new BridgeError(
-            FAILURE_CODES.UNEXPECTED_PAGE_STATE,
+        if (projectReady.loginRequired || !projectReady.composer) {
+          throw new BridgeError(
+            FAILURE_CODES.PROMPT_INPUT_NOT_FOUND,
             'Project bootstrap did not produce a visible composer.',
           );
-          failure.failureClass = PROJECT_NAVIGATION_FAILURE_CLASSES.FRONTEND_BOOTSTRAP;
-          throw failure;
         }
         rawLandingUrl = safePageUrl(this.page) || rawLandingUrl;
         title = (await safePageTitle(this.page)) || title;
@@ -2269,8 +2576,8 @@ export class ChatGPTBridge {
           title,
           landingUrl: rawLandingUrl,
           failureClass: PROJECT_NAVIGATION_FAILURE_CLASSES.NONE,
-          bootstrapUsed: canBootstrapRoot,
-          bootstrapUrl,
+          bootstrapUsed: canBootstrapRoot && bootstrap,
+          bootstrapUrl: canBootstrapRoot && bootstrap ? CHATGPT_URL : null,
         });
         this.projectNavigationDiagnostics = diagnostics;
         if (!rawLandingUrl) {
@@ -2296,8 +2603,6 @@ export class ChatGPTBridge {
           landingUrl: rawLandingUrl,
           failureClass,
           error,
-          bootstrapUsed: canBootstrapRoot,
-          bootstrapUrl,
         });
         this.projectNavigationDiagnostics = diagnostics;
         const canRetry = attemptCount <= MAX_PROJECT_NAVIGATION_RETRIES
@@ -2316,7 +2621,7 @@ export class ChatGPTBridge {
               // navigation-only retry.  No prompt, upload, or conversation
               // operation is repeated here.
               await this.#recoverFromTargetClosed();
-            } else if (canBootstrapRoot) {
+            } else if (canBootstrapRoot && bootstrap) {
               await this.page.goto(CHATGPT_URL, {
                 waitUntil: 'domcontentloaded',
                 timeout: this.navigationTimeoutMs,
@@ -2347,8 +2652,6 @@ export class ChatGPTBridge {
               landingUrl: safePageUrl(this.page),
               failureClass: settledFailureClass,
               error: settleError,
-              bootstrapUsed: canBootstrapRoot,
-              bootstrapUrl,
             });
             this.projectNavigationDiagnostics = settledDiagnostics;
             const failure = new BridgeError(
@@ -2385,8 +2688,6 @@ export class ChatGPTBridge {
       retryCount,
       startedAt,
       failureClass: PROJECT_NAVIGATION_FAILURE_CLASSES.UNKNOWN,
-      bootstrapUsed: canBootstrapRoot,
-      bootstrapUrl,
     });
     failure.diagnostics = failure.projectNavigationDiagnostics;
     throw failure;
@@ -2608,10 +2909,9 @@ export class ChatGPTBridge {
   }
 
   /**
-   * Re-check the hard project invariant immediately before submission. This
-   * is deliberately independent from the earlier navigation checkpoint: a
-   * SPA redirect, stale page, or composer escape must fail closed at the last
-   * possible point before the one allowed request.
+   * Re-check the hard Project invariant immediately before submission or a
+   * same-conversation recovery read. Navigation and composer readiness are
+   * separate checks; this one is intentionally the last route gate.
    */
   async verifyProjectScopeBeforeSend(projectUrl, { allowConversationRoute = false } = {}) {
     this.#assertOpen();
@@ -2650,7 +2950,7 @@ export class ChatGPTBridge {
     };
   }
 
-  async sendOnePrompt(prompt, { baselineSnapshot } = {}) {
+  async sendOnePrompt(prompt, { baselineSnapshot, onPromptSent } = {}) {
     this.#assertOpen();
     if (typeof prompt !== 'string' || !prompt.trim()) {
       throw new BridgeError(FAILURE_CODES.PROMPT_SEND_FAILED, 'Prompt must be a non-empty string.');
@@ -2725,6 +3025,27 @@ export class ChatGPTBridge {
     }
     const sendCompletedAt = Date.now();
 
+    if (typeof onPromptSent === 'function') {
+      let sentUrl = this.currentUrl();
+      if (!extractConversationIdFromUrl(sentUrl) && typeof this.waitForConversationRoute === 'function') {
+        sentUrl = await this.waitForConversationRoute(undefined, {
+          timeoutMs: CONVERSATION_ROUTE_SETTLE_TIMEOUT_MS,
+          pollMs: CONVERSATION_ROUTE_SETTLE_POLL_MS,
+        });
+      }
+      try {
+        await onPromptSent({
+          requestCount: this.requestCount,
+          chatUrl: sentUrl,
+          conversationId: extractConversationIdFromUrl(sentUrl),
+          sendStartedAt,
+          sendCompletedAt,
+        });
+      } catch (error) {
+        throw asBridgeError(error, FAILURE_CODES.PROMPT_SEND_FAILED);
+      }
+    }
+
     this.log('waiting for new assistant response');
     try {
       return await waitForNewAssistantResponse(this.page, baseline.map((item) => item.id), {
@@ -2733,6 +3054,58 @@ export class ChatGPTBridge {
         startedAt: sendStartedAt,
         sendStartedAt,
         sendCompletedAt,
+        timeoutMs: this.responseTimeoutMs,
+        pollMs: this.pollMs,
+        stabilityMs: this.stabilityMs,
+        refresh: typeof this.page.reload === 'function'
+          ? () => this.reloadConversationForHydration()
+          : undefined,
+      });
+    } catch (error) {
+      const code = error?.message?.startsWith('Timed out')
+        ? FAILURE_CODES.RESPONSE_TIMEOUT
+        : FAILURE_CODES.RESPONSE_EXTRACTION_FAILED;
+      const failure = new BridgeError(code, failureMessage(code), error);
+      if (error?.responseForensic) failure.responseForensic = error.responseForensic;
+      throw failure;
+    }
+  }
+
+  /**
+   * Recover the one assistant turn created by an already-counted prompt.
+   * This reads the current conversation and runs the same unique/stable
+   * extractor used by sendOnePrompt; it never fills, clicks, or submits.
+   */
+  async recoverOneResponse({ baselineSnapshot, baselineMetadata } = {}) {
+    this.#assertOpen();
+    let current = baselineSnapshot;
+    if (current === undefined) {
+      current = await this.waitForAssistantBaseline({
+        requireNonEmpty: Number(baselineMetadata?.assistant_count) > 0,
+      });
+    }
+    let baseline = current;
+    if (baselineMetadata !== undefined) {
+      if (!assistantBaselineMatchesMetadata(current, baselineMetadata)) {
+        throw new BridgeError(
+          FAILURE_CODES.RESPONSE_EXTRACTION_FAILED,
+          'The persisted assistant baseline does not match the recovered conversation.',
+        );
+      }
+      baseline = current.slice(0, baselineMetadata.assistant_count);
+    } else if (current.length > 0) {
+      // Without a pre-submit baseline, choosing a boundary would be an
+      // inference about which historical turn belongs to this intent.
+      throw new BridgeError(
+        FAILURE_CODES.RESPONSE_EXTRACTION_FAILED,
+        'The recovered conversation has no durable assistant baseline.',
+      );
+    }
+    try {
+      return await waitForNewAssistantResponse(this.page, baseline.map((item) => item.id), {
+        baselineCount: baseline.length,
+        baselineSnapshot: baseline,
+        startedAt: Date.now(),
         timeoutMs: this.responseTimeoutMs,
         pollMs: this.pollMs,
         stabilityMs: this.stabilityMs,
@@ -2778,11 +3151,87 @@ export function assertAssistantBaselineUnchanged(before, after) {
   }
 }
 
+const ASSISTANT_BASELINE_METADATA_SCHEMA = 'assistant_baseline.v1';
+const MAX_ASSISTANT_BASELINE_ITEMS = 64;
+
+function metadataHash(value) {
+  return crypto.createHash('sha256').update(String(value ?? ''), 'utf8').digest('hex');
+}
+
+function baselineItemMetadata(item) {
+  return {
+    id_hash: metadataHash(item.id),
+    slot_hash: metadataHash(item.slotId || item.id),
+    text_hash: metadataHash(item.text),
+    text_length: typeof item.text === 'string' ? Math.min(item.text.length, 1_000_000) : 0,
+  };
+}
+
+/**
+ * Convert an assistant baseline into bounded, non-secret recovery metadata.
+ * Raw message ids and text are intentionally not retained on disk.
+ */
+export function createAssistantBaselineMetadata(snapshot) {
+  validateStableAssistantSnapshot(snapshot);
+  if (snapshot.length > MAX_ASSISTANT_BASELINE_ITEMS) {
+    throw new BridgeError(
+      FAILURE_CODES.RESPONSE_EXTRACTION_FAILED,
+      'The assistant baseline is too large to recover safely.',
+    );
+  }
+  const entries = snapshot.map(baselineItemMetadata);
+  return {
+    schema_version: ASSISTANT_BASELINE_METADATA_SCHEMA,
+    assistant_count: snapshot.length,
+    id_hashes: entries.map((item) => item.id_hash),
+    slot_hashes: entries.map((item) => item.slot_hash),
+    text_hashes: entries.map((item) => item.text_hash),
+    text_lengths: entries.map((item) => item.text_length),
+  };
+}
+
+// The descriptive alias is useful to callers implementing their own durable
+// adapter while keeping the canonical name short for bridge internals.
+export const buildAssistantBaselineMetadata = createAssistantBaselineMetadata;
+
+export function validateAssistantBaselineMetadata(metadata) {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return false;
+  if (metadata.schema_version !== ASSISTANT_BASELINE_METADATA_SCHEMA) return false;
+  const count = metadata.assistant_count;
+  if (!Number.isInteger(count) || count < 0 || count > MAX_ASSISTANT_BASELINE_ITEMS) return false;
+  const arrays = [metadata.id_hashes, metadata.slot_hashes, metadata.text_hashes, metadata.text_lengths];
+  if (arrays.some((items) => !Array.isArray(items) || items.length !== count)) return false;
+  if (!metadata.id_hashes.every((value) => typeof value === 'string' && /^[0-9a-f]{64}$/i.test(value))) return false;
+  if (!metadata.slot_hashes.every((value) => typeof value === 'string' && /^[0-9a-f]{64}$/i.test(value))) return false;
+  if (!metadata.text_hashes.every((value) => typeof value === 'string' && /^[0-9a-f]{64}$/i.test(value))) return false;
+  if (!metadata.text_lengths.every((value) => Number.isInteger(value) && value >= 0 && value <= 1_000_000)) return false;
+  return true;
+}
+
+export function assistantBaselineMatchesMetadata(snapshot, metadata) {
+  if (!validateAssistantBaselineMetadata(metadata) || !Array.isArray(snapshot)) return false;
+  if (snapshot.length < metadata.assistant_count) return false;
+  try {
+    validateStableAssistantSnapshot(snapshot);
+  } catch {
+    return false;
+  }
+  const prefix = snapshot.slice(0, metadata.assistant_count).map(baselineItemMetadata);
+  return prefix.every((item, index) => (
+    item.id_hash.toLowerCase() === metadata.id_hashes[index].toLowerCase()
+    && item.slot_hash.toLowerCase() === metadata.slot_hashes[index].toLowerCase()
+    && item.text_hash.toLowerCase() === metadata.text_hashes[index].toLowerCase()
+    && item.text_length === metadata.text_lengths[index]
+  ));
+}
+
 async function consultOnceSingle(
   prompt,
   {
     rootDir = process.cwd(),
-    profileDir = DEFAULT_PROFILE_DIR,
+    profileDir = undefined,
+    projectId = undefined,
+    machineRuntimeRoot = DEFAULT_MACHINE_RUNTIME_ROOT,
     responseTimeoutMs = undefined,
     navigationTimeoutMs = 60_000,
     log = () => {},
@@ -2797,11 +3246,54 @@ async function consultOnceSingle(
     attachmentBaseDir,
     attachmentUploadTimeoutMs = 30_000,
     bridgeFactory = (options) => new ChatGPTBridge(options),
+    consultationId: consultationIdOverride = undefined,
+    recovery: recoveryOptions = undefined,
+    durability = undefined,
+    onBeforePromptSend = undefined,
+    onPromptSent = undefined,
+    onConversationRoute = undefined,
+    promptSha256 = undefined,
+    consultationIntentKey = undefined,
+    assistantBaselineMetadata: suppliedAssistantBaselineMetadata = undefined,
+    chatgptTargetMetadata = undefined,
+    preserveReceipt = undefined,
   } = {},
 ) {
   if (typeof prompt !== 'string' || !prompt.trim()) {
     throw new BridgeError(FAILURE_CODES.PROMPT_SEND_FAILED, 'Prompt must be a non-empty string.');
   }
+  const recoveryMode = recoveryOptions !== undefined;
+  if (recoveryMode && (!recoveryOptions || typeof recoveryOptions !== 'object' || Array.isArray(recoveryOptions))) {
+    throw new BridgeError(
+      FAILURE_CODES.RESPONSE_EXTRACTION_FAILED,
+      'Conversation recovery options are invalid.',
+    );
+  }
+  if (recoveryOptions?.mode !== undefined) mode = recoveryOptions.mode;
+  if (consultationIdOverride !== undefined && !isValidConsultationId(consultationIdOverride)) {
+    throw new BridgeError(
+      FAILURE_CODES.CONTINUATION_RECEIPT_INVALID,
+      'consultationId must be a bridge consultation id.',
+    );
+  }
+  const durabilityHooks = durability && typeof durability === 'object' && !Array.isArray(durability)
+    ? durability
+    : {};
+  const beforePromptHook = onBeforePromptSend
+    || durabilityHooks.beforePromptSend
+    || durabilityHooks.beforeSend
+    || durabilityHooks.onBeforePromptSend;
+  const promptSentHook = onPromptSent
+    || durabilityHooks.promptSent
+    || durabilityHooks.afterSend
+    || durabilityHooks.onPromptSent;
+  const conversationRouteHook = onConversationRoute
+    || durabilityHooks.conversationRoute
+    || durabilityHooks.onConversationRoute
+    || durabilityHooks.route;
+  const invokeHook = async (hook, payload) => {
+    if (typeof hook === 'function') await hook(payload);
+  };
   const effectiveResponseTimeoutMs = resolveResponseTimeoutMs(responseTimeoutMs);
   if (!Object.values(CONVERSATION_MODES).includes(mode)) {
     throw new BridgeError(FAILURE_CODES.UNEXPECTED_PAGE_STATE, 'Conversation mode must be fresh or continue.');
@@ -2864,18 +3356,55 @@ async function consultOnceSingle(
     }
   }
   const resolvedRoot = path.resolve(rootDir);
-  const resolvedProfile = path.resolve(profileDir);
-  const consultationId = createConsultationId();
+  const consultationId = consultationIdOverride || createConsultationId();
+  let existingReceiptRecord = null;
+  if (consultationIdOverride !== undefined) {
+    existingReceiptRecord = await readConsultationReceipt({
+      rootDir: resolvedRoot,
+      consultationId,
+      allowMissing: true,
+    });
+  }
+  const existingReceipt = preserveReceipt && typeof preserveReceipt === 'object'
+    ? preserveReceipt
+    : existingReceiptRecord?.receipt;
+  const recoveryChatUrl = recoveryOptions?.chatUrl || existingReceipt?.chat_url;
+  const recoveryConversationId = recoveryOptions?.conversationId || existingReceipt?.conversation_id;
+  if (recoveryMode && (
+    !isValidConversationUrl(recoveryChatUrl, recoveryConversationId)
+    || !CONVERSATION_ID_PATTERN.test(String(recoveryConversationId || ''))
+  )) {
+    throw new BridgeError(
+      FAILURE_CODES.CONTINUATION_RECEIPT_INVALID,
+      'Conversation recovery requires a verified ChatGPT conversation route.',
+    );
+  }
+  let resolvedProjectId;
+  try {
+    resolvedProjectId = resolveProjectIdentity({ projectId, projectUrl: requestedProjectUrl });
+  } catch (error) {
+    projectUrlValidationError = asBridgeError(error, FAILURE_CODES.PROJECT_URL_INVALID);
+  }
+  let resolvedProfile = profileDir === undefined
+    ? (resolvedProjectId
+      ? defaultProjectBrowserProfileDir({ projectId: resolvedProjectId, machineRuntimeRoot })
+      : DEFAULT_PROFILE_DIR)
+    : path.resolve(profileDir);
   const createdAt = new Date().toISOString();
-  const profile = displayProfile(resolvedProfile, resolvedRoot);
+  let profile = displayProfile(resolvedProfile, resolvedRoot);
   const initialParentConsultationId = mode === CONVERSATION_MODES.CONTINUE ? continueFrom : null;
-  let conversationRootConsultationId = mode === CONVERSATION_MODES.FRESH ? consultationId : null;
-  let parentConsultationId = initialParentConsultationId;
-  let conversationId = null;
-  let conversationValidated = false;
-  let verifiedChatUrl = CHATGPT_URL;
+  let conversationRootConsultationId = recoveryOptions?.conversationRootConsultationId
+    || existingReceipt?.conversation_root_consultation_id
+    || (mode === CONVERSATION_MODES.FRESH ? consultationId : null);
+  let parentConsultationId = recoveryOptions?.parentConsultationId
+    || existingReceipt?.parent_consultation_id
+    || initialParentConsultationId;
+  let conversationId = recoveryConversationId || null;
+  let conversationValidated = Boolean(recoveryOptions?.conversationValidated || existingReceipt?.conversation_validated);
+  let verifiedChatUrl = recoveryChatUrl || CHATGPT_URL;
   let projectScopeRequested = requestedProjectUrl !== undefined;
-  let projectScopeVerified = false;
+  let projectScopeVerified = recoveryOptions?.projectScopeVerified === true
+    || existingReceipt?.project_scope_verified === true;
   let projectScopeEvidence = requestedProjectUrl
     ? projectScopeEvidenceForLanding(requestedProjectUrl, null)
     : undefined;
@@ -2884,38 +3413,52 @@ async function consultOnceSingle(
     ? effectiveAttachments.map((item) => attachmentPlaceholder(item))
     : [];
   let preparedAttachments = { files: [], metadata: attachmentMetadata };
+  let browserProcessEvidence;
+  let writeAheadRequestCount = recoveryMode || existingReceipt?.request_count === 1 ? 1 : 0;
+  let expectedConversationId = recoveryConversationId || null;
+  const baselineMetadataFromRecovery = recoveryOptions?.baselineMetadata
+    || recoveryOptions?.assistantBaselineMetadata
+    || suppliedAssistantBaselineMetadata;
+  const preservedTargetMetadata = recoveryOptions?.chatgptTargetMetadata
+    || chatgptTargetMetadata
+    || existingReceipt;
   const browserCheckpoints = [];
   const markCheckpoint = (checkpoint, status, failureClass = undefined) => {
     const entry = { checkpoint, status };
     if (failureClass) entry.failure_class = failureClass;
     browserCheckpoints.push(entry);
   };
-  await writeConsultationArtifacts({
-    rootDir: resolvedRoot,
-    consultationId,
-    createdAt,
-    prompt,
-    profile,
-    mode,
-    conversationId,
-    parentConsultationId,
-    conversationRootConsultationId,
-    conversationValidated,
-    status: 'started',
-    requestCount: 0,
-    attachments: attachmentMetadata,
-    contextPack: safeContextPack,
-    transport,
-    browserCheckpoints,
-    projectNavigationDiagnostics,
-    projectUrl: requestedProjectUrl,
-    projectScopeRequested,
-    projectScopeVerified,
-    projectScopeEvidence,
-  });
+  if (!recoveryMode && existingReceipt?.request_count !== 1) {
+    await writeConsultationArtifacts({
+      rootDir: resolvedRoot,
+      consultationId,
+      createdAt,
+      prompt,
+      profile,
+      mode,
+      conversationId,
+      parentConsultationId,
+      conversationRootConsultationId,
+      conversationValidated,
+      status: 'started',
+      requestCount: 0,
+      attachments: attachmentMetadata,
+      contextPack: safeContextPack,
+      transport,
+      browserCheckpoints,
+      browserProcessEvidence,
+      projectNavigationDiagnostics,
+      projectUrl: requestedProjectUrl,
+      projectScopeRequested,
+      projectScopeVerified,
+      projectScopeEvidence,
+      chatgptTargetMetadata: preservedTargetMetadata,
+      includeTargetMetadata: true,
+      preserveExistingReceipt: existingReceipt,
+    });
+  }
   let bridge = null;
   let keepBrowserOpen = false;
-  let expectedConversationId = null;
   try {
     if (projectUrlValidationError) throw projectUrlValidationError;
     if (transportValidationError) throw transportValidationError;
@@ -2936,7 +3479,64 @@ async function consultOnceSingle(
         throw asBridgeError(error, FAILURE_CODES.CONTEXT_PACK_INVALID);
       }
     }
-    if (effectiveAttachments && effectiveAttachments.length > 0) {
+    let continuation;
+    if (recoveryMode) {
+      if (requestedProjectUrl === undefined) {
+        const recoveredProjectUrl = recoveryOptions.projectUrl || existingReceipt?.project_url;
+        if (recoveredProjectUrl !== undefined) {
+          requestedProjectUrl = resolveProjectUrlAlias({ projectUrl: recoveredProjectUrl });
+          projectScopeRequested = true;
+          projectScopeEvidence = existingReceipt?.project_scope_evidence
+            || projectScopeEvidenceForLanding(requestedProjectUrl, requestedProjectUrl);
+          projectScopeVerified = existingReceipt?.project_scope_verified === true
+            || recoveryOptions.projectScopeVerified === true;
+        }
+      }
+      try {
+        resolvedProjectId = resolveProjectIdentity({
+          projectId,
+          projectUrl: requestedProjectUrl,
+        });
+      } catch (error) {
+        throw asBridgeError(error, FAILURE_CODES.PROJECT_URL_INVALID);
+      }
+      if (profileDir === undefined && resolvedProjectId) {
+        resolvedProfile = defaultProjectBrowserProfileDir({ projectId: resolvedProjectId, machineRuntimeRoot });
+        profile = displayProfile(resolvedProfile, resolvedRoot);
+      }
+    } else if (mode === CONVERSATION_MODES.CONTINUE) {
+      continuation = await readContinuationReceipt({
+        rootDir: resolvedRoot,
+        consultationId: continueFrom,
+      });
+      const parentProjectUrl = continuation.receipt.project_url;
+      if (requestedProjectUrl !== undefined) {
+        if (!parentProjectUrl || requestedProjectUrl !== parentProjectUrl) {
+          projectScopeEvidence = projectScopeEvidenceForBinding(requestedProjectUrl, false);
+          throw new BridgeError(
+            FAILURE_CODES.PROJECT_SCOPE_MISMATCH,
+            failureMessage(FAILURE_CODES.PROJECT_SCOPE_MISMATCH),
+          );
+        }
+      } else if (parentProjectUrl) {
+        requestedProjectUrl = parentProjectUrl;
+        projectScopeRequested = true;
+        projectScopeEvidence = projectScopeEvidenceForLanding(requestedProjectUrl, null);
+      }
+      try {
+        resolvedProjectId = resolveProjectIdentity({
+          projectId,
+          projectUrl: requestedProjectUrl,
+        });
+      } catch (error) {
+        throw asBridgeError(error, FAILURE_CODES.PROJECT_URL_INVALID);
+      }
+      if (profileDir === undefined && resolvedProjectId) {
+        resolvedProfile = defaultProjectBrowserProfileDir({ projectId: resolvedProjectId, machineRuntimeRoot });
+        profile = displayProfile(resolvedProfile, resolvedRoot);
+      }
+    }
+    if (!recoveryMode && effectiveAttachments && effectiveAttachments.length > 0) {
       const roots = await resolveAllowedAttachmentRoots({ allowedAttachmentRoots });
       preparedAttachments = await prepareAttachments(effectiveAttachments, {
         allowedAttachmentRoots: roots,
@@ -2948,36 +3548,111 @@ async function consultOnceSingle(
     }
     bridge = bridgeFactory({
       profileDir: resolvedProfile,
+      projectId: resolvedProjectId,
+      projectUrl: requestedProjectUrl,
+      machineRuntimeRoot,
+      repositoryRoot: resolvedRoot,
       mode,
       responseTimeoutMs: effectiveResponseTimeoutMs,
       navigationTimeoutMs,
       attachmentUploadTimeoutMs,
       log,
     });
-    if (mode === CONVERSATION_MODES.CONTINUE) {
-      const continuation = await readContinuationReceipt({
-        rootDir: resolvedRoot,
-        consultationId: continueFrom,
+    const noteConversationRoute = async ({ chatUrl, source = 'bridge' } = {}) => {
+      const routeConversationId = extractConversationIdFromUrl(chatUrl);
+      if (!routeConversationId) return null;
+      if (expectedConversationId && routeConversationId !== expectedConversationId) return null;
+      conversationId = routeConversationId;
+      expectedConversationId = expectedConversationId || routeConversationId;
+      conversationValidated = true;
+      verifiedChatUrl = sanitizedConversationRoute(chatUrl) || chatUrl;
+      await invokeHook(conversationRouteHook, {
+        consultationId,
+        requestCount: Math.max(1, writeAheadRequestCount),
+        chatUrl: verifiedChatUrl,
+        conversationId,
+        source,
       });
-      const inherited = deriveContinuationLineage(continuation.receipt);
-      const parentProjectUrl = continuation.receipt.project_url;
-      const parentProjectScopeEvidence = continuation.receipt.project_scope_evidence;
-      if (requestedProjectUrl !== undefined) {
-        if (!parentProjectUrl || requestedProjectUrl !== parentProjectUrl) {
-          projectScopeEvidence = projectScopeEvidenceForBinding(requestedProjectUrl, false);
-          throw new BridgeError(
-            FAILURE_CODES.PROJECT_SCOPE_MISMATCH,
-            failureMessage(FAILURE_CODES.PROJECT_SCOPE_MISMATCH),
-          );
-        }
-      } else if (parentProjectUrl) {
-        // Inherit the parent binding when the caller omits the optional
-        // project URL. This keeps continuation convenient while ensuring the
-        // browser is still scoped to the receipt's project; a caller-provided
-        // different URL was rejected above.
-        requestedProjectUrl = parentProjectUrl;
-        projectScopeRequested = true;
+      return conversationId;
+    };
+    if (recoveryMode) {
+      await bridge.open();
+      browserProcessEvidence = bridge.browserProcessEvidence;
+      markCheckpoint('B0', BROWSER_CHECKPOINT_STATUSES.PASS);
+      const landedUrl = await bridge.navigateTo(
+        recoveryChatUrl,
+        FAILURE_CODES.CONTINUATION_CHAT_NOT_FOUND,
+      );
+      markCheckpoint('B1', BROWSER_CHECKPOINT_STATUSES.PASS);
+      const landedConversationId = extractConversationIdFromUrl(landedUrl);
+      if (!landedConversationId || landedConversationId !== expectedConversationId) {
+        throw new BridgeError(
+          FAILURE_CODES.CONVERSATION_IDENTITY_MISMATCH,
+          failureMessage(FAILURE_CODES.CONVERSATION_IDENTITY_MISMATCH),
+        );
       }
+      if (
+        requestedProjectUrl !== undefined
+        && !isValidProjectConversationUrl(landedUrl, requestedProjectUrl, expectedConversationId)
+      ) {
+        projectScopeEvidence = projectScopeEvidenceForBinding(requestedProjectUrl, false);
+        throw new BridgeError(
+          FAILURE_CODES.PROJECT_SCOPE_MISMATCH,
+          failureMessage(FAILURE_CODES.PROJECT_SCOPE_MISMATCH),
+        );
+      }
+      conversationId = landedConversationId;
+      conversationValidated = true;
+      verifiedChatUrl = sanitizedConversationRoute(landedUrl) || landedUrl;
+      if (requestedProjectUrl !== undefined) {
+        projectScopeVerified = true;
+        projectScopeEvidence = existingReceipt?.project_scope_evidence
+          || projectScopeEvidenceForBinding(requestedProjectUrl, true);
+      }
+      await invokeHook(conversationRouteHook, {
+        consultationId,
+        requestCount: 1,
+        chatUrl: verifiedChatUrl,
+        conversationId,
+        source: 'recovery_navigation',
+      });
+      await bridge.ensureLoggedIn();
+      markCheckpoint('B2', BROWSER_CHECKPOINT_STATUSES.PASS);
+      markCheckpoint('B4', BROWSER_CHECKPOINT_STATUSES.PASS);
+      await writeConsultationArtifacts({
+        rootDir: resolvedRoot,
+        consultationId,
+        createdAt,
+        prompt,
+        profile,
+        mode,
+        conversationId,
+        parentConsultationId,
+        conversationRootConsultationId,
+        conversationValidated,
+        chatUrl: verifiedChatUrl,
+        status: 'recovery_pending',
+        requestCount: 1,
+        attachments: existingReceipt?.attachments || attachmentMetadata,
+        contextPack: safeContextPack,
+        transport,
+        browserCheckpoints,
+        browserProcessEvidence,
+        projectNavigationDiagnostics,
+        projectUrl: requestedProjectUrl,
+        projectScopeRequested,
+        projectScopeVerified,
+        projectScopeEvidence,
+        chatgptTargetMetadata: preservedTargetMetadata,
+        includeTargetMetadata: true,
+        preserveExistingReceipt: existingReceipt,
+        assistantBaselineMetadata: baselineMetadataFromRecovery,
+        promptSha256,
+        consultationIntentKey,
+      });
+    } else if (mode === CONVERSATION_MODES.CONTINUE) {
+      const inherited = deriveContinuationLineage(continuation.receipt);
+      const parentProjectScopeEvidence = continuation.receipt.project_scope_evidence;
       parentConsultationId = inherited.parentConsultationId;
       conversationRootConsultationId = inherited.conversationRootConsultationId;
       expectedConversationId = inherited.conversationId;
@@ -3004,6 +3679,7 @@ async function consultOnceSingle(
       }
 
       await bridge.open();
+      browserProcessEvidence = bridge.browserProcessEvidence;
       markCheckpoint('B0', BROWSER_CHECKPOINT_STATUSES.PASS);
       const landedUrl = await bridge.navigateTo(
         continuation.receipt.chat_url,
@@ -3052,6 +3728,7 @@ async function consultOnceSingle(
       markCheckpoint('B4', BROWSER_CHECKPOINT_STATUSES.PASS);
     } else {
       await bridge.open();
+      browserProcessEvidence = bridge.browserProcessEvidence;
       markCheckpoint('B0', BROWSER_CHECKPOINT_STATUSES.PASS);
       let beforeUrl;
       if (requestedProjectUrl !== undefined) {
@@ -3133,9 +3810,11 @@ async function consultOnceSingle(
     }
 
     let baseline = await bridge.waitForAssistantBaseline({
-      requireNonEmpty: mode === CONVERSATION_MODES.CONTINUE,
+      requireNonEmpty: recoveryMode
+        ? Number(baselineMetadataFromRecovery?.assistant_count) > 0
+        : mode === CONVERSATION_MODES.CONTINUE,
     });
-    if (preparedAttachments.files.length > 0) {
+    if (!recoveryMode && preparedAttachments.files.length > 0) {
       markCheckpoint('B7', BROWSER_CHECKPOINT_STATUSES.DEFERRED);
       attachmentMetadata = attachmentMetadata.map((item) => ({
         ...item,
@@ -3171,46 +3850,176 @@ async function consultOnceSingle(
       markCheckpoint('B8', BROWSER_CHECKPOINT_STATUSES.SKIP);
     }
     markCheckpoint('B9', BROWSER_CHECKPOINT_STATUSES.DEFERRED);
-    if (requestedProjectUrl !== undefined) {
+    let responseText;
+    if (recoveryMode) {
       try {
-        if (typeof bridge.verifyProjectScopeBeforeSend === 'function') {
-          await bridge.verifyProjectScopeBeforeSend(requestedProjectUrl, {
-            allowConversationRoute: mode === CONVERSATION_MODES.CONTINUE,
-          });
-        } else {
-          // Custom bridge factories are test/integration boundaries. Keep the
-          // same fail-closed route check even when they do not expose the
-          // richer composer verifier.
-          const current = safeProjectScopeUrl(
-            typeof bridge.currentUrl === 'function' ? bridge.currentUrl() : null,
+        if (typeof bridge.recoverOneResponse !== 'function') {
+          throw new BridgeError(
+            FAILURE_CODES.RESPONSE_EXTRACTION_FAILED,
+            'The bridge does not support no-send conversation recovery.',
           );
-          const currentIsBoundConversation = mode === CONVERSATION_MODES.CONTINUE
-            && isValidProjectConversationUrl(
-              typeof bridge.currentUrl === 'function' ? bridge.currentUrl() : null,
-              requestedProjectUrl,
-              expectedConversationId,
-            );
-          if (current !== requestedProjectUrl && !currentIsBoundConversation) {
+        }
+        // Recovery is already write-ahead counted. Never call sendOnePrompt.
+        bridge.requestCount = Math.max(1, Number(bridge.requestCount) || 0);
+        responseText = await bridge.recoverOneResponse({
+          baselineSnapshot: baseline,
+          baselineMetadata: baselineMetadataFromRecovery,
+        });
+        if (typeof recoveryOptions.responseValidator === 'function') {
+          const validation = await recoveryOptions.responseValidator(responseText);
+          if (!validation) {
             throw new BridgeError(
-              FAILURE_CODES.PROJECT_SCOPE_MISMATCH,
-              failureMessage(FAILURE_CODES.PROJECT_SCOPE_MISMATCH),
+              recoveryOptions.responseFailureCode || 'CONSULTATION_RECOVERY_RESPONSE_INVALID',
+              'The recovered response failed the workflow decision validity check.',
             );
           }
         }
+        markCheckpoint('B9', BROWSER_CHECKPOINT_STATUSES.PASS);
+        markCheckpoint('B10', BROWSER_CHECKPOINT_STATUSES.PASS);
       } catch (error) {
-        projectScopeVerified = false;
         markCheckpoint('B9', BROWSER_CHECKPOINT_STATUSES.FAIL, failureClassForCode(error?.code));
         throw error;
       }
-    }
-    let responseText;
-    try {
-      responseText = await bridge.sendOnePrompt(prompt, { baselineSnapshot: baseline });
-      markCheckpoint('B9', BROWSER_CHECKPOINT_STATUSES.PASS);
-      markCheckpoint('B10', bridge.requestCount > 0 ? BROWSER_CHECKPOINT_STATUSES.PASS : BROWSER_CHECKPOINT_STATUSES.FAIL, bridge.requestCount > 0 ? undefined : 'PROMPT_SUBMISSION_FAILED');
-    } catch (error) {
-      markCheckpoint('B9', BROWSER_CHECKPOINT_STATUSES.FAIL, failureClassForCode(error?.code));
-      throw error;
+    } else {
+      let baselineMetadata;
+      try {
+        baselineMetadata = suppliedAssistantBaselineMetadata || createAssistantBaselineMetadata(baseline);
+      } catch (error) {
+        markCheckpoint('B9', BROWSER_CHECKPOINT_STATUSES.FAIL, failureClassForCode(error?.code));
+        throw error;
+      }
+      if (requestedProjectUrl !== undefined) {
+        try {
+          if (typeof bridge.verifyProjectScopeBeforeSend === 'function') {
+            await bridge.verifyProjectScopeBeforeSend(requestedProjectUrl, {
+              allowConversationRoute: mode === CONVERSATION_MODES.CONTINUE,
+            });
+          } else {
+            const current = safeProjectScopeUrl(
+              typeof bridge.currentUrl === 'function' ? bridge.currentUrl() : null,
+            );
+            const currentIsBoundConversation = mode === CONVERSATION_MODES.CONTINUE
+              && isValidProjectConversationUrl(
+                typeof bridge.currentUrl === 'function' ? bridge.currentUrl() : null,
+                requestedProjectUrl,
+                expectedConversationId,
+              );
+            if (current !== requestedProjectUrl && !currentIsBoundConversation) {
+              throw new BridgeError(
+                FAILURE_CODES.PROJECT_SCOPE_MISMATCH,
+                failureMessage(FAILURE_CODES.PROJECT_SCOPE_MISMATCH),
+              );
+            }
+          }
+        } catch (error) {
+          projectScopeVerified = false;
+          markCheckpoint('B9', BROWSER_CHECKPOINT_STATUSES.FAIL, failureClassForCode(error?.code));
+          throw error;
+        }
+      }
+
+      // Conservative write-ahead: a process/browser crash after this point is
+      // indistinguishable from a submitted prompt, so the durable count is 1
+      // before the click is allowed to happen.
+      writeAheadRequestCount = 1;
+      await writeConsultationArtifacts({
+        rootDir: resolvedRoot,
+        consultationId,
+        createdAt,
+        prompt,
+        profile,
+        mode,
+        conversationId,
+        parentConsultationId,
+        conversationRootConsultationId,
+        conversationValidated,
+        chatUrl: verifiedChatUrl,
+        status: 'prompt_pending',
+        responseText: '',
+        requestCount: 1,
+        attachments: attachmentMetadata,
+        contextPack: safeContextPack,
+        transport,
+        browserCheckpoints,
+        browserProcessEvidence,
+        projectNavigationDiagnostics,
+        projectUrl: requestedProjectUrl,
+        projectScopeRequested,
+        projectScopeVerified,
+        projectScopeEvidence,
+        chatgptTargetMetadata: preservedTargetMetadata,
+        includeTargetMetadata: true,
+        preserveExistingReceipt: existingReceipt,
+        assistantBaselineMetadata: baselineMetadata,
+        promptSha256,
+        consultationIntentKey,
+      });
+      await invokeHook(beforePromptHook, {
+        consultationId,
+        requestCount: 1,
+        chatUrl: verifiedChatUrl,
+        conversationId,
+        baselineMetadata,
+        promptSha256,
+        consultationIntentKey,
+      });
+      try {
+        responseText = await bridge.sendOnePrompt(prompt, {
+          baselineSnapshot: baseline,
+          onPromptSent: async (event) => {
+            await noteConversationRoute({
+              chatUrl: event?.chatUrl,
+              source: 'prompt_sent',
+            });
+            await writeConsultationArtifacts({
+              rootDir: resolvedRoot,
+              consultationId,
+              createdAt,
+              prompt,
+              profile,
+              mode,
+              conversationId,
+              parentConsultationId,
+              conversationRootConsultationId,
+              conversationValidated,
+              chatUrl: verifiedChatUrl,
+              status: 'prompt_sent',
+              requestCount: 1,
+              attachments: attachmentMetadata,
+              contextPack: safeContextPack,
+              transport,
+              browserCheckpoints,
+              browserProcessEvidence,
+              projectNavigationDiagnostics,
+              projectUrl: requestedProjectUrl,
+              projectScopeRequested,
+              projectScopeVerified,
+              projectScopeEvidence,
+              chatgptTargetMetadata: preservedTargetMetadata,
+              includeTargetMetadata: true,
+              preserveExistingReceipt: existingReceipt,
+              assistantBaselineMetadata: baselineMetadata,
+              promptSha256,
+              consultationIntentKey,
+            });
+            await invokeHook(promptSentHook, {
+              ...event,
+              consultationId,
+              requestCount: 1,
+              chatUrl: verifiedChatUrl,
+              conversationId,
+              baselineMetadata,
+              promptSha256,
+              consultationIntentKey,
+            });
+          },
+        });
+        markCheckpoint('B9', BROWSER_CHECKPOINT_STATUSES.PASS);
+        markCheckpoint('B10', bridge.requestCount > 0 ? BROWSER_CHECKPOINT_STATUSES.PASS : BROWSER_CHECKPOINT_STATUSES.FAIL, bridge.requestCount > 0 ? undefined : 'PROMPT_SUBMISSION_FAILED');
+      } catch (error) {
+        markCheckpoint('B9', BROWSER_CHECKPOINT_STATUSES.FAIL, failureClassForCode(error?.code));
+        throw error;
+      }
     }
     markCheckpoint('B11', BROWSER_CHECKPOINT_STATUSES.PASS);
     // The response waiter can complete just before the SPA commits the
@@ -3220,6 +4029,7 @@ async function consultOnceSingle(
     verifiedChatUrl = typeof bridge.waitForConversationRoute === 'function'
       ? await bridge.waitForConversationRoute(expectedConversationId)
       : bridge.currentUrl();
+    await noteConversationRoute({ chatUrl: verifiedChatUrl, source: 'final_route' });
     const finalConversationId = extractConversationIdFromUrl(verifiedChatUrl);
     if (!finalConversationId) {
       throw new BridgeError(
@@ -3241,6 +4051,12 @@ async function consultOnceSingle(
       throw new BridgeError(
         FAILURE_CODES.PROJECT_SCOPE_MISMATCH,
         failureMessage(FAILURE_CODES.PROJECT_SCOPE_MISMATCH),
+      );
+    }
+    if (typeof responseText !== 'string' || !responseText.trim()) {
+      throw new BridgeError(
+        FAILURE_CODES.RESPONSE_EXTRACTION_FAILED,
+        failureMessage(FAILURE_CODES.RESPONSE_EXTRACTION_FAILED),
       );
     }
     markCheckpoint('B12', BROWSER_CHECKPOINT_STATUSES.PASS);
@@ -3266,23 +4082,31 @@ async function consultOnceSingle(
       contextPack: safeContextPack,
       transport,
       browserCheckpoints,
+      browserProcessEvidence,
       projectNavigationDiagnostics,
       projectUrl: requestedProjectUrl,
       projectScopeRequested,
       projectScopeVerified,
       projectScopeEvidence,
+      chatgptTargetMetadata: preservedTargetMetadata,
+      includeTargetMetadata: true,
+      preserveExistingReceipt: existingReceipt,
+      assistantBaselineMetadata: baselineMetadataFromRecovery,
+      promptSha256,
+      consultationIntentKey,
     });
     log(`receipt ${completed.receiptPath}`);
     return {
       consultationId,
       responseText,
-      requestCount: bridge.requestCount,
+      requestCount: recoveryMode ? 1 : bridge.requestCount,
       mode,
       projectUrl: requestedProjectUrl,
       projectScopeRequested,
       projectScopeVerified,
       projectScopeEvidence,
       projectNavigationDiagnostics,
+      browserProcessEvidence,
       conversationId,
       parentConsultationId,
       conversationRootConsultationId,
@@ -3296,7 +4120,24 @@ async function consultOnceSingle(
     projectNavigationDiagnostics = safeProjectNavigationDiagnostics(
       failure.projectNavigationDiagnostics || projectNavigationDiagnostics,
     ) || projectNavigationDiagnostics;
-    const requestCount = Number.isInteger(bridge?.requestCount) ? bridge.requestCount : 0;
+    let currentRoute;
+    try {
+      currentRoute = typeof bridge?.currentUrl === 'function' ? bridge.currentUrl() : undefined;
+      const currentConversationId = extractConversationIdFromUrl(currentRoute);
+      if (currentConversationId && (!expectedConversationId || currentConversationId === expectedConversationId)) {
+        conversationId = currentConversationId;
+        expectedConversationId = expectedConversationId || currentConversationId;
+        conversationValidated = true;
+        verifiedChatUrl = sanitizedConversationRoute(currentRoute) || currentRoute;
+      }
+    } catch {
+      // Preserve the last durable route when the target is already closed.
+    }
+    const requestCount = Math.max(
+      recoveryMode ? 1 : 0,
+      writeAheadRequestCount,
+      Number.isInteger(bridge?.requestCount) ? bridge.requestCount : 0,
+    );
     failure.requestCount = requestCount;
     const failed = await writeConsultationArtifacts({
       rootDir: resolvedRoot,
@@ -3305,10 +4146,11 @@ async function consultOnceSingle(
       prompt,
       profile,
       mode,
-      conversationId: null,
+      conversationId,
       parentConsultationId,
       conversationRootConsultationId,
-      conversationValidated: false,
+      conversationValidated,
+      chatUrl: verifiedChatUrl,
       status: requestCount === 0 ? 'failed_before_prompt' : failure.code,
       responseText: '',
       failureCode: failure.code,
@@ -3317,6 +4159,7 @@ async function consultOnceSingle(
       contextPack: safeContextPack,
       transport,
       browserCheckpoints,
+      browserProcessEvidence,
       diagnostics: failure.projectNavigationDiagnostics ? undefined : failure.diagnostics,
       responseForensic: failure.responseForensic,
       projectNavigationDiagnostics,
@@ -3324,13 +4167,19 @@ async function consultOnceSingle(
       projectScopeRequested,
       projectScopeVerified,
       projectScopeEvidence,
+      chatgptTargetMetadata: preservedTargetMetadata,
+      includeTargetMetadata: true,
+      preserveExistingReceipt: existingReceipt,
+      assistantBaselineMetadata: baselineMetadataFromRecovery,
+      promptSha256,
+      consultationIntentKey,
     });
     log(`receipt ${failed.receiptPath}`);
     failure.consultationId = consultationId;
     failure.artifacts = failed;
     if (failure.code === FAILURE_CODES.LOGIN_REQUIRED) {
       keepBrowserOpen = true;
-      bridge?.releaseForManualLogin();
+      await bridge?.releaseForManualLogin();
     }
     throw failure;
   } finally {
@@ -3338,9 +4187,9 @@ async function consultOnceSingle(
   }
 }
 
-// These failures are all observed before the one prompt budget is consumed.
-// The wrapper retries the same semantic intent with a fresh bridge cycle; it
-// never retries a send, response wait, continuation, or project decision.
+// These failures are observed before the one prompt budget is consumed. Keep
+// the historical bounded retry for legacy callers, but never enter it for the
+// durable intent path: that path must retain the original consultation id.
 const PRE_PROMPT_RECOVERABLE_FAILURE_CODES = new Set([
   FAILURE_CODES.BRIDGE_TIMEOUT,
   FAILURE_CODES.NETWORK_TRANSIENT,
@@ -3391,14 +4240,22 @@ function prePromptRecoveryMetadata(failureCodes) {
 }
 
 /**
- * Run one semantic consultation intent with a hard, infrastructure-only
- * recovery bound. Stage/controller callers invoke this once; only the bridge
- * cycle is repeated while request_count remains zero.
+ * Run one legacy semantic consultation with a small infrastructure-only
+ * retry bound. Durable intent callers opt out through consultationId,
+ * recovery, or durability options and are handled by consultation-recovery.
  */
 export async function consultOnce(prompt, options = {}) {
   if (!options || typeof options !== 'object' || Array.isArray(options)) {
     throw new TypeError('consultOnce options must be an object');
   }
+  const durableInvocation = options.consultationId !== undefined
+    || options.recovery !== undefined
+    || options.durability !== undefined
+    || options.onBeforePromptSend !== undefined
+    || options.onPromptSent !== undefined
+    || options.onConversationRoute !== undefined;
+  if (durableInvocation) return consultOnceSingle(prompt, options);
+
   const failureCodes = [];
   for (let cycle = 0; cycle <= MAX_PRE_PROMPT_RECOVERY_CYCLES; cycle += 1) {
     try {
@@ -3411,18 +4268,12 @@ export async function consultOnce(prompt, options = {}) {
     } catch (error) {
       const failure = asBridgeError(error);
       if (!isPrePromptRecoverableFailure(failure) || cycle >= MAX_PRE_PROMPT_RECOVERY_CYCLES) {
-        if (failureCodes.length > 0) {
-          failure.prePromptRecovery = prePromptRecoveryMetadata(failureCodes);
-        }
+        if (failureCodes.length > 0) failure.prePromptRecovery = prePromptRecoveryMetadata(failureCodes);
         throw failure;
       }
       failureCodes.push(failure.code);
-      // A new consultOnceSingle invocation creates a new consultation id,
-      // bridge instance, and immutable receipt. It will therefore never
-      // resend an already-counted prompt.
     }
   }
-  // The loop is structurally total; this branch protects the bound if edited.
   throw new BridgeError(
     FAILURE_CODES.UNEXPECTED_PAGE_STATE,
     'Pre-prompt recovery loop terminated unexpectedly.',

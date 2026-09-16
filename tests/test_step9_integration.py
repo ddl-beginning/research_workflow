@@ -447,6 +447,7 @@ console.log('CHATGPT_RESPONSE_END');
                 "const args = process.argv.slice(2);\n"
                 "const spec = JSON.parse(await fs.readFile(args[args.indexOf('--spec') + 1], 'utf8'));\n"
                 "await fs.writeFile(path.join(spec.root_dir, 'observed-attachment-root.txt'), process.env.CHATGPT_ALLOWED_ATTACHMENT_ROOTS || '');\n"
+                "await fs.writeFile(path.join(spec.root_dir, 'observed-recovery.json'), JSON.stringify({key: spec.consultation_intent_key, recover: spec.recover_consultation_id}));\n"
                 "const id = 'CONSULT-20260904-000000-aabbccdd';\n"
                 "const dir = path.join(spec.root_dir, '.consultations', id);\n"
                 "await fs.mkdir(dir, { recursive: true });\n"
@@ -467,8 +468,13 @@ console.log('CHATGPT_RESPONSE_END');
                 root_dir=str(root),
                 profile_dir=None,
                 bridge_root=fake_bridge,
+                consultation_intent_key="a" * 64,
+                recover_consultation_id="CONSULT-20260916-020743-57666118",
             )
             self.assertEqual(result["request_count"], 1)
+            self.assertEqual(json.loads((root / "observed-recovery.json").read_text()), {
+                "key": "a" * 64, "recover": "CONSULT-20260916-020743-57666118",
+            })
             observed = (root / "observed-attachment-root.txt").read_text(encoding="utf-8")
             self.assertEqual(
                 Path(observed).resolve(),

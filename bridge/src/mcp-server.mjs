@@ -52,9 +52,13 @@ export const consultGptInputSchema = z.object({
     .max(MAX_CONTEXT_PACK_ID_CHARS)
     .regex(CONTEXT_PACKET_ID_PATTERN)
     .optional(),
+  project_id: z.string()
+    .max(128)
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$/)
+    .optional(),
   project_url: z.string()
     .max(PROJECT_URL_MAX_CHARS)
-    .refine((value) => isValidProjectUrl(value), 'project_url must be a safe https://chatgpt.com target')
+    .refine((value) => isValidProjectUrl(value), 'project_url must be an explicit ChatGPT project route')
     .optional(),
 }).strict().superRefine((value, context) => {
   if (value.mode === CONVERSATION_MODES.FRESH && value.continue_from !== undefined) {
@@ -155,6 +159,7 @@ export function createConsultGptHandler({ consult = consultOnce } = {}) {
         ...(args.continue_from === undefined ? {} : { continueFrom: args.continue_from }),
         ...(args.attachments === undefined ? {} : { attachments: args.attachments }),
         ...(contextPack === undefined ? {} : { contextPack }),
+        ...(args.project_id === undefined ? {} : { projectId: args.project_id }),
         ...(args.project_url === undefined ? {} : { projectUrl: args.project_url }),
       });
       return successResult(result);
@@ -171,12 +176,12 @@ export function createMcpServer({ consult = consultOnce } = {}) {
       version: MCP_SERVER_VERSION,
     },
     {
-      instructions: 'This server exposes exactly one tool. Each call sends at most one prompt through the existing headed ChatGPT bridge using either an explicitly fresh conversation or a receipt-validated continue conversation. An optional project_url scopes fresh navigation and must match the parent receipt for continuation. Optional local attachments and an explicitly named staged context packet are restricted by server-side bridge roots and verified before that one prompt. It does not scan repositories, choose files, execute recommendations, or run autonomous loops.',
+      instructions: 'This server exposes exactly one tool. Each call sends at most one prompt through the existing headed ChatGPT bridge using either an explicitly fresh conversation or a receipt-validated continue conversation. An optional project_id owns one machine-local persistent Project Browser and an optional project_url scopes navigation and must match the parent receipt for continuation. Optional local attachments and an explicitly named staged context packet are restricted by server-side bridge roots and verified before that one prompt. It does not scan repositories, choose files, execute recommendations, or run autonomous loops.',
     },
   );
   server.registerTool(CONSULT_GPT_TOOL_NAME, {
     title: 'Consult ChatGPT once',
-    description: 'Send one prompt with an optional explicit ChatGPT project URL, server-authorized local attachments, or an explicitly named staged context packet through the locally authenticated ChatGPT browser profile in a fresh or receipt-validated continue conversation, and return the complete assistant response plus a receipt path.',
+    description: 'Send one prompt with an optional Workflow project identity, explicit ChatGPT project URL, server-authorized local attachments, or an explicitly named staged context packet through that Project Browser profile in a fresh or receipt-validated continue conversation, and return the complete assistant response plus a receipt path.',
     inputSchema: consultGptInputSchema,
     outputSchema: consultGptOutputSchema,
   }, createConsultGptHandler({ consult }));

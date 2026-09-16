@@ -7,16 +7,21 @@ import {
   BRIDGE_ROOT,
   CONVERSATION_MODES,
   consultOnce,
-  DEFAULT_PROFILE_DIR,
   FAILURE_CODES,
   resolveResponseTimeoutMs,
 } from '../src/bridge.mjs';
 import {
   buildContextPack,
   CONTEXT_PACK_MODES,
+  loadContextPack,
   resolveContextPackAttachmentRoot,
 } from '../src/context-pack.mjs';
 import { buildReviewerPrompt, writeLocalReviewSummary } from '../src/dialogue-policy.mjs';
+import {
+  computeRecoveryPromptHash,
+  consultWithRecovery,
+  readConsultationIntent,
+} from '../src/consultation-recovery.mjs';
 
 function readOption(name) {
   const index = process.argv.indexOf(name);
@@ -24,7 +29,7 @@ function readOption(name) {
 }
 
 function usage() {
-  console.error('Usage: npm run consult-pack -- --spec path/to/spec.json [--project-url https://chatgpt.com/<project-path>] [--profile-dir PATH] [--timeout-ms N]');
+  console.error('Usage: npm run consult-pack -- --spec path/to/spec.json [--project-url https://chatgpt.com/g/g-p-.../project] [--profile-dir PATH] [--timeout-ms N]');
 }
 
 const specPath = readOption('--spec');
@@ -40,11 +45,32 @@ if (!specPath) {
     const rootDir = path.resolve(spec.root_dir || BRIDGE_ROOT);
     const contextMode = spec.context_mode || spec.pack.mode || CONTEXT_PACK_MODES.NORMAL;
     const conversationMode = spec.conversation_mode || CONVERSATION_MODES.FRESH;
-    const pack = await buildContextPack({
-      ...spec.pack,
-      rootDir,
-      mode: contextMode,
-    });
+    const intentKey = spec.consultation_intent_key;
+    const recoverConsultationId = spec.recover_consultation_id;
+    if (recoverConsultationId !== undefined && intentKey === undefined) {
+      throw new Error('recover_consultation_id requires consultation_intent_key; legacy ownership must be explicitly bound by the engine.');
+    }
+    const durableIntent = intentKey === undefined
+      ? null
+      : await readConsultationIntent({ rootDir, intentKey });
+    let pack;
+    if (durableIntent?.packet_id) {
+      // Reuse the exact packet for both count=0 retries and count=1 recovery.
+      // A missing or damaged packet is an unresolved durable intent, not a
+      // reason to silently rebuild a different reviewer payload.
+      pack = await loadContextPack({ rootDir, packetId: durableIntent.packet_id });
+    } else {
+      pack = await buildContextPack({
+        ...spec.pack,
+        rootDir,
+        mode: contextMode,
+      });
+    }
+    const packSha256 = pack.packSha256 || pack.packHash || pack.pack_sha256 || pack.manifest?.pack_sha256;
+    const recoveryPromptHash = intentKey === undefined
+      ? undefined
+      : computeRecoveryPromptHash({ question: spec.question, packSha256 });
+    const promptMode = pack.mode || pack.manifest?.mode || contextMode;
     // Context-pack attachments are created under the pack's canonical staging
     // boundary.  Pass that verified, narrow root explicitly so a supervisor
     // pack built in its disposable .tmp workspace is accepted without
@@ -52,17 +78,20 @@ if (!specPath) {
     const contextPackAttachmentRoot = await resolveContextPackAttachmentRoot(pack);
     const prompt = buildReviewerPrompt({
       question: spec.question,
-      mode: contextMode,
+      mode: promptMode,
       packetId: pack.packetId,
     });
     const timeoutValue = readOption('--timeout-ms');
     const responseTimeoutMs = timeoutValue === undefined ? undefined : resolveResponseTimeoutMs(timeoutValue);
-    const profileDir = path.resolve(readOption('--profile-dir') || DEFAULT_PROFILE_DIR);
+    const profileOption = readOption('--profile-dir') || spec.profile_dir;
+    const profileDir = profileOption === undefined ? undefined : path.resolve(profileOption);
+    const projectId = readOption('--project-id') ?? spec.project_id;
     const projectUrl = readOption('--project-url') ?? spec.project_url;
     const transport = spec.transport === 'homepage_fallback' ? 'homepage_fallback' : undefined;
-    const result = await consultOnce(prompt, {
+    const consultationOptions = {
       rootDir,
-      profileDir,
+      ...(profileDir === undefined ? {} : { profileDir }),
+      ...(projectId === undefined ? {} : { projectId }),
       mode: conversationMode,
       ...(spec.continue_from === undefined ? {} : { continueFrom: spec.continue_from }),
       ...(projectUrl === undefined ? {} : { projectUrl }),
@@ -70,8 +99,15 @@ if (!specPath) {
       ...(transport ? { transport } : {}),
       allowedAttachmentRoots: [contextPackAttachmentRoot],
       ...(Number.isFinite(responseTimeoutMs) && responseTimeoutMs > 0 ? { responseTimeoutMs } : {}),
+      ...(recoveryPromptHash ? { recoveryPromptHash } : {}),
       log: (message) => console.log(message),
-    });
+    };
+    const result = intentKey === undefined
+      ? await consultOnce(prompt, consultationOptions)
+      : await consultWithRecovery(prompt, consultationOptions, {
+        intentKey,
+        ...(recoverConsultationId === undefined ? {} : { recoverConsultationId }),
+      });
     const summaryPath = await writeLocalReviewSummary({ consultationDir: result.consultationDir, responseText: result.responseText });
     console.log(`packet_id=${pack.packetId}`);
     console.log(`packet_manifest=${pack.manifestPath}`);
@@ -79,9 +115,6 @@ if (!specPath) {
     console.log(`consultation_id=${result.consultationId}`);
     console.log(`conversation_id=${result.conversationId}`);
     if (result.projectUrl) console.log(`project_url=${result.projectUrl}`);
-    if (result.pre_prompt_recovery) {
-      console.log(`pre_prompt_recovery=${JSON.stringify(result.pre_prompt_recovery)}`);
-    }
     console.log(`request_count=${result.requestCount}`);
     console.log(`receipt=${result.receiptPath}`);
     if (summaryPath) console.log(`review_summary=${summaryPath}`);
@@ -92,9 +125,6 @@ if (!specPath) {
   } catch (error) {
     const code = error?.code || FAILURE_CODES.UNEXPECTED_PAGE_STATE;
     console.error(`CONTEXT_PACK_CONSULTATION_FAILED ${code}`);
-    if (error?.prePromptRecovery) {
-      console.error(`pre_prompt_recovery=${JSON.stringify(error.prePromptRecovery)}`);
-    }
     if (error?.artifacts?.receiptPath) console.error(`receipt=${error.artifacts.receiptPath}`);
     if (error?.message) console.error(`${code} ${error.message}`);
     if (process.env.BRIDGE_DEBUG_ERRORS === '1' && error?.stack) console.error(error.stack.slice(0, 4000));

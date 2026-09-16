@@ -11,9 +11,10 @@
     "consult": "node scripts/consult.mjs",
     "smoke": "node scripts/smoke-test.mjs",
     "context-smoke": "node scripts/context-pack-smoke.mjs",
+    "project-browser": "node scripts/project-browser.mjs",
     "mcp": "node src/mcp-server.mjs",
     "test": "node --test test/*.test.mjs",
-    "check": "node --check src/bridge.mjs && node --check src/chatgpt-ui.mjs && node --check src/mcp-server.mjs && node --check src/context-pack.mjs && node --check src/dialogue-policy.mjs && node --check scripts/consult.mjs && node --check scripts/smoke-test.mjs && node --check scripts/consult-pack.mjs && node --check scripts/context-pack-smoke.mjs"
+    "check": "node --check src/bridge.mjs && node --check src/project-browser-manager.mjs && node --check src/consultation-recovery.mjs && node --check src/chatgpt-ui.mjs && node --check src/mcp-server.mjs && node --check src/context-pack.mjs && node --check src/dialogue-policy.mjs && node --check scripts/consult.mjs && node --check scripts/smoke-test.mjs && node --check scripts/consult-pack.mjs && node --check scripts/context-pack-smoke.mjs && node --check scripts/project-browser.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
