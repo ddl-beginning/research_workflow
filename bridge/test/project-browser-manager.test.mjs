@@ -95,6 +95,7 @@ async function makeManager(root, projectId, projectUrl, options = {}) {
     listProcessesImpl: options.listProcessesImpl || (async () => []),
     profileOwnerDiscoveryImpl: options.profileOwnerDiscoveryImpl,
     stopProcessImpl: options.stopProcessImpl || spawnState.stopProcess,
+    browserProxy: options.browserProxy,
   });
   return { manager, calls, spawnState, chromiumState };
 }
@@ -145,6 +146,23 @@ test('Project identity and default profile are canonical and machine-local', asy
   const paths = projectBrowserPaths({ projectId: 'project-A', machineRuntimeRoot: 'C:/runtime' });
   assert.equal(paths.profileDir, path.resolve('C:/runtime/browser-projects/project-A/profile'));
   assert.equal(defaultProjectBrowserProfileDir({ projectId: 'project-A', machineRuntimeRoot: 'C:/runtime' }), paths.profileDir);
+});
+
+test('configured browser proxy is passed only to the Chromium launch command', async () => {
+  const root = await fs.mkdtemp(path.join(process.cwd(), '.test-project-browser-proxy-'));
+  try {
+    const state = await makeManager(root, 'g-p-proxy', 'https://chatgpt.com/g/g-p-proxy/project', {
+      browserProxy: 'http://127.0.0.1:7897',
+    });
+    const handle = await state.manager.acquire();
+    const launch = state.spawnState.children[0];
+    assert.equal(launch.args.includes('--proxy-server=http://127.0.0.1:7897'), true);
+    assert.equal(handle.record.project_id, 'g-p-proxy');
+    await state.manager.release(handle);
+    await state.manager.shutdown();
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
 
 test('same Project reuses one process/profile after consultation release', async () => {

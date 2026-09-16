@@ -28,6 +28,7 @@ import {
   DEFAULT_PROJECT_BROWSER_RUNTIME_ROOT,
   ProjectBrowserError,
   ProjectBrowserManager,
+  resolveBrowserProxy,
   defaultProjectBrowserProfileDir,
   resolveProjectIdentity,
 } from './project-browser-manager.mjs';
@@ -2211,6 +2212,7 @@ export class ChatGPTBridge {
     pollMs = 500,
     attachmentUploadTimeoutMs = 30_000,
     projectBrowserManagerFactory = (options) => new ProjectBrowserManager(options),
+    browserProxy = undefined,
     log = () => {},
   } = {}) {
     this.profileDir = path.resolve(profileDir);
@@ -2224,6 +2226,7 @@ export class ChatGPTBridge {
     this.stabilityMs = stabilityMs;
     this.pollMs = pollMs;
     this.attachmentUploadTimeoutMs = attachmentUploadTimeoutMs;
+    this.browserProxy = resolveBrowserProxy(browserProxy);
     this.log = log;
     this.context = null;
     this.page = null;
@@ -2249,6 +2252,7 @@ export class ChatGPTBridge {
           profileDir: this.profileDir,
           repositoryRoot: this.repositoryRoot,
           machineRuntimeRoot: this.machineRuntimeRoot,
+          browserProxy: this.browserProxy,
           log: this.log,
         });
         const handle = await this.projectBrowserManager.acquire();
@@ -2272,13 +2276,15 @@ export class ChatGPTBridge {
     try {
       const port = await findFreePort();
       const executable = chromium.executablePath();
-      this.browserProcess = spawn(executable, [
+      const browserArgs = [
         '--user-data-dir=' + this.profileDir,
         '--remote-debugging-address=127.0.0.1',
         `--remote-debugging-port=${port}`,
         '--no-first-run',
         '--no-default-browser-check',
-      ], {
+      ];
+      if (this.browserProxy) browserArgs.push(`--proxy-server=${this.browserProxy}`);
+      this.browserProcess = spawn(executable, browserArgs, {
         detached: true,
         stdio: 'ignore',
         windowsHide: false,

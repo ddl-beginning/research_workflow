@@ -23,12 +23,19 @@ export const PROJECT_BROWSER_PROCESS_IDENTITY_TIMEOUT_MS = 2_000;
 export const PROJECT_BROWSER_OWNER_DISCOVERY_TIMEOUT_MS = 5_000;
 export const PROJECT_BROWSER_PROCESS_LOST = 'PROJECT_BROWSER_PROCESS_LOST';
 export const RECOVERABLE_INFRASTRUCTURE_FAILURE = 'RECOVERABLE_INFRASTRUCTURE_FAILURE';
+export const BROWSER_PROXY_ENV = 'RESEARCH_WORKFLOW_BROWSER_PROXY';
 export const PROJECT_BROWSER_FAILURE_CLASSES = Object.freeze({
   PROCESS_LOST: PROJECT_BROWSER_PROCESS_LOST,
   RECOVERABLE_INFRASTRUCTURE_FAILURE,
 });
 
 const PROJECT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$/;
+
+export function resolveBrowserProxy(explicitValue = undefined) {
+  const value = explicitValue === undefined ? process.env[BROWSER_PROXY_ENV] : explicitValue;
+  if (typeof value !== 'string' || !value.trim()) return null;
+  return value.trim();
+}
 
 export class ProjectBrowserError extends Error {
   constructor(code, message, cause) {
@@ -985,6 +992,7 @@ export class ProjectBrowserManager {
     profileOwnerDiscoveryImpl = undefined,
     discoverProfileOwnersImpl = undefined,
     nowImpl = () => Date.now(),
+    browserProxy = undefined,
   } = {}) {
     this.projectId = normalizeProjectIdentity(projectId);
     this.projectUrl = projectUrl;
@@ -1011,6 +1019,7 @@ export class ProjectBrowserManager {
         getProcessIdentity: this.getProcessIdentity,
       }));
     this.nowImpl = nowImpl;
+    this.browserProxy = resolveBrowserProxy(browserProxy);
     this.handle = null;
   }
 
@@ -1213,6 +1222,7 @@ export class ProjectBrowserManager {
       `--research-workflow-project-id=${this.projectId}`,
       `--research-workflow-profile-digest=${sha256Path(this.profileDir)}`,
     ];
+    if (this.browserProxy) args.push(`--proxy-server=${this.browserProxy}`);
     if (this.projectUrl) args.push(`--research-workflow-project-url=${this.projectUrl}`);
     const browserProcess = this.spawn(executable, args, {
       detached: true,
