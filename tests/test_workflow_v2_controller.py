@@ -348,6 +348,25 @@ class WorkflowV2ControllerScenarios(unittest.TestCase):
         self.assertEqual(retry["attempt"]["iteration_id"], attempt["iteration_id"])
         self.assertEqual(self.controller.show_stage("stage-12345678")["attempt_count"], 2)
 
+    def test_replayed_resolved_engineering_fix_reconciles_rebound_assessment(self):
+        request = self.controller.request_execution("stage-12345678", command_id="command-replay-fix-first-12345678", provenance={"provider": "fixture-provider", "engine_digest": "engine-12345678"})
+        attempt = request["attempt"]
+        observation = self.observation("FAILED", attempt_id=attempt["attempt_id"], iteration_id=attempt["iteration_id"], observation_id="observation-replay-fix-12345678", evidence_manifest_digest="manifest-replay-fix-12345678", provider_result_digest="provider-replay-fix-12345678")
+        self.controller.record_observation("stage-12345678", observation, effect_state="SETTLED", command_id="command-replay-fix-observe-12345678")
+        assessment = self.make_assessment(observation)
+        self.controller.assess_result("stage-12345678", assessment, command_id="command-replay-fix-assess-12345678")
+        decision = self.gpt_decision(assessment["assessment_id"])
+        first = self.controller.apply_gpt_decision("stage-12345678", decision, choice="REPLAN", replan_subtype="ENGINEERING_FIX", command_id="command-replay-fix-apply-first-12345678")
+        self.assertIsNone(first["stage"]["current_assessment_id"])
+
+        # Simulate durable resume restoring the immutable assessment pointer.
+        self.controller.assess_result("stage-12345678", assessment, command_id="command-replay-fix-rebind-12345678")
+        second = self.controller.apply_gpt_decision("stage-12345678", decision, choice="REPLAN", replan_subtype="ENGINEERING_FIX", command_id="command-replay-fix-apply-second-12345678")
+
+        self.assertEqual(second["idempotent_reconciliation"], "ENGINEERING_FIX")
+        self.assertIsNone(second["stage"]["current_assessment_id"])
+        self.assertTrue(self.controller.state["stage_runtime"]["stage-12345678"]["execution_authorized"])
+
     def test_gpt_next_iteration_requires_semantic_change_and_increments_once(self):
         request = self.controller.request_execution("stage-12345678", command_id="command-next-first-12345678", provenance={"provider": "fixture-provider", "engine_digest": "engine-12345678"})
         attempt = request["attempt"]

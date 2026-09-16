@@ -2047,6 +2047,18 @@ async function writePrivateFile(filePath, contents) {
 function mergeReceiptPreservingKnownMetadata(receipt, previous) {
   if (!previous || typeof previous !== 'object' || Array.isArray(previous)) return receipt;
   const merged = { ...receipt };
+  // A recovery cycle does not upload attachments again. Preserve a complete
+  // prior attachment manifest instead of allowing recovery placeholders to
+  // downgrade it to pending metadata, which would make the completed receipt
+  // unreadable on the next restart.
+  const previousHasCompleteAttachments = validateReceiptAttachments(previous.attachments, { complete: true });
+  const mergedRequiresCompleteAttachments = previous.status === 'complete' || merged.status === 'complete';
+  if (
+    previousHasCompleteAttachments
+    && !validateReceiptAttachments(merged.attachments, { complete: mergedRequiresCompleteAttachments })
+  ) {
+    merged.attachments = previous.attachments;
+  }
   const previousRoute = isValidConversationUrl(previous.chat_url, previous.conversation_id)
     ? sanitizedConversationRoute(previous.chat_url)
     : null;

@@ -11,6 +11,8 @@ import {
   FAILURE_CODES,
   PROJECT_NAVIGATION_FAILURE_CLASSES,
   buildReceipt,
+  readConsultationReceipt,
+  writeConsultationArtifacts,
 } from '../src/bridge.mjs';
 import {
   computeRecoveryPromptHash,
@@ -22,6 +24,7 @@ import {
 const CONVERSATION_ID = '12345678-1234-4234-8234-123456789abc';
 const CHAT_URL = `https://chatgpt.com/c/${CONVERSATION_ID}`;
 const PACK_HASH = 'a'.repeat(64);
+const PROJECT_URL = 'https://chatgpt.com/g/g-p-6aa9e406e64081918f3357e6e5a90908-outdoor/project';
 
 function intentKey(value) {
   return crypto.createHash('sha256').update(value, 'utf8').digest('hex');
@@ -164,6 +167,141 @@ test('post-prompt restart recovers the same conversation without sending again',
     const intent = await readConsultationIntent({ rootDir, intentKey: key });
     assert.equal(intent.status, 'complete');
     assert.equal(intent.chat_url, CHAT_URL);
+  } finally {
+    await removeRoot(rootDir);
+  }
+});
+
+test('post-prompt recovery promotes target metadata without resending', async () => {
+  const rootDir = await temporaryRoot();
+  const key = intentKey('post-prompt-target-promotion');
+  const stableHash = computeRecoveryPromptHash({ question: 'stable question', packSha256: PACK_HASH });
+  let recoveryCalls = 0;
+  try {
+    await consultWithRecovery(
+      'review prompt',
+      {
+        ...recoveryOptions(rootDir, key, async (prompt, options) => {
+          await options.durability.beforePromptSend({ requestCount: 1 });
+          await options.durability.conversationRoute({
+            requestCount: 1,
+            chatUrl: CHAT_URL,
+            conversationId: CONVERSATION_ID,
+          });
+          return sentResult(options.consultationId);
+        }),
+        projectId: 'project-target-promotion',
+        projectUrl: PROJECT_URL,
+      },
+      { intentKey: key },
+    );
+
+    const intent = await readConsultationIntent({ rootDir, intentKey: key });
+    const receipt = buildReceipt({
+      consultationId: intent.consultation_id,
+      createdAt: '2026-09-16T12:00:00.000Z',
+      profile: '.auth/chatgpt-profile',
+      mode: CONVERSATION_MODES.FRESH,
+      chatUrl: CHAT_URL,
+      conversationId: CONVERSATION_ID,
+      conversationValidated: true,
+      status: 'complete',
+      responseCharCount: 64,
+      requestCount: 1,
+      projectUrl: PROJECT_URL,
+      projectScopeRequested: true,
+      projectScopeVerified: true,
+      projectScopeEvidence: {
+        initial_navigation: {
+          requested_url: PROJECT_URL,
+          landed_url: PROJECT_URL,
+          matched: true,
+          verified: true,
+        },
+      },
+      promptSha256: stableHash,
+      includeTargetMetadata: true,
+    });
+    const receiptDir = path.join(rootDir, '.consultations', intent.consultation_id);
+    await fs.mkdir(receiptDir, { recursive: true });
+    await fs.writeFile(path.join(receiptDir, 'receipt.json'), `${JSON.stringify(receipt)}\n`, 'utf8');
+
+    const result = await consultWithRecovery(
+      'reconstructed reviewer prompt after restart',
+      {
+        ...recoveryOptions(rootDir, key, async (prompt, options) => {
+          recoveryCalls += 1;
+          assert.equal(options.recovery.conversationId, CONVERSATION_ID);
+          return {
+            consultationId: options.consultationId,
+            requestCount: 1,
+            responseText: 'recovered analysis\nWORKFLOW_DECISION: CONTINUE',
+            conversationId: CONVERSATION_ID,
+            chatUrl: CHAT_URL,
+            conversationValidated: true,
+          };
+        }),
+        projectId: 'project-target-promotion',
+        projectUrl: PROJECT_URL,
+        recoveryPromptHash: undefined,
+      },
+      { intentKey: key },
+    );
+
+    assert.equal(recoveryCalls, 1);
+    assert.equal(result.requestCount, 1);
+    assert.equal(result.workflowDecision.decision, 'CONTINUE');
+    const promoted = await readConsultationIntent({ rootDir, intentKey: key });
+    assert.equal(promoted.target_metadata.chatgpt_target_mode, 'PROJECT');
+    assert.equal(promoted.target_metadata.chatgpt_project_target_verified, 'YES');
+  } finally {
+    await removeRoot(rootDir);
+  }
+});
+
+test('recovery receipt merge preserves complete attachment metadata', async () => {
+  const rootDir = await temporaryRoot();
+  const consultationId = 'CONSULT-20260916-120000-aabbccdd';
+  const readyAttachments = [{
+    basename: 'LATEST_RESULT.md',
+    relative_path: 'PACK-20260916-120000-aabbccdd/LATEST_RESULT.md',
+    byte_size: 12,
+    sha256: 'a'.repeat(64),
+    media_type: 'text/markdown',
+    upload_status: 'ready',
+  }];
+  const pendingAttachments = [{
+    basename: 'LATEST_RESULT.md',
+    relative_path: null,
+    byte_size: null,
+    sha256: null,
+    media_type: 'text/markdown',
+    upload_status: 'pending',
+  }];
+  try {
+    const first = await writeConsultationArtifacts({
+      rootDir,
+      consultationId,
+      createdAt: '2026-09-16T12:00:00.000Z',
+      profile: '.auth/chatgpt-profile',
+      status: 'complete',
+      responseText: 'initial response',
+      requestCount: 1,
+      attachments: readyAttachments,
+    });
+    await writeConsultationArtifacts({
+      rootDir,
+      consultationId,
+      createdAt: '2026-09-16T12:01:00.000Z',
+      profile: '.auth/chatgpt-profile',
+      status: 'recovery_pending',
+      responseText: '',
+      requestCount: 1,
+      attachments: pendingAttachments,
+      preserveExistingReceipt: first.receipt,
+    });
+    const loaded = await readConsultationReceipt({ rootDir, consultationId });
+    assert.deepEqual(loaded.receipt.attachments, readyAttachments);
   } finally {
     await removeRoot(rootDir);
   }

@@ -1628,7 +1628,26 @@ class StageController:
         if existing_decision is not None:
             if canonical_json(existing_decision) != canonical_json(decision_record):
                 raise WorkflowV2ControllerError("Decision identity collision or conflicting resolution")
-            return {"stage": self.show_stage(stage_id, journal=journal), "decision": _copy(existing_decision), "choice": choice}
+            # A durable resume can replay an already-resolved Engineering Fix
+            # after an assessment rebind restored the live projection.  The
+            # decision is immutable, but its idempotent semantic effect still
+            # has to be reconciled so the projection converges.
+            reconciled = False
+            if (
+                choice == "REPLAN"
+                and typed is not None
+                and typed["replan_subtype"] == "ENGINEERING_FIX"
+                and stage.get("current_assessment_id") == assessment_id
+            ):
+                runtime = self._runtime(journal, stage_id)
+                runtime["execution_authorized"] = True
+                stage["current_assessment_id"] = None
+                runtime.pop("last_blocker_assessment_id", None)
+                reconciled = True
+            result = {"stage": self.show_stage(stage_id, journal=journal), "decision": _copy(existing_decision), "choice": choice}
+            if reconciled:
+                result["idempotent_reconciliation"] = "ENGINEERING_FIX"
+            return result
         journal["decisions"][decision["decision_id"]] = decision_record
         if human_gate is not None:
             journal.setdefault("human_gates", []).append({

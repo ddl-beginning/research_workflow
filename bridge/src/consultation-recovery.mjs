@@ -150,6 +150,31 @@ function safePacketId(value) {
   return value;
 }
 
+function validateTargetMetadataSnapshot(value, projectUrl = undefined) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const fields = [
+    'chatgpt_target_mode',
+    'chatgpt_target_url_digest',
+    'chatgpt_target_origin',
+    'chatgpt_project_target_verified',
+    'fresh_project_chat_created',
+  ];
+  if (!fields.every((field) => Object.prototype.hasOwnProperty.call(value, field))) return false;
+  if (!['PROJECT', 'DEFAULT'].includes(value.chatgpt_target_mode)) return false;
+  if (value.chatgpt_target_origin !== 'https://chatgpt.com') return false;
+  if (!['YES', 'NO'].includes(value.chatgpt_project_target_verified)) return false;
+  if (!['YES', 'NO'].includes(value.fresh_project_chat_created)) return false;
+  if (value.chatgpt_target_mode === 'PROJECT') {
+    if (typeof projectUrl !== 'string' || !isValidProjectUrl(projectUrl)) return false;
+    if (typeof value.chatgpt_target_url_digest !== 'string' || !/^[0-9a-f]{64}$/i.test(value.chatgpt_target_url_digest)) return false;
+    if (sha256Hex(projectUrl) !== value.chatgpt_target_url_digest.toLowerCase()) return false;
+    return value.chatgpt_project_target_verified === 'YES';
+  }
+  return value.chatgpt_target_url_digest === null
+    && value.chatgpt_project_target_verified === 'NO'
+    && value.fresh_project_chat_created === 'NO';
+}
+
 function safeTargetMetadata(value, projectUrl = undefined) {
   if (value === undefined) return undefined;
   const source = value && typeof value === 'object' && value.receipt && typeof value.receipt === 'object'
@@ -160,7 +185,7 @@ function safeTargetMetadata(value, projectUrl = undefined) {
     && projectUrl
     ? { ...source, project_url: projectUrl }
     : source;
-  if (!validateChatgptTargetMetadata(candidate)) {
+  if (!validateChatgptTargetMetadata(candidate) && !validateTargetMetadataSnapshot(candidate, projectUrl)) {
     throw fail(CONSULTATION_RECOVERY_FAILURE_CODES.INTENT_INVALID, 'The durable ChatGPT target metadata is invalid.');
   }
   const fields = [
@@ -539,7 +564,12 @@ export async function consultWithRecovery(
   const normalizedKey = assertIntentKey(intentKey);
   if (recoverConsultationId !== undefined) safeConsultationId(recoverConsultationId);
   const rootDir = path.resolve(options.rootDir || BRIDGE_ROOT);
-  const actualPromptHash = stablePromptHash(prompt, options);
+  // The prompt can be rebuilt from a regenerated packet after a restart. Once
+  // the durable intent has crossed the one-request boundary, its stored hash
+  // is the authoritative identity for read-only recovery; accepting the
+  // rebuilt text here cannot authorize a second send because request_count=1
+  // takes the recovery branch below.
+  let actualPromptHash = stablePromptHash(prompt, options);
   const runner = typeof options.consult === 'function' ? options.consult : consultOnce;
   const userHooks = optionDurabilityHooks(options);
   const {
@@ -590,6 +620,10 @@ export async function consultWithRecovery(
         options,
       });
       await writeConsultationIntent({ rootDir, intentKey: normalizedKey, record: intent });
+    }
+
+    if (intent.request_count >= 1 && intent.prompt_sha256) {
+      actualPromptHash = intent.prompt_sha256;
     }
 
     if (intent.prompt_sha256 && intent.prompt_sha256 !== actualPromptHash) {
