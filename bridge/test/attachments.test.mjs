@@ -299,6 +299,64 @@ function fakeReattachPage() {
   };
 }
 
+function fakeRetryCleanupSettlingPage() {
+  let selectedFiles = [];
+  let clearCount = 0;
+  let uploadCount = 0;
+  let phase = 'initial';
+  const input = {
+    async setInputFiles(files) {
+      const nextFiles = Array.isArray(files) ? [...files] : [];
+      if (nextFiles.length === 0) {
+        clearCount += 1;
+        if (clearCount >= 2) {
+          phase = 'settled';
+          throw new Error('attachment chip is still committing');
+        }
+        selectedFiles = [];
+        return;
+      }
+      uploadCount += 1;
+      selectedFiles = nextFiles;
+    },
+    async evaluate(callback) {
+      if (String(callback).includes('files?.length')) {
+        return {
+          count: selectedFiles.length,
+          basenames: selectedFiles.map((file) => path.basename(file)),
+        };
+      }
+      return {
+        owner: 'unified-composer',
+        active: true,
+        accept: '',
+        multiple: true,
+      };
+    },
+  };
+  const inputLocator = {
+    async count() { return 1; },
+    nth() { return input; },
+    first() { return input; },
+  };
+  const emptyLocator = {
+    async count() { return 0; },
+    nth() { return null; },
+    first() { return null; },
+  };
+  return {
+    get uploadCount() { return uploadCount; },
+    get phase() { return phase; },
+    locator(selector) {
+      if (selector === 'input[type="file"]' || selector === 'form[data-type="unified-composer"] input[type="file"]') {
+        return inputLocator;
+      }
+      return emptyLocator;
+    },
+    async waitForTimeout() {},
+  };
+}
+
 function fakeFileInput(meta, selectedFileCount = 0) {
   const input = {
     meta,
@@ -994,6 +1052,50 @@ test('attachment readiness timeout performs one bounded active-input reattach be
   assert.equal(result.attachmentDiagnostics.reattach_succeeded, true);
   assert.equal(result.attachmentDiagnostics.reattach_attempt_count, 1);
   assert.ok(result.attachmentDiagnostics.reattach_elapsed_ms >= 0);
+});
+
+test('failed reattach cleanup waits for the existing attachment set before failing', async () => {
+  const expected = ['first.txt', 'second.txt'];
+  const page = fakeRetryCleanupSettlingPage();
+  const readyState = {
+    fileInputPresent: true,
+    fileInputOwner: 'unified-composer',
+    inputFileCount: expected.length,
+    inputFileBasenames: expected,
+    readReliable: true,
+    tileBasenames: expected,
+    matchedBasenames: expected,
+    chipCount: expected.length,
+    pendingCount: 0,
+    errorCount: 0,
+    composerReady: true,
+    sendControlPresent: true,
+    sendAvailable: true,
+    progressPresent: false,
+    progressCompleted: false,
+  };
+  const pendingState = {
+    ...readyState,
+    pendingCount: 1,
+    sendAvailable: false,
+  };
+
+  const result = await uploadAttachments(page, ['/tmp/first.txt', '/tmp/second.txt'], {
+    expectedBasenames: expected,
+    timeoutMs: 80,
+    pollMs: 1,
+    reattachAfterMs: 5,
+    reattachSettleMs: 0,
+    readState: async () => page.phase === 'settled' ? readyState : pendingState,
+    sleep: async (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  });
+
+  assert.equal(result, readyState);
+  assert.equal(page.uploadCount, 1);
+  assert.equal(result.attachmentDiagnostics.reattach_attempted, true);
+  assert.equal(result.attachmentDiagnostics.reattach_succeeded, false);
+  assert.equal(result.attachmentDiagnostics.existing_settle_attempted, true);
+  assert.equal(result.attachmentDiagnostics.existing_settle_succeeded, true);
 });
 
 test('initial attachment cleanup failure is fail-closed before selecting new files', async () => {

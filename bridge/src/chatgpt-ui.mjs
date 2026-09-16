@@ -1362,6 +1362,9 @@ export async function uploadAttachments(
     reattach_succeeded: false,
     reattach_attempt_count: 0,
     reattach_elapsed_ms: 0,
+    existing_settle_attempted: false,
+    existing_settle_succeeded: false,
+    existing_settle_elapsed_ms: 0,
   };
   const waitOptions = (budgetMs) => ({
     expectedBasenames,
@@ -1411,6 +1414,42 @@ export async function uploadAttachments(
       retryDiagnostics.reattach_succeeded = true;
     } catch (retryError) {
       retryDiagnostics.reattach_elapsed_ms = Date.now() - retryStartedAt;
+
+      // A Project SPA can keep the original FileList and visible chips while
+      // its uploader is still committing.  In that state cleanup may fail
+      // because the chip is not removable yet.  Give the same pre-prompt
+      // attachment set the remaining bounded budget to settle before
+      // classifying the invocation as failed; do not select files again.
+      const remainingAfterRetryFailure = boundedTimeoutMs - (Date.now() - startedAt);
+      if (remainingAfterRetryFailure > 0) {
+        retryDiagnostics.existing_settle_attempted = true;
+        const settleStartedAt = Date.now();
+        try {
+          const state = await waitForAttachmentsReady(
+            page,
+            filePaths.length,
+            waitOptions(remainingAfterRetryFailure),
+          );
+          retryDiagnostics.existing_settle_succeeded = true;
+          retryDiagnostics.existing_settle_elapsed_ms = Date.now() - settleStartedAt;
+          if (state && typeof state === 'object') {
+            state.attachmentDiagnostics = {
+              ...(state.attachmentDiagnostics || {}),
+              ...retryDiagnostics,
+            };
+          }
+          return state;
+        } catch (settleError) {
+          retryDiagnostics.existing_settle_elapsed_ms = Date.now() - settleStartedAt;
+          retryError.diagnostics = {
+            ...(firstError.diagnostics || {}),
+            ...(retryError.diagnostics || {}),
+            ...(settleError.diagnostics || {}),
+            ...retryDiagnostics,
+          };
+          throw retryError;
+        }
+      }
       retryError.diagnostics = {
         ...(firstError.diagnostics || {}),
         ...(retryError.diagnostics || {}),
