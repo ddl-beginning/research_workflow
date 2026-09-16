@@ -361,7 +361,7 @@ def test_workflow_plan_has_fixed_roadmap_and_self_contained_stage_cards(tmp_path
         "## 1. Goal", "## 2. Why This Stage Exists", "## 3. Entry Conditions",
         "## 4. Inputs", "## 5. Work To Perform", "## 6. Expected Outputs",
         "## 7. Machine Evaluation", "## 8. Human-visible Evidence", "## 9. Pass Gate",
-        "## 10. Replan / Stop Conditions", "## 11. On PASS",
+        "## 10. Replan Conditions", "## 11. Stop Conditions", "## 12. On PASS",
     ):
         assert section in generated
     assert "T01 — implement the result" in generated

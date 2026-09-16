@@ -79,6 +79,9 @@ if (!specPath) {
     console.log(`consultation_id=${result.consultationId}`);
     console.log(`conversation_id=${result.conversationId}`);
     if (result.projectUrl) console.log(`project_url=${result.projectUrl}`);
+    if (result.pre_prompt_recovery) {
+      console.log(`pre_prompt_recovery=${JSON.stringify(result.pre_prompt_recovery)}`);
+    }
     console.log(`request_count=${result.requestCount}`);
     console.log(`receipt=${result.receiptPath}`);
     if (summaryPath) console.log(`review_summary=${summaryPath}`);
@@ -89,6 +92,9 @@ if (!specPath) {
   } catch (error) {
     const code = error?.code || FAILURE_CODES.UNEXPECTED_PAGE_STATE;
     console.error(`CONTEXT_PACK_CONSULTATION_FAILED ${code}`);
+    if (error?.prePromptRecovery) {
+      console.error(`pre_prompt_recovery=${JSON.stringify(error.prePromptRecovery)}`);
+    }
     if (error?.artifacts?.receiptPath) console.error(`receipt=${error.artifacts.receiptPath}`);
     if (error?.message) console.error(`${code} ${error.message}`);
     if (process.env.BRIDGE_DEBUG_ERRORS === '1' && error?.stack) console.error(error.stack.slice(0, 4000));

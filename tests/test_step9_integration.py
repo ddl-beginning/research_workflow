@@ -387,6 +387,52 @@ console.log('CHATGPT_RESPONSE_END');
             self.assertFalse((consultation_dir / "response.txt").exists())
             self.assertTrue((consultation_dir / "receipt.json").exists())
 
+    def test_subprocess_runner_preserves_bounded_pre_prompt_recovery_metadata(self):
+        if shutil.which("node") is None:
+            self.skipTest("node is required for the deterministic subprocess boundary fixture")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "fixture"
+            root.mkdir()
+            fake_bridge = Path(directory) / "bridge"
+            (fake_bridge / "scripts").mkdir(parents=True)
+            script = fake_bridge / "scripts" / "consult-pack.mjs"
+            script.write_text(
+                "import fs from 'node:fs/promises';\n"
+                "import path from 'node:path';\n"
+                "const args = process.argv.slice(2);\n"
+                "const spec = JSON.parse(await fs.readFile(args[args.indexOf('--spec') + 1], 'utf8'));\n"
+                "const id = 'CONSULT-20260904-000000-aabbccdd';\n"
+                "const dir = path.join(spec.root_dir, '.consultations', id);\n"
+                "await fs.mkdir(dir, { recursive: true });\n"
+                "await fs.writeFile(path.join(dir, 'receipt.json'), JSON.stringify({ consultation_id: id, status: 'complete', request_count: 1, mode: 'fresh', conversation_id: 'conversation-a' }));\n"
+                "console.log(`consultation_id=${id}`);\n"
+                "console.log('pre_prompt_recovery={\"attempted\":true,\"cycles\":1,\"max_cycles\":2,\"failure_codes\":[\"BRIDGE_TIMEOUT\"]}');\n"
+                "console.log('request_count=1');\n"
+                "console.log(`receipt=${path.join(dir, 'receipt.json')}`);\n"
+                "console.log('CHATGPT_RESPONSE_BEGIN');\n"
+                "console.log('safe\\nWORKFLOW_DECISION: CONTINUE');\n"
+                "console.log('CHATGPT_RESPONSE_END');\n",
+                encoding="utf-8",
+            )
+            result = subprocess_bridge_runner(
+                "recovery metadata test",
+                mode="fresh",
+                continue_from=None,
+                context_pack={"packet_id": "PACK-recovery-metadata"},
+                root_dir=str(root),
+                profile_dir=None,
+                bridge_root=fake_bridge,
+            )
+            self.assertEqual(
+                result["pre_prompt_recovery"],
+                {
+                    "attempted": True,
+                    "cycles": 1,
+                    "max_cycles": 2,
+                    "failure_codes": ["BRIDGE_TIMEOUT"],
+                },
+            )
+
     def test_subprocess_runner_exposes_only_context_staging_root_to_bridge(self):
         if shutil.which("node") is None:
             self.skipTest("node is required for the deterministic subprocess boundary fixture")

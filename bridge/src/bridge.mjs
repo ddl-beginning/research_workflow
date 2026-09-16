@@ -1932,6 +1932,38 @@ export class ChatGPTBridge {
       this.page.setDefaultNavigationTimeout(this.navigationTimeoutMs);
       return this;
     } catch (error) {
+      // A browser that never exposes its CDP endpoint is a bounded
+      // pre-prompt transport failure.  Preserve the established generic
+      // launch error for other configuration failures, but classify the
+      // readiness timeout so consultOnce can perform its small, explicit
+      // fresh-cycle recovery instead of consuming the semantic request.
+      const message = String(error?.message || '');
+      if (message.includes('Chromium CDP did not become ready')) {
+        const failure = new BridgeError(
+          FAILURE_CODES.BRIDGE_TIMEOUT,
+          failureMessage(FAILURE_CODES.BRIDGE_TIMEOUT),
+          error,
+        );
+        failure.failureClass = PROJECT_NAVIGATION_FAILURE_CLASSES.TIMEOUT;
+        failure.diagnostics = {
+          failure_phase: 'BRIDGE_OPEN',
+          failure_class: PROJECT_NAVIGATION_FAILURE_CLASSES.TIMEOUT,
+        };
+        throw failure;
+      }
+      if (/target closed|browser has been closed|page has been closed|context has been closed/i.test(message)) {
+        const failure = new BridgeError(
+          FAILURE_CODES.TARGET_CLOSED,
+          failureMessage(FAILURE_CODES.TARGET_CLOSED),
+          error,
+        );
+        failure.failureClass = PROJECT_NAVIGATION_FAILURE_CLASSES.TARGET_CLOSED;
+        failure.diagnostics = {
+          failure_phase: 'BRIDGE_OPEN',
+          failure_class: PROJECT_NAVIGATION_FAILURE_CLASSES.TARGET_CLOSED,
+        };
+        throw failure;
+      }
       throw new BridgeError(FAILURE_CODES.UNEXPECTED_PAGE_STATE, 'Could not launch headed Chromium.', error);
     }
   }

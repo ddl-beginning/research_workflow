@@ -973,6 +973,41 @@ def _parse_keyed_stdout(stdout: str, key: str) -> str | None:
     return None
 
 
+def _parse_pre_prompt_recovery_marker(*outputs: str) -> dict[str, Any] | None:
+    """Parse the bridge's bounded recovery metadata without trusting logs."""
+
+    raw = next((value for output in outputs if (value := _parse_keyed_stdout(output, "pre_prompt_recovery")) is not None), None)
+    if raw is None:
+        return None
+    try:
+        value = json.loads(raw)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise StageIntegrationError("BRIDGE_RESULT_INVALID", "pre-prompt recovery metadata is not valid JSON", cause=exc) from exc
+    if not isinstance(value, Mapping):
+        raise StageIntegrationError("BRIDGE_RESULT_INVALID", "pre-prompt recovery metadata must be an object")
+    cycles = value.get("cycles")
+    max_cycles = value.get("max_cycles")
+    failure_codes = value.get("failure_codes")
+    if (
+        value.get("attempted") is not True
+        or isinstance(cycles, bool)
+        or not isinstance(cycles, int)
+        or cycles < 1
+        or cycles > 2
+        or max_cycles != 2
+        or not isinstance(failure_codes, list)
+        or len(failure_codes) != cycles
+        or not all(isinstance(code, str) and _FAILURE_CODE_PATTERN.fullmatch(code) for code in failure_codes)
+    ):
+        raise StageIntegrationError("BRIDGE_RESULT_INVALID", "pre-prompt recovery metadata is outside the bounded contract")
+    return {
+        "attempted": True,
+        "cycles": cycles,
+        "max_cycles": 2,
+        "failure_codes": list(failure_codes),
+    }
+
+
 def _normalise_bridge_failure_code(value: Any, *, default: str | None = "BRIDGE_EXTERNAL_FAILURE") -> str | None:
     """Return one bounded, non-sensitive bridge failure code.
 
@@ -1302,6 +1337,7 @@ def subprocess_bridge_runner(
                 raise StageIntegrationError("BRIDGE_RECEIPT_INVALID", "bridge receipt escaped the project root", cause=exc) from exc
         if completed.returncode != 0:
             marker_code = _parse_bridge_failure_marker(stderr) or _parse_bridge_failure_marker(stdout)
+            recovery_metadata = _parse_pre_prompt_recovery_marker(stdout, stderr)
             failure_receipt: dict[str, Any] = {}
             if receipt_path is not None and receipt_path.is_file():
                 try:
@@ -1341,19 +1377,22 @@ def subprocess_bridge_runner(
                 phase="BRIDGE_SUBPROCESS",
                 request_count=request_count,
             )
+            failure_details = {
+                "returncode": completed.returncode,
+                "receipt_path": str(receipt_path) if receipt_path else None,
+                "bridge_failure_code": code,
+                "request_count": request_count,
+                "status": status,
+                "stderr_sha256": hashlib.sha256(stderr.encode("utf-8")).hexdigest(),
+                "stderr_summary": _safe_stderr_summary(stderr, code),
+                **forensic,
+            }
+            if recovery_metadata is not None:
+                failure_details["pre_prompt_recovery"] = recovery_metadata
             raise StageIntegrationError(
                 code,
                 f"headed bridge failed ({code}); no retry was attempted",
-                details={
-                    "returncode": completed.returncode,
-                    "receipt_path": str(receipt_path) if receipt_path else None,
-                    "bridge_failure_code": code,
-                    "request_count": request_count,
-                    "status": status,
-                    "stderr_sha256": hashlib.sha256(stderr.encode("utf-8")).hexdigest(),
-                    "stderr_summary": _safe_stderr_summary(stderr, code),
-                    **forensic,
-                },
+                details=failure_details,
             )
         consultation_id = (
             _parse_keyed_stdout(stdout, "consultation_id")
@@ -1399,6 +1438,9 @@ def subprocess_bridge_runner(
             "receipt_path": str(receipt_path) if receipt_path else None,
             "receipt": receipt,
         }
+        recovery_metadata = _parse_pre_prompt_recovery_marker(stdout, stderr)
+        if recovery_metadata is not None:
+            result["pre_prompt_recovery"] = recovery_metadata
         output_project_url = None
         if isinstance(envelope, Mapping):
             output_project_url = envelope.get("projectUrl", envelope.get("project_url"))
