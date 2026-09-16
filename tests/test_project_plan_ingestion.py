@@ -20,7 +20,7 @@ def _write_plan(root: Path, *, stage_two: bool = True, project_url: str | None =
     plan = root / "plan"
     plan.mkdir(parents=True, exist_ok=True)
     target_section = (
-        f"\n## Workflow ChatGPT Project\nChatGPT Project URL: {project_url}\n"
+        f"\n## Workflow Binding\nChatGPT Project URL: {project_url}\n"
         if project_url is not None else ""
     )
     (plan / "REQUIREMENTS.md").write_text(
@@ -185,10 +185,10 @@ def test_detects_requirements_and_stage_plan(tmp_path: Path) -> None:
 
 
 def test_chatgpt_project_target_is_optional_and_ingested_into_canonical_brief(tmp_path: Path) -> None:
-    _write_plan(tmp_path, project_url="https://chatgpt.com/projects/research-tools")
+    _write_plan(tmp_path, project_url="https://chatgpt.com/g/g-p-research-tools/project")
     plan = load_project_plan(tmp_path)
     assert plan["chatgpt_target_mode"] == "PROJECT"
-    assert plan["chatgpt_project_url"] == "https://chatgpt.com/projects/research-tools"
+    assert plan["chatgpt_project_url"] == "https://chatgpt.com/g/g-p-research-tools/project"
     result = sync_project_plan(tmp_path, controller=_controller(tmp_path))
     canonical = ProjectRequirementsIntake(tmp_path).state
     assert canonical is not None
@@ -211,10 +211,30 @@ def test_chatgpt_project_target_absent_keeps_default_behavior(tmp_path: Path) ->
     assert "GPT Review Workspace: DEFAULT_BROWSER" in (tmp_path / WORKFLOW_PLAN_RELATIVE_PATH).read_text(encoding="utf-8")
 
 
+def test_chatgpt_project_target_is_read_only_from_workflow_binding_section(tmp_path: Path) -> None:
+    _write_plan(tmp_path)
+    requirements = tmp_path / "plan" / "REQUIREMENTS.md"
+    requirements.write_text(
+        requirements.read_text(encoding="utf-8")
+        + "\nChatGPT Project URL: https://chatgpt.com/g/g-p-outside-section/project\n",
+        encoding="utf-8",
+    )
+    assert load_project_plan(tmp_path)["chatgpt_target_mode"] == "DEFAULT"
+    requirements.write_text(
+        requirements.read_text(encoding="utf-8")
+        + "\n## Workflow Binding\nChatGPT Project URL: https://chatgpt.com/g/g-p-bound-section/project\n",
+        encoding="utf-8",
+    )
+    plan = load_project_plan(tmp_path)
+    assert plan["chatgpt_project_url"] == "https://chatgpt.com/g/g-p-bound-section/project"
+
+
 def test_invalid_chatgpt_project_target_fails_closed(tmp_path: Path) -> None:
     for candidate in (
-        "https://evil.example/projects/research-tools",
-        "http://chatgpt.com/projects/research-tools",
+        "https://evil.example/g/g-p-research-tools/project",
+        "http://chatgpt.com/g/g-p-research-tools/project",
+        "https://chatgpt.com/projects/research-tools",
+        "https://chatgpt.com/c/12345678-1234-4234-8234-123456789abc",
         "javascript:alert(1)",
     ):
         _write_plan(tmp_path, project_url=candidate)
@@ -227,8 +247,8 @@ def test_invalid_chatgpt_project_target_fails_closed(tmp_path: Path) -> None:
 
 
 def test_chatgpt_project_target_change_is_future_only_and_preserves_history(tmp_path: Path) -> None:
-    first_url = "https://chatgpt.com/projects/research-tools-a"
-    second_url = "https://chatgpt.com/projects/research-tools-b"
+    first_url = "https://chatgpt.com/g/g-p-research-tools-a/project"
+    second_url = "https://chatgpt.com/g/g-p-research-tools-b/project"
     controller = _controller(tmp_path)
     _write_plan(tmp_path, project_url=first_url)
     sync_project_plan(tmp_path, controller=controller)
@@ -252,7 +272,7 @@ def test_chatgpt_project_target_change_is_future_only_and_preserves_history(tmp_
 
 
 def test_resume_rebinds_the_bound_project_target_from_canonical_brief(tmp_path: Path) -> None:
-    target = "https://chatgpt.com/projects/research-tools"
+    target = "https://chatgpt.com/g/g-p-research-tools/project"
     _write_plan(tmp_path, project_url=target)
     controller = _controller(tmp_path)
     sync_project_plan(tmp_path, controller=controller)

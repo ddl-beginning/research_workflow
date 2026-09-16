@@ -9,6 +9,7 @@ import {
   BROWSER_PROCESS_EXIT_TIMEOUT_MS,
   BROWSER_PROCESS_KILL_WAIT_MS,
   ChatGPTBridge,
+  BridgeError,
   CONVERSATION_MODES,
   consultOnce,
   extractConversationIdFromUrl,
@@ -39,12 +40,20 @@ function fakeBridge({
   navigateToLandingUrl,
 } = {}) {
   const events = [];
+  let activeProjectUrl = null;
+  let promptSent = false;
+  const projectLandingFromRoute = (value) => {
+    if (typeof value !== 'string') return null;
+    const match = value.match(/^(https:\/\/chatgpt\.com\/g\/g-p-[A-Za-z0-9][A-Za-z0-9._~-]*)\/(?:project|c\/[^/?#]+)(?:[/?#].*)?$/);
+    return match ? `${match[1]}/project` : null;
+  };
   const bridge = {
     requestCount: 0,
     async open() { events.push('open'); },
     async navigate() { events.push('navigate'); return initialUrl; },
     async navigateTo(url) {
       events.push(`navigateTo:${url}`);
+      activeProjectUrl = projectLandingFromRoute(url);
       if (navigateToError) throw navigateToError;
       return navigateToLandingUrl === undefined ? url : navigateToLandingUrl;
     },
@@ -55,10 +64,19 @@ function fakeBridge({
     },
     async createFreshConversation() {
       events.push('createFreshConversation');
+      if (activeProjectUrl) return { clicked: false, deferred: true, beforeUrl: initialUrl, afterUrl: activeProjectUrl };
       return { clicked: true, beforeUrl: initialUrl, afterUrl: afterFreshUrl };
     },
-    async sendOnePrompt() { events.push('send'); this.requestCount += 1; return 'PROJECT_SCOPE_OK'; },
-    currentUrl() { return finalUrl; },
+    async sendOnePrompt() { events.push('send'); promptSent = true; this.requestCount += 1; return 'PROJECT_SCOPE_OK'; },
+    currentUrl() {
+      if (activeProjectUrl && !promptSent && finalUrl === afterFreshUrl && !finalUrl.includes('/g/g-p-')) {
+        return activeProjectUrl;
+      }
+      if (activeProjectUrl && promptSent && finalUrl === afterFreshUrl && !finalUrl.includes('/g/g-p-')) {
+        return `${activeProjectUrl.replace(/\/project$/, '')}/c/${CONVERSATION_ID}`;
+      }
+      return finalUrl;
+    },
     async close() { events.push('close'); },
     releaseForManualLogin() { events.push('releaseForManualLogin'); },
   };
@@ -92,6 +110,38 @@ function bridgeWithPage(page) {
   bridge.page = page;
   bridge.context = {};
   return bridge;
+}
+
+function bootstrappedProjectPage() {
+  let currentUrl = 'about:blank';
+  const gotoCalls = [];
+  const locator = (kind, visible = true) => ({
+    async count() { return kind === 'project-link' ? 0 : 1; },
+    first() { return this; },
+    nth() { return this; },
+    async isVisible() { return visible; },
+    async click() {},
+  });
+  const page = {
+    async goto(url, options) {
+      gotoCalls.push({ url, options });
+      currentUrl = url;
+      return { status: () => 200 };
+    },
+    url() { return currentUrl; },
+    async title() { return currentUrl === 'https://chatgpt.com/' ? 'ChatGPT' : 'Project'; },
+    async waitForTimeout() {},
+    async waitForURL(predicate) {
+      assert.equal(predicate(new URL(currentUrl)), true);
+    },
+    getByPlaceholder() { return locator('composer'); },
+    getByRole(_role, options = {}) {
+      const name = String(options.name || '');
+      return locator(name.match(/message|prompt|chat|问问|聊天|消息/i) ? 'composer' : 'login', false);
+    },
+    locator(selector) { return locator(selector.startsWith('a[href=') ? 'project-link' : 'composer'); },
+  };
+  return { page, gotoCalls };
 }
 
 function responseWithStatus(status) {
@@ -135,7 +185,6 @@ async function createReceiptRoot(receipt) {
 
 test('project URL validation accepts only safe trusted-origin targets', () => {
   assert.equal(normalizeProjectUrl(`${PROJECT_URL}/`), PROJECT_URL);
-  assert.equal(normalizeProjectUrl('https://chatgpt.com/projects/research-tools'), 'https://chatgpt.com/projects/research-tools');
   assert.equal(isValidProjectUrl(PROJECT_URL), true);
   for (const value of [
     'https://evil.example/g/g-p-project/project',
@@ -144,6 +193,8 @@ test('project URL validation accepts only safe trusted-origin targets', () => {
     `${PROJECT_URL}?token=must-not-be-stored`,
     `${PROJECT_URL}#fragment`,
     'https://chatgpt.com/',
+    'https://chatgpt.com/projects/research-tools',
+    `https://chatgpt.com/c/${CONVERSATION_ID}`,
     'https://chatgpt.com/g/g-p-project/../project',
   ]) {
     assert.equal(isValidProjectUrl(value), false, value);
@@ -152,8 +203,8 @@ test('project URL validation accepts only safe trusted-origin targets', () => {
 
 test('new receipts bind the target mode and fresh Project chat marker', () => {
   const scoped = projectReceipt({
-    projectUrl: 'https://chatgpt.com/projects/research-tools',
-    chatUrl: `https://chatgpt.com/g/research-tools/c/${CONVERSATION_ID}`,
+    projectUrl: PROJECT_URL,
+    chatUrl: PROJECT_CONVERSATION_URL,
   });
   assert.equal(scoped.chatgpt_target_mode, 'PROJECT');
   assert.equal(scoped.chatgpt_target_origin, 'https://chatgpt.com');
@@ -459,7 +510,7 @@ test('project navigation diagnostics reach the failure receipt without sending a
     bridge.requestCount += 1;
     return 'not expected';
   };
-  bridge.currentUrl = () => `https://chatgpt.com/c/${CONVERSATION_ID}`;
+  bridge.currentUrl = () => PROJECT_CONVERSATION_URL;
   try {
     await assert.rejects(
       consultOnce('must not send after project challenge', {
@@ -488,6 +539,20 @@ test('project navigation diagnostics reach the failure receipt without sending a
   }
 });
 
+test('real Playwright-shaped project navigation bootstraps home before the bound Project route', async () => {
+  const fixture = bootstrappedProjectPage();
+  const bridge = bridgeWithPage(fixture.page);
+  const landed = await bridge.navigateToProject(PROJECT_URL);
+  assert.equal(landed, PROJECT_URL);
+  assert.deepEqual(fixture.gotoCalls.map((item) => item.url), [
+    'https://chatgpt.com/',
+    PROJECT_URL,
+  ]);
+  assert.equal(bridge.projectNavigationDiagnostics.bootstrap_used, true);
+  assert.equal(bridge.projectNavigationDiagnostics.bootstrap_url, 'https://chatgpt.com/');
+  assert.equal(bridge.projectNavigationDiagnostics.landing_url, PROJECT_URL);
+});
+
 test('project navigation retry does not consume the one prompt budget in a successful consultation', async () => {
   const rootDir = await fs.mkdtemp(path.join(BRIDGE_ROOT, '.test-project-navigation-success-'));
   const timeout = Object.assign(new Error('page.goto: Timeout 60000ms exceeded.'), { name: 'TimeoutError' });
@@ -507,7 +572,7 @@ test('project navigation retry does not consume the one prompt budget in a succe
     bridge.requestCount += 1;
     return 'PROJECT_RETRY_OK';
   };
-  bridge.currentUrl = () => `https://chatgpt.com/c/${CONVERSATION_ID}`;
+  bridge.currentUrl = () => PROJECT_CONVERSATION_URL;
   try {
     const result = await consultOnce('send once after navigation retry', {
       rootDir,
@@ -612,6 +677,89 @@ test('fresh project consultation lands in project before login and fresh creatio
     assert.equal(receipt.project_scope_evidence.initial_navigation.matched, true);
     assert.doesNotMatch(JSON.stringify(receipt), /cookie|token|storage|secret/i);
     assert.equal(validateContinuationReceipt(receipt, result.consultationId), true);
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('pre-prompt failure recovers with a fresh bridge cycle without a semantic resend', async () => {
+  const rootDir = await fs.mkdtemp(path.join(BRIDGE_ROOT, '.test-pre-prompt-recovery-'));
+  const first = fakeBridge({
+    navigateToError: new BridgeError(
+      FAILURE_CODES.PROMPT_INPUT_NOT_FOUND,
+      'synthetic frontend bootstrap failure',
+    ),
+  });
+  const second = fakeBridge();
+  const bridges = [first.bridge, second.bridge];
+  let factoryCalls = 0;
+  try {
+    const result = await consultOnce('recover one intent', {
+      rootDir,
+      profileDir: path.join(rootDir, '.auth', 'chatgpt-profile'),
+      projectUrl: PROJECT_URL,
+      bridgeFactory: () => bridges[factoryCalls++],
+    });
+    assert.equal(factoryCalls, 2);
+    assert.equal(result.requestCount, 1);
+    assert.deepEqual(result.pre_prompt_recovery, {
+      attempted: true,
+      cycles: 1,
+      max_cycles: 2,
+      failure_codes: [FAILURE_CODES.PROMPT_INPUT_NOT_FOUND],
+    });
+    assert.equal(first.events.includes('send'), false);
+    assert.equal(second.events.filter((event) => event === 'send').length, 1);
+    const consultationDirs = await fs.readdir(path.join(rootDir, '.consultations'), { withFileTypes: true });
+    assert.equal(consultationDirs.length, 2);
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('bound Project consultations reject homepage fallback before opening the bridge', async () => {
+  const rootDir = await fs.mkdtemp(path.join(BRIDGE_ROOT, '.test-project-homepage-fallback-'));
+  let factoryCalls = 0;
+  try {
+    await assert.rejects(
+      consultOnce('must stay in project', {
+        rootDir,
+        profileDir: path.join(rootDir, '.auth', 'chatgpt-profile'),
+        projectUrl: PROJECT_URL,
+        transport: 'homepage_fallback',
+        bridgeFactory: () => {
+          factoryCalls += 1;
+          throw new Error('bridge must not open');
+        },
+      }),
+      (error) => error.code === FAILURE_CODES.PROJECT_SCOPE_REQUIRED && error.requestCount === 0,
+    );
+    assert.equal(factoryCalls, 0);
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('a global conversation route after send is rejected without a second prompt', async () => {
+  const rootDir = await fs.mkdtemp(path.join(BRIDGE_ROOT, '.test-project-post-send-scope-'));
+  const fake = fakeBridge();
+  const originalSend = fake.bridge.sendOnePrompt.bind(fake.bridge);
+  fake.bridge.sendOnePrompt = async (...args) => {
+    const response = await originalSend(...args);
+    fake.bridge.currentUrl = () => `https://chatgpt.com/c/${CONVERSATION_ID}`;
+    return response;
+  };
+  try {
+    await assert.rejects(
+      consultOnce('reject escaped route', {
+        rootDir,
+        profileDir: path.join(rootDir, '.auth', 'chatgpt-profile'),
+        projectUrl: PROJECT_URL,
+        bridgeFactory: () => fake.bridge,
+      }),
+      (error) => error.code === FAILURE_CODES.PROJECT_SCOPE_MISMATCH && error.requestCount === 1,
+    );
+    assert.equal(fake.events.filter((event) => event === 'send').length, 1);
   } finally {
     await fs.rm(rootDir, { recursive: true, force: true });
   }

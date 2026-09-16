@@ -893,7 +893,10 @@ def _consult(
         raise CliError("STAGE_NOT_ACTIVE", "consultation is allowed only while the Stage is ACTIVE")
     selected_stage_id = str(stage["contract"]["stage_id"])
     transport = getattr(args, "transport", "project")
+    approved_project_url = _approved_project_url(repo)
     if transport == "homepage_fallback":
+        if approved_project_url is not None:
+            raise CliError("PROJECT_SCOPE_REQUIRED", "an accepted project binding cannot use homepage fallback transport")
         contract = stage.get("contract", {})
         metadata = contract.get("metadata", {})
         if any(source.get(key) is True for source in (contract, metadata)
@@ -952,7 +955,9 @@ def _consult(
 
     # The state controller records the consultation request before crossing
     # the external bridge boundary.  If the bridge fails, the digest remains
-    # consumed and a retry cannot silently issue a second request.
+    # consumed and the semantic Stage request cannot silently be retried. The
+    # bridge itself may perform its separate bounded pre-prompt recovery while
+    # request_count remains zero.
     before_controller = controller.snapshot()
     before_state_file = _capture_state_file(state_path)
     try:
@@ -971,7 +976,6 @@ def _consult(
 
     started = time.monotonic()
     try:
-        approved_project_url = _approved_project_url(repo)
         result = runner(
             question,
             mode="fresh" if mode == "FRESH" or continue_from is None else "continue",
@@ -999,7 +1003,7 @@ def _consult(
                 "created_at": _now(),
             },
         )
-        raise CliError(exc.code, "headed bridge consultation failed; no retry was attempted") from exc
+        raise CliError(exc.code, "headed bridge consultation failed; no semantic retry was attempted") from exc
     except Exception as exc:  # noqa: BLE001 - external boundary must fail closed
         elapsed_ms = int((time.monotonic() - started) * 1000)
         _record_review(
@@ -1015,7 +1019,7 @@ def _consult(
                 "created_at": _now(),
             },
         )
-        raise CliError("BRIDGE_EXTERNAL_FAILURE", "headed bridge consultation failed; no retry was attempted") from exc
+        raise CliError("BRIDGE_EXTERNAL_FAILURE", "headed bridge consultation failed; no semantic retry was attempted") from exc
 
     elapsed_ms = int((time.monotonic() - started) * 1000)
     if not isinstance(result, Mapping):
@@ -1078,6 +1082,7 @@ def _consult(
                 "request_count": request_count,
                 "request_id": request["request"]["request_id"],
                 "evidence_digest": evidence_digest,
+                "pre_prompt_recovery": copy.deepcopy(result.get("pre_prompt_recovery")),
                 "context_pack_id": packet_id,
                 "response_char_count": len(response_text),
                 "response_sha256": hashlib.sha256(response_text.encode("utf-8")).hexdigest(),
@@ -1086,7 +1091,7 @@ def _consult(
                 "created_at": _now(),
             },
         )
-        raise CliError(exc.code, "bridge response failed workflow decision validation; no retry was attempted") from exc
+        raise CliError(exc.code, "bridge response failed workflow decision validation; no semantic retry was attempted") from exc
     resulting_action = {
         "CONTINUE": "继续当前 Stage",
         "REPLAN": "重新规划当前 Stage",
@@ -1114,6 +1119,7 @@ def _consult(
         "request_count": 1,
         "request_id": request["request"]["request_id"],
         "evidence_digest": evidence_digest,
+        "pre_prompt_recovery": copy.deepcopy(result.get("pre_prompt_recovery")),
         "context_pack_id": packet_id,
         "response_char_count": len(response_text),
         "response_sha256": hashlib.sha256(response_text.encode("utf-8")).hexdigest(),

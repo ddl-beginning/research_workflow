@@ -207,7 +207,7 @@ def _write_target_plan(root: Path, target: str) -> None:
         """# Goal
 Build a project-scoped review fixture.
 
-## Workflow ChatGPT Project
+## Workflow Binding
 ChatGPT Project URL: """ + target + "\n",
         encoding="utf-8",
     )
@@ -266,8 +266,8 @@ def test_bound_project_targets_are_isolated_and_each_review_is_fresh(
     second_root = tmp_path / "project-b"
     first_root.mkdir()
     second_root.mkdir()
-    first_url = "https://chatgpt.com/projects/project-a"
-    second_url = "https://chatgpt.com/projects/project-b"
+    first_url = "https://chatgpt.com/g/g-p-project-a/project"
+    second_url = "https://chatgpt.com/g/g-p-project-b/project"
     _write_target_plan(first_root, first_url)
     _write_target_plan(second_root, second_url)
     first_config = _write_machine_config(first_root, tmp_path / "machine-a")

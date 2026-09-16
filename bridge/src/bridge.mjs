@@ -27,10 +27,9 @@ import {
 
 export const CHATGPT_URL = 'https://chatgpt.com/';
 export const CHATGPT_ORIGIN = 'https://chatgpt.com';
-// This pattern is used only when a conversation route exposes ChatGPT's
-// legacy `/g/g-p-.../project` identity. The configured target itself is
-// intentionally validated by origin and URL safety below; it must not depend
-// on a hard-coded Project path shape.
+// A per-project binding is accepted only as ChatGPT's canonical Project
+// landing route. Conversation routes are validated separately against the
+// bound Project slug.
 export const PROJECT_ROUTE_PATTERN = /^\/g\/(g-p-[A-Za-z0-9][A-Za-z0-9._~-]*)\/project\/?$/;
 export const PROJECT_URL_MAX_CHARS = 512;
 export const BRIDGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -43,8 +42,12 @@ export const MAX_CHATGPT_REQUESTS_PER_INVOCATION = 1;
 export const MAX_ATTACHMENTS = 9;
 // Project navigation is allowed one browser-navigation-only retry.  This is
 // deliberately separate from the one-prompt budget: retrying page.goto must
-// never retry consultOnce(), upload, or sendOnePrompt().
+// never retry semantic Stage work, upload, or sendOnePrompt().
 export const MAX_PROJECT_NAVIGATION_RETRIES = 1;
+// A failed navigation or pre-prompt UI preparation may be retried by the
+// consultation wrapper, but never by the semantic Stage controller. Two
+// fresh browser cycles is the hard infrastructure bound for one intent.
+export const MAX_PRE_PROMPT_RECOVERY_CYCLES = 2;
 export const PROJECT_NAVIGATION_RETRY_SETTLE_MS = 750;
 export const MAX_PROJECT_NAVIGATION_ELAPSED_MS = 120_000;
 export const MAX_PROJECT_NAVIGATION_TITLE_CHARS = 160;
@@ -98,6 +101,9 @@ export const BROWSER_CHECKPOINT_STATUSES = Object.freeze({
 });
 
 export const FAILURE_CODES = Object.freeze({
+  BRIDGE_TIMEOUT: 'BRIDGE_TIMEOUT',
+  NETWORK_TRANSIENT: 'NETWORK_TRANSIENT',
+  TARGET_CLOSED: 'TARGET_CLOSED',
   LOGIN_REQUIRED: 'LOGIN_REQUIRED',
   CHATGPT_NAVIGATION_FAILED: 'CHATGPT_NAVIGATION_FAILED',
   PROMPT_INPUT_NOT_FOUND: 'PROMPT_INPUT_NOT_FOUND',
@@ -111,6 +117,7 @@ export const FAILURE_CODES = Object.freeze({
   FRESH_CHAT_CREATION_FAILED: 'FRESH_CHAT_CREATION_FAILED',
   CONVERSATION_IDENTITY_MISMATCH: 'CONVERSATION_IDENTITY_MISMATCH',
   PROJECT_URL_INVALID: 'PROJECT_URL_INVALID',
+  PROJECT_SCOPE_REQUIRED: 'PROJECT_SCOPE_REQUIRED',
   PROJECT_SCOPE_MISMATCH: 'PROJECT_SCOPE_MISMATCH',
   PROJECT_NAVIGATION_FAILED: 'PROJECT_NAVIGATION_FAILED',
   ATTACHMENT_INVALID: 'ATTACHMENT_INVALID',
@@ -140,6 +147,7 @@ export const FAILURE_CODES = Object.freeze({
 
 export const PROJECT_NAVIGATION_FAILURE_CLASSES = Object.freeze({
   NONE: 'none',
+  FRONTEND_BOOTSTRAP: 'frontend_bootstrap',
   CHALLENGE: 'challenge',
   HTTP_ERROR: 'http_error',
   TIMEOUT: 'timeout',
@@ -189,6 +197,9 @@ export function resolveResponseTimeoutMs(explicitValue = undefined) {
 
 function failureMessage(code) {
   return {
+    [FAILURE_CODES.BRIDGE_TIMEOUT]: 'The browser bridge timed out before the prompt was sent.',
+    [FAILURE_CODES.NETWORK_TRANSIENT]: 'A transient browser network failure occurred before the prompt was sent.',
+    [FAILURE_CODES.TARGET_CLOSED]: 'The browser target closed before the prompt was sent.',
     [FAILURE_CODES.LOGIN_REQUIRED]: 'ChatGPT login is required in the headed Chromium profile.',
     [FAILURE_CODES.CHATGPT_NAVIGATION_FAILED]: 'Could not open the ChatGPT page.',
     [FAILURE_CODES.PROMPT_INPUT_NOT_FOUND]: 'Could not find a visible ChatGPT message composer.',
@@ -202,6 +213,7 @@ function failureMessage(code) {
     [FAILURE_CODES.FRESH_CHAT_CREATION_FAILED]: 'Could not explicitly create a fresh ChatGPT conversation.',
     [FAILURE_CODES.CONVERSATION_IDENTITY_MISMATCH]: 'The ChatGPT conversation identity did not match the requested lineage.',
     [FAILURE_CODES.PROJECT_URL_INVALID]: 'The project URL must be an explicit safe https://chatgpt.com target.',
+    [FAILURE_CODES.PROJECT_SCOPE_REQUIRED]: 'A project-scoped consultation cannot use homepage fallback transport.',
     [FAILURE_CODES.PROJECT_SCOPE_MISMATCH]: 'The requested ChatGPT project does not match the receipt project scope.',
     [FAILURE_CODES.PROJECT_NAVIGATION_FAILED]: 'Could not open the requested ChatGPT project page.',
     [FAILURE_CODES.ATTACHMENT_INVALID]: 'The attachment path is invalid.',
@@ -234,10 +246,14 @@ function failureMessage(code) {
 // the bounded, user-facing taxonomy required by the Workflow integration.
 function failureClassForCode(code) {
   return {
+    [FAILURE_CODES.BRIDGE_TIMEOUT]: 'PRE_PROMPT_TRANSIENT_INFRASTRUCTURE_FAILURE',
+    [FAILURE_CODES.NETWORK_TRANSIENT]: 'PRE_PROMPT_TRANSIENT_INFRASTRUCTURE_FAILURE',
+    [FAILURE_CODES.TARGET_CLOSED]: 'PRE_PROMPT_TRANSIENT_INFRASTRUCTURE_FAILURE',
     [FAILURE_CODES.LOGIN_REQUIRED]: 'GPT_AUTH_REQUIRED',
     [FAILURE_CODES.CHATGPT_NAVIGATION_FAILED]: 'CHATGPT_PAGE_UNREACHABLE',
     [FAILURE_CODES.PROJECT_NAVIGATION_FAILED]: 'PROJECT_SCOPE_NOT_FOUND',
     [FAILURE_CODES.PROJECT_SCOPE_MISMATCH]: 'PROJECT_SCOPE_NOT_FOUND',
+    [FAILURE_CODES.PROJECT_SCOPE_REQUIRED]: 'PROJECT_SCOPE_NOT_FOUND',
     [FAILURE_CODES.PROMPT_INPUT_NOT_FOUND]: 'COMPOSER_NOT_READY',
     [FAILURE_CODES.FRESH_CHAT_CREATION_FAILED]: 'FRESH_CHAT_CREATION_FAILED',
     [FAILURE_CODES.ATTACHMENT_NOT_READY]: 'ATTACHMENT_NOT_READY',
@@ -442,6 +458,7 @@ export function normalizeProjectUrl(value) {
   ) {
     throw projectUrlError();
   }
+  if (!PROJECT_ROUTE_PATTERN.test(parsed.pathname)) throw projectUrlError();
   return `${CHATGPT_ORIGIN}${parsed.pathname.endsWith('/') ? parsed.pathname.slice(0, -1) : parsed.pathname}`;
 }
 
@@ -539,6 +556,10 @@ export function classifyProjectNavigationError(error) {
   const message = typeof error?.message === 'string' ? error.message.toLowerCase() : '';
   const code = typeof error?.code === 'string' ? error.code.toLowerCase() : '';
   const combined = `${name} ${message} ${code}`;
+  if (error?.failureClass === PROJECT_NAVIGATION_FAILURE_CLASSES.FRONTEND_BOOTSTRAP
+      || combined.includes('project_frontend_bootstrap_failure')) {
+    return PROJECT_NAVIGATION_FAILURE_CLASSES.FRONTEND_BOOTSTRAP;
+  }
   if (
     name.includes('targetclosed')
     || /target(?: page| context)?[^\n]*closed|page[^\n]*closed|context[^\n]*closed|browser[^\n]*closed|has been closed/.test(combined)
@@ -561,7 +582,8 @@ export function classifyProjectNavigationError(error) {
 
 export function isRetryableProjectNavigationError(error) {
   const failureClass = classifyProjectNavigationError(error);
-  return failureClass === PROJECT_NAVIGATION_FAILURE_CLASSES.TIMEOUT
+  return failureClass === PROJECT_NAVIGATION_FAILURE_CLASSES.FRONTEND_BOOTSTRAP
+    || failureClass === PROJECT_NAVIGATION_FAILURE_CLASSES.TIMEOUT
     || failureClass === PROJECT_NAVIGATION_FAILURE_CLASSES.NETWORK
     || failureClass === PROJECT_NAVIGATION_FAILURE_CLASSES.TARGET_CLOSED;
 }
@@ -663,6 +685,10 @@ export function safeProjectNavigationDiagnostics(value) {
     if (sanitized) safe[field] = sanitized;
     else if (value[field] === null) safe[field] = null;
   }
+  if (typeof value.bootstrap_used === 'boolean') safe.bootstrap_used = value.bootstrap_used;
+  const bootstrapUrl = sanitizeProjectNavigationUrl(value.bootstrap_url);
+  if (bootstrapUrl) safe.bootstrap_url = bootstrapUrl;
+  else if (value.bootstrap_url === null) safe.bootstrap_url = null;
   if (PROJECT_NAVIGATION_FAILURE_CLASS_VALUES.has(value.failure_class)) {
     safe.failure_class = value.failure_class;
   }
@@ -684,8 +710,10 @@ function projectNavigationDiagnosticsForAttempt({
   landingUrl = null,
   failureClass = PROJECT_NAVIGATION_FAILURE_CLASSES.NONE,
   error = null,
+  bootstrapUsed = false,
+  bootstrapUrl = null,
 }) {
-  return safeProjectNavigationDiagnostics({
+  const diagnostics = {
     requested_url: requestedUrl,
     attempt_count: attemptCount,
     retry_count: retryCount,
@@ -695,7 +723,14 @@ function projectNavigationDiagnosticsForAttempt({
     landing_url: landingUrl,
     failure_class: failureClass,
     error_hash: error ? navigationErrorHash(error) : null,
-  });
+  };
+  // Keep the legacy lightweight page doubles backward-compatible while
+  // recording bootstrap provenance for real Playwright navigations.
+  if (bootstrapUsed === true) {
+    diagnostics.bootstrap_used = true;
+    diagnostics.bootstrap_url = bootstrapUrl;
+  }
+  return safeProjectNavigationDiagnostics(diagnostics);
 }
 
 function resolveProjectUrlAlias({ projectUrl, project_url } = {}) {
@@ -2001,20 +2036,76 @@ export class ChatGPTBridge {
     // capability check also keeps this method deterministic for the bounded
     // page doubles used by the offline navigation tests.
     const canBootstrapRoot = typeof this.page?.locator === 'function';
+    const bootstrapUrl = canBootstrapRoot ? CHATGPT_URL : null;
     if (canBootstrapRoot) {
       this.log('bootstrapping ChatGPT root before project navigation');
-      await this.page.goto(CHATGPT_URL, {
-        waitUntil: 'domcontentloaded',
-        timeout: this.navigationTimeoutMs,
-      });
+      let bootstrapResponse;
+      try {
+        bootstrapResponse = await this.page.goto(CHATGPT_URL, {
+          waitUntil: 'domcontentloaded',
+          timeout: this.navigationTimeoutMs,
+        });
+      } catch (error) {
+        const classified = classifyProjectNavigationError(error);
+        const failureClass = classified === PROJECT_NAVIGATION_FAILURE_CLASSES.UNKNOWN
+          ? PROJECT_NAVIGATION_FAILURE_CLASSES.FRONTEND_BOOTSTRAP
+          : classified;
+        const diagnostics = projectNavigationDiagnosticsForAttempt({
+          requestedUrl,
+          attemptCount: 0,
+          retryCount: 0,
+          startedAt,
+          landingUrl: safePageUrl(this.page),
+          title: await safePageTitle(this.page),
+          failureClass,
+          error,
+          bootstrapUsed: true,
+          bootstrapUrl,
+        });
+        this.projectNavigationDiagnostics = diagnostics;
+        const failure = new BridgeError(
+          FAILURE_CODES.PROJECT_NAVIGATION_FAILED,
+          failureMessage(FAILURE_CODES.PROJECT_NAVIGATION_FAILED),
+          error,
+        );
+        failure.failureClass = failureClass;
+        failure.diagnostics = diagnostics;
+        failure.projectNavigationDiagnostics = diagnostics;
+        throw failure;
+      }
+      const bootstrapStatus = safeNavigationStatus(bootstrapResponse);
+      if (bootstrapStatus !== null && bootstrapStatus >= 400) {
+        const diagnostics = projectNavigationDiagnosticsForAttempt({
+          requestedUrl,
+          attemptCount: 0,
+          retryCount: 0,
+          startedAt,
+          status: bootstrapStatus,
+          landingUrl: safePageUrl(this.page),
+          title: await safePageTitle(this.page),
+          failureClass: bootstrapStatus === 403
+            ? PROJECT_NAVIGATION_FAILURE_CLASSES.CHALLENGE
+            : PROJECT_NAVIGATION_FAILURE_CLASSES.HTTP_ERROR,
+          bootstrapUsed: true,
+          bootstrapUrl,
+        });
+        this.projectNavigationDiagnostics = diagnostics;
+        const failure = new BridgeError(
+          FAILURE_CODES.PROJECT_NAVIGATION_FAILED,
+          failureMessage(FAILURE_CODES.PROJECT_NAVIGATION_FAILED),
+        );
+        failure.diagnostics = diagnostics;
+        failure.projectNavigationDiagnostics = diagnostics;
+        throw failure;
+      }
       const rootReady = await waitForComposerOrLogin(this.page, {
         timeoutMs: COMPOSER_READY_TIMEOUT_MS,
         pollMs: 250,
       });
-      if (rootReady.loginRequired || !rootReady.composer) {
+      if (rootReady.loginRequired) {
         const failure = new BridgeError(
-          FAILURE_CODES.PROJECT_NAVIGATION_FAILED,
-          'ChatGPT root bootstrap did not produce an authenticated composer.',
+          FAILURE_CODES.LOGIN_REQUIRED,
+          failureMessage(FAILURE_CODES.LOGIN_REQUIRED),
         );
         failure.projectNavigationDiagnostics = projectNavigationDiagnosticsForAttempt({
           requestedUrl,
@@ -2023,9 +2114,29 @@ export class ChatGPTBridge {
           startedAt,
           landingUrl: safePageUrl(this.page),
           title: await safePageTitle(this.page),
-          failureClass: rootReady.loginRequired
-            ? PROJECT_NAVIGATION_FAILURE_CLASSES.CHALLENGE
-            : PROJECT_NAVIGATION_FAILURE_CLASSES.UNKNOWN,
+          failureClass: PROJECT_NAVIGATION_FAILURE_CLASSES.CHALLENGE,
+          bootstrapUsed: true,
+          bootstrapUrl,
+        });
+        failure.diagnostics = failure.projectNavigationDiagnostics;
+        throw failure;
+      }
+      if (!rootReady.composer) {
+        const failure = new BridgeError(
+          FAILURE_CODES.UNEXPECTED_PAGE_STATE,
+          'ChatGPT root bootstrap did not produce a visible composer.',
+        );
+        failure.failureClass = PROJECT_NAVIGATION_FAILURE_CLASSES.FRONTEND_BOOTSTRAP;
+        failure.projectNavigationDiagnostics = projectNavigationDiagnosticsForAttempt({
+          requestedUrl,
+          attemptCount: 0,
+          retryCount: 0,
+          startedAt,
+          landingUrl: safePageUrl(this.page),
+          title: await safePageTitle(this.page),
+          failureClass: PROJECT_NAVIGATION_FAILURE_CLASSES.FRONTEND_BOOTSTRAP,
+          bootstrapUsed: true,
+          bootstrapUrl,
         });
         failure.diagnostics = failure.projectNavigationDiagnostics;
         throw failure;
@@ -2079,6 +2190,8 @@ export class ChatGPTBridge {
             title,
             landingUrl: rawLandingUrl,
             failureClass,
+            bootstrapUsed: canBootstrapRoot,
+            bootstrapUrl,
           });
           this.projectNavigationDiagnostics = diagnostics;
           const failure = new BridgeError(
@@ -2097,11 +2210,21 @@ export class ChatGPTBridge {
             pollMs: 250,
           })
           : { loginRequired: false, composer: true };
-        if (projectReady.loginRequired || !projectReady.composer) {
-          throw new BridgeError(
-            FAILURE_CODES.PROMPT_INPUT_NOT_FOUND,
+        if (projectReady.loginRequired) {
+          const failure = new BridgeError(
+            FAILURE_CODES.LOGIN_REQUIRED,
+            failureMessage(FAILURE_CODES.LOGIN_REQUIRED),
+          );
+          failure.failureClass = PROJECT_NAVIGATION_FAILURE_CLASSES.CHALLENGE;
+          throw failure;
+        }
+        if (!projectReady.composer) {
+          const failure = new BridgeError(
+            FAILURE_CODES.UNEXPECTED_PAGE_STATE,
             'Project bootstrap did not produce a visible composer.',
           );
+          failure.failureClass = PROJECT_NAVIGATION_FAILURE_CLASSES.FRONTEND_BOOTSTRAP;
+          throw failure;
         }
         rawLandingUrl = safePageUrl(this.page) || rawLandingUrl;
         title = (await safePageTitle(this.page)) || title;
@@ -2114,6 +2237,8 @@ export class ChatGPTBridge {
           title,
           landingUrl: rawLandingUrl,
           failureClass: PROJECT_NAVIGATION_FAILURE_CLASSES.NONE,
+          bootstrapUsed: canBootstrapRoot,
+          bootstrapUrl,
         });
         this.projectNavigationDiagnostics = diagnostics;
         if (!rawLandingUrl) {
@@ -2139,6 +2264,8 @@ export class ChatGPTBridge {
           landingUrl: rawLandingUrl,
           failureClass,
           error,
+          bootstrapUsed: canBootstrapRoot,
+          bootstrapUrl,
         });
         this.projectNavigationDiagnostics = diagnostics;
         const canRetry = attemptCount <= MAX_PROJECT_NAVIGATION_RETRIES
@@ -2188,6 +2315,8 @@ export class ChatGPTBridge {
               landingUrl: safePageUrl(this.page),
               failureClass: settledFailureClass,
               error: settleError,
+              bootstrapUsed: canBootstrapRoot,
+              bootstrapUrl,
             });
             this.projectNavigationDiagnostics = settledDiagnostics;
             const failure = new BridgeError(
@@ -2224,6 +2353,8 @@ export class ChatGPTBridge {
       retryCount,
       startedAt,
       failureClass: PROJECT_NAVIGATION_FAILURE_CLASSES.UNKNOWN,
+      bootstrapUsed: canBootstrapRoot,
+      bootstrapUrl,
     });
     failure.diagnostics = failure.projectNavigationDiagnostics;
     throw failure;
@@ -2444,6 +2575,49 @@ export class ChatGPTBridge {
     }
   }
 
+  /**
+   * Re-check the hard project invariant immediately before submission. This
+   * is deliberately independent from the earlier navigation checkpoint: a
+   * SPA redirect, stale page, or composer escape must fail closed at the last
+   * possible point before the one allowed request.
+   */
+  async verifyProjectScopeBeforeSend(projectUrl, { allowConversationRoute = false } = {}) {
+    this.#assertOpen();
+    let expectedUrl;
+    try {
+      expectedUrl = normalizeProjectUrl(projectUrl);
+    } catch (error) {
+      throw asBridgeError(error, FAILURE_CODES.PROJECT_URL_INVALID);
+    }
+    const actualRouteUrl = safePageUrl(this.page);
+    const actualUrl = safeProjectScopeUrl(actualRouteUrl);
+    const isBoundConversation = allowConversationRoute
+      && isValidProjectConversationUrl(actualRouteUrl, expectedUrl);
+    if ((!actualUrl || actualUrl !== expectedUrl) && !isBoundConversation) {
+      throw new BridgeError(
+        FAILURE_CODES.PROJECT_SCOPE_MISMATCH,
+        failureMessage(FAILURE_CODES.PROJECT_SCOPE_MISMATCH),
+      );
+    }
+    const composer = typeof this.page?.locator === 'function'
+      ? await findComposer(this.page)
+      : true;
+    if (!composer) {
+      const failure = new BridgeError(
+        FAILURE_CODES.PROMPT_INPUT_NOT_FOUND,
+        failureMessage(FAILURE_CODES.PROMPT_INPUT_NOT_FOUND),
+      );
+      failure.failureClass = PROJECT_NAVIGATION_FAILURE_CLASSES.FRONTEND_BOOTSTRAP;
+      throw failure;
+    }
+    return {
+      expectedProjectUrl: expectedUrl,
+      actualProjectUrl: expectedUrl,
+      actualRouteUrl,
+      composerReadyInProject: true,
+    };
+  }
+
   async sendOnePrompt(prompt, { baselineSnapshot } = {}) {
     this.#assertOpen();
     if (typeof prompt !== 'string' || !prompt.trim()) {
@@ -2572,7 +2746,7 @@ export function assertAssistantBaselineUnchanged(before, after) {
   }
 }
 
-export async function consultOnce(
+async function consultOnceSingle(
   prompt,
   {
     rootDir = process.cwd(),
@@ -2618,6 +2792,12 @@ export async function consultOnce(
     requestedProjectUrl = resolveProjectUrlAlias({ projectUrl, project_url });
   } catch (error) {
     projectUrlValidationError = asBridgeError(error, FAILURE_CODES.PROJECT_URL_INVALID);
+  }
+  let transportValidationError;
+  try {
+    transport = normalizeTransport(transport);
+  } catch (error) {
+    transportValidationError = asBridgeError(error, FAILURE_CODES.UNEXPECTED_PAGE_STATE);
   }
   if (typeof bridgeFactory !== 'function') {
     throw new TypeError('bridgeFactory must be a function');
@@ -2706,6 +2886,13 @@ export async function consultOnce(
   let expectedConversationId = null;
   try {
     if (projectUrlValidationError) throw projectUrlValidationError;
+    if (transportValidationError) throw transportValidationError;
+    if (requestedProjectUrl !== undefined && transport === TRANSPORTS.HOMEPAGE_FALLBACK) {
+      throw new BridgeError(
+        FAILURE_CODES.PROJECT_SCOPE_REQUIRED,
+        failureMessage(FAILURE_CODES.PROJECT_SCOPE_REQUIRED),
+      );
+    }
     if (contextPackValidationError) throw contextPackValidationError;
     if (contextPack !== undefined) {
       try {
@@ -2952,6 +3139,38 @@ export async function consultOnce(
       markCheckpoint('B8', BROWSER_CHECKPOINT_STATUSES.SKIP);
     }
     markCheckpoint('B9', BROWSER_CHECKPOINT_STATUSES.DEFERRED);
+    if (requestedProjectUrl !== undefined) {
+      try {
+        if (typeof bridge.verifyProjectScopeBeforeSend === 'function') {
+          await bridge.verifyProjectScopeBeforeSend(requestedProjectUrl, {
+            allowConversationRoute: mode === CONVERSATION_MODES.CONTINUE,
+          });
+        } else {
+          // Custom bridge factories are test/integration boundaries. Keep the
+          // same fail-closed route check even when they do not expose the
+          // richer composer verifier.
+          const current = safeProjectScopeUrl(
+            typeof bridge.currentUrl === 'function' ? bridge.currentUrl() : null,
+          );
+          const currentIsBoundConversation = mode === CONVERSATION_MODES.CONTINUE
+            && isValidProjectConversationUrl(
+              typeof bridge.currentUrl === 'function' ? bridge.currentUrl() : null,
+              requestedProjectUrl,
+              expectedConversationId,
+            );
+          if (current !== requestedProjectUrl && !currentIsBoundConversation) {
+            throw new BridgeError(
+              FAILURE_CODES.PROJECT_SCOPE_MISMATCH,
+              failureMessage(FAILURE_CODES.PROJECT_SCOPE_MISMATCH),
+            );
+          }
+        }
+      } catch (error) {
+        projectScopeVerified = false;
+        markCheckpoint('B9', BROWSER_CHECKPOINT_STATUSES.FAIL, failureClassForCode(error?.code));
+        throw error;
+      }
+    }
     let responseText;
     try {
       responseText = await bridge.sendOnePrompt(prompt, { baselineSnapshot: baseline });
@@ -2980,6 +3199,16 @@ export async function consultOnce(
       throw new BridgeError(
         FAILURE_CODES.CONVERSATION_IDENTITY_MISMATCH,
         failureMessage(FAILURE_CODES.CONVERSATION_IDENTITY_MISMATCH),
+      );
+    }
+    if (
+      requestedProjectUrl !== undefined
+      && !isValidProjectConversationUrl(verifiedChatUrl, requestedProjectUrl, finalConversationId)
+    ) {
+      projectScopeVerified = false;
+      throw new BridgeError(
+        FAILURE_CODES.PROJECT_SCOPE_MISMATCH,
+        failureMessage(FAILURE_CODES.PROJECT_SCOPE_MISMATCH),
       );
     }
     markCheckpoint('B12', BROWSER_CHECKPOINT_STATUSES.PASS);
@@ -3075,4 +3304,95 @@ export async function consultOnce(
   } finally {
     if (!keepBrowserOpen) await bridge?.close();
   }
+}
+
+// These failures are all observed before the one prompt budget is consumed.
+// The wrapper retries the same semantic intent with a fresh bridge cycle; it
+// never retries a send, response wait, continuation, or project decision.
+const PRE_PROMPT_RECOVERABLE_FAILURE_CODES = new Set([
+  FAILURE_CODES.BRIDGE_TIMEOUT,
+  FAILURE_CODES.NETWORK_TRANSIENT,
+  FAILURE_CODES.TARGET_CLOSED,
+  FAILURE_CODES.CHATGPT_NAVIGATION_FAILED,
+  FAILURE_CODES.UNEXPECTED_PAGE_STATE,
+  FAILURE_CODES.PROJECT_NAVIGATION_FAILED,
+  FAILURE_CODES.PROMPT_INPUT_NOT_FOUND,
+  FAILURE_CODES.PROMPT_SEND_FAILED,
+  FAILURE_CODES.FRESH_CHAT_CREATION_FAILED,
+  FAILURE_CODES.ATTACHMENT_UPLOAD_FAILED,
+  FAILURE_CODES.ATTACHMENT_NOT_READY,
+]);
+
+function prePromptFailureRequestCount(error) {
+  const value = error?.requestCount ?? error?.request_count;
+  return Number.isInteger(value) ? value : null;
+}
+
+function isPrePromptRecoverableFailure(error) {
+  const failure = asBridgeError(error);
+  if (prePromptFailureRequestCount(failure) !== 0) return false;
+  if (!PRE_PROMPT_RECOVERABLE_FAILURE_CODES.has(failure.code)) return false;
+  if (failure.code === FAILURE_CODES.UNEXPECTED_PAGE_STATE) {
+    return failure.failureClass === PROJECT_NAVIGATION_FAILURE_CLASSES.FRONTEND_BOOTSTRAP;
+  }
+  if (failure.code === FAILURE_CODES.PROJECT_NAVIGATION_FAILED) {
+    const failureClass = failure.projectNavigationDiagnostics?.failure_class
+      || failure.diagnostics?.failure_class
+      || failure.failureClass;
+    return [
+      PROJECT_NAVIGATION_FAILURE_CLASSES.FRONTEND_BOOTSTRAP,
+      PROJECT_NAVIGATION_FAILURE_CLASSES.TIMEOUT,
+      PROJECT_NAVIGATION_FAILURE_CLASSES.NETWORK,
+      PROJECT_NAVIGATION_FAILURE_CLASSES.TARGET_CLOSED,
+    ].includes(failureClass);
+  }
+  return true;
+}
+
+function prePromptRecoveryMetadata(failureCodes) {
+  return {
+    attempted: failureCodes.length > 0,
+    cycles: failureCodes.length,
+    max_cycles: MAX_PRE_PROMPT_RECOVERY_CYCLES,
+    failure_codes: [...failureCodes],
+  };
+}
+
+/**
+ * Run one semantic consultation intent with a hard, infrastructure-only
+ * recovery bound. Stage/controller callers invoke this once; only the bridge
+ * cycle is repeated while request_count remains zero.
+ */
+export async function consultOnce(prompt, options = {}) {
+  if (!options || typeof options !== 'object' || Array.isArray(options)) {
+    throw new TypeError('consultOnce options must be an object');
+  }
+  const failureCodes = [];
+  for (let cycle = 0; cycle <= MAX_PRE_PROMPT_RECOVERY_CYCLES; cycle += 1) {
+    try {
+      const result = await consultOnceSingle(prompt, options);
+      if (failureCodes.length === 0) return result;
+      return {
+        ...result,
+        pre_prompt_recovery: prePromptRecoveryMetadata(failureCodes),
+      };
+    } catch (error) {
+      const failure = asBridgeError(error);
+      if (!isPrePromptRecoverableFailure(failure) || cycle >= MAX_PRE_PROMPT_RECOVERY_CYCLES) {
+        if (failureCodes.length > 0) {
+          failure.prePromptRecovery = prePromptRecoveryMetadata(failureCodes);
+        }
+        throw failure;
+      }
+      failureCodes.push(failure.code);
+      // A new consultOnceSingle invocation creates a new consultation id,
+      // bridge instance, and immutable receipt. It will therefore never
+      // resend an already-counted prompt.
+    }
+  }
+  // The loop is structurally total; this branch protects the bound if edited.
+  throw new BridgeError(
+    FAILURE_CODES.UNEXPECTED_PAGE_STATE,
+    'Pre-prompt recovery loop terminated unexpectedly.',
+  );
 }

@@ -129,25 +129,27 @@ The optional Project target is configured in the same user-owned
 `plan/REQUIREMENTS.md` file:
 
 ```text
-## Workflow ChatGPT Project
-ChatGPT Project URL: https://chatgpt.com/<user-provided-project-path>
+## Workflow Binding
+ChatGPT Project URL: https://chatgpt.com/g/g-p-example/project
 ```
 
-The accepted minimum shape is an absolute `https` URL whose hostname is
-exactly `chatgpt.com`, with no credentials, query, fragment, whitespace,
-localhost, third-party origin, or path-normalization ambiguity. Workflow does
-not infer a Project ID or impose a URL path pattern. The target is parsed once
-and projected into the existing canonical `.research/PROJECT_BRIEF.json`
-brief as `chatgpt_project_url` plus a bounded binding record. There is no
-second configuration file, project pool, rotation, quota/account switch, or
-profile switch.
+The accepted shape is exactly an absolute `https` URL of the form
+`https://chatgpt.com/g/g-p-.../project`. Credentials, query strings,
+fragments, whitespace, the homepage, `/c/...` conversation routes, legacy
+`/projects/...` routes, third-party origins, and path-normalization ambiguity
+are rejected before a browser is opened. The target is parsed once and
+projected into the existing canonical `.research/PROJECT_BRIEF.json` brief as
+`chatgpt_project_url` plus a bounded binding record. There is no second
+configuration file, project pool, rotation, quota/account switch, or profile
+switch.
 
 When the canonical brief contains a target, the runtime gives it precedence
 over any machine-level default and passes the exact normalized URL to the
-browser bridge. The bridge boots the machine-local authenticated profile,
-navigates to that exact target, verifies the landing page, creates a fresh
-conversation in that Project for each NORMAL/TECHNICAL review, and requires
-the resulting receipt to prove the binding. The invariant
+browser bridge. The bridge first visits `https://chatgpt.com/` only to hydrate
+the authenticated session, then navigates to that exact target, verifies the
+Project-scoped composer, creates a fresh conversation in that Project for each
+NORMAL/TECHNICAL review, and requires the resulting receipt to prove the
+binding. The homepage is never a prompt target. The invariant
 `GPT_REVIEW_MUST_USE_BOUND_PROJECT_TARGET` is enforced at the runtime
 boundary. Without a plan target, the prior default/homepage behavior remains
 unchanged.

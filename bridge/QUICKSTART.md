@@ -18,7 +18,7 @@ https://chatgpt.com/g/g-p-6a9a2d82aec881918b65e066b18b95d8-ce-shi/project
 npm run consult -- --project-url "https://chatgpt.com/g/g-p-6a9a2d82aec881918b65e066b18b95d8-ce-shi/project" --prompt "Reply exactly: PROJECT_OK"
 ```
 
-bridge 会先打开 project URL、检查登录，再创建 fresh conversation 并发送一条 prompt。成功 receipt 会记录 `project_url`、`project_scope_requested`、`project_scope_verified` 与受限的初始落点证据。
+bridge 会先打开 `https://chatgpt.com/` 完成 session/bootstrap，再导航到绑定的 Project URL、验证 Project composer 和登录状态，之后创建 fresh conversation 并发送一条 prompt。首页只用于 bootstrap，绝不作为 prompt 目标；成功 receipt 会记录 `project_url`、`project_scope_requested`、`project_scope_verified` 与受限的初始落点证据。导航或发送前的 transient pre-prompt failure 最多恢复 2 个 fresh bridge cycle，不会重发已计数的 prompt。
 
 ## 3. 继续同一 conversation
 

@@ -745,7 +745,7 @@ NEXT_ACTION: none; Workflow is in STABLE -> MAINTENANCE MODE
 
 ### 25.2 Per-project ChatGPT browser target maintenance evidence
 
-The optional `## Workflow ChatGPT Project` section in
+The optional `## Workflow Binding` section in
 `plan/REQUIREMENTS.md` is parsed into the existing canonical
 `.research/PROJECT_BRIEF.json` brief. No third user input file or second
 configuration authority was introduced. A configured target overrides the

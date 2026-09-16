@@ -1701,6 +1701,8 @@ class ProductWorkflowRuntime:
                 "request_count": checked["request_count"], "conversation_id": receipt.get("conversation_id"),
                 "conversation_validated": True, "packet_digest": context["pack_sha256"],
                 "objective_identity": request.get("objective_identity")}
+        if checked.get("pre_prompt_recovery") is not None:
+            result["pre_prompt_recovery"] = copy.deepcopy(checked["pre_prompt_recovery"])
         for key in (
             "chatgpt_target_mode", "chatgpt_target_url_digest", "chatgpt_target_origin",
             "chatgpt_project_target_verified", "fresh_project_chat_created",

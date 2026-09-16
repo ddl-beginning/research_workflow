@@ -29,6 +29,8 @@ MAX_ENVELOPE_TEXT = 250_000
 MAX_METADATA_DEPTH = 8
 MAX_METADATA_LIST = 64
 MAX_METADATA_STRING = 12_000
+PROJECT_ROUTE_PATTERN = re.compile(r"^/g/(g-p-[A-Za-z0-9][A-Za-z0-9._~-]*)/project/?$")
+PRE_PROMPT_RECOVERY_CODE_PATTERN = re.compile(r"^[A-Z0-9_]{1,64}$")
 
 _MISSING = object()
 _ENVELOPE_KEYS = frozenset(
@@ -252,11 +254,13 @@ def _text(value: Any, field: str, *, required: bool = True, maximum: int = MAX_M
 
 
 def normalize_project_url(value: Any) -> str:
-    """Validate the minimum safe shape for a configured ChatGPT target.
+    """Validate one canonical ChatGPT Project landing route.
 
-    The browser bridge owns the product-specific page check.  This boundary
-    only rejects unsafe origins and ambiguous URL spellings; it deliberately
-    does not infer a Project identifier or hard-code a Project route shape.
+    A project binding is a product-scoped authority, not a generic ChatGPT
+    URL.  Keep this validation identical in spirit to the Node bridge: only
+    the explicit ``/g/g-p-.../project`` route is accepted.  Conversation
+    routes, the homepage, legacy ``/projects/...`` routes, and third-party
+    paths must fail before a browser is opened.
     """
 
     if not isinstance(value, str) or not value or value != value.strip() or len(value) > 512:
@@ -283,13 +287,15 @@ def normalize_project_url(value: Any) -> str:
         or any(part in {".", ".."} for part in parsed.path.split("/"))
         or any(ord(character) < 0x20 or ord(character) == 0x7f for character in parsed.path)
     ):
-        raise BridgeEnvelopeError("PROJECT_URL_INVALID", "project URL must use https://chatgpt.com and identify a non-root target")
+        raise BridgeEnvelopeError("PROJECT_URL_INVALID", "project URL must use the canonical https://chatgpt.com/g/g-p-.../project route")
     raw_authority_end = value.find("/", value.find("://") + 3)
     raw_path = value[raw_authority_end:] if raw_authority_end >= 0 else ""
     raw_without_trailing = raw_path[:-1] if raw_path.endswith("/") else raw_path
     parsed_without_trailing = parsed.path[:-1] if parsed.path.endswith("/") else parsed.path
     if not raw_path or raw_without_trailing != parsed_without_trailing:
         raise BridgeEnvelopeError("PROJECT_URL_INVALID", "project URL path is ambiguous")
+    if PROJECT_ROUTE_PATTERN.fullmatch(parsed_without_trailing) is None:
+        raise BridgeEnvelopeError("PROJECT_URL_INVALID", "project URL must use the canonical /g/g-p-.../project route")
     return f"https://chatgpt.com{parsed_without_trailing}"
 
 
@@ -321,6 +327,27 @@ def _safe_metadata(value: Any, field: str = "metadata", *, depth: int = MAX_META
     if value is None or isinstance(value, (bool, int, float)):
         return value
     raise BridgeEnvelopeError("BRIDGE_RESULT_INVALID", f"{field} has an unsupported value")
+
+
+def _safe_pre_prompt_recovery(value: Any) -> dict[str, Any] | None:
+    """Keep the bridge's bounded infrastructure-recovery evidence safe."""
+
+    if not isinstance(value, Mapping):
+        raise BridgeEnvelopeError("BRIDGE_RESULT_INVALID", "pre_prompt_recovery must be an object")
+    attempted = value.get("attempted")
+    cycles = value.get("cycles")
+    max_cycles = value.get("max_cycles")
+    codes = value.get("failure_codes")
+    if attempted is not True or not isinstance(cycles, int) or isinstance(cycles, bool) or not 1 <= cycles <= 2:
+        raise BridgeEnvelopeError("BRIDGE_RESULT_INVALID", "pre_prompt_recovery cycle count is invalid")
+    if max_cycles != 2 or not isinstance(codes, list) or len(codes) != cycles or not codes:
+        raise BridgeEnvelopeError("BRIDGE_RESULT_INVALID", "pre_prompt_recovery evidence is invalid")
+    safe_codes = []
+    for code in codes:
+        if not isinstance(code, str) or PRE_PROMPT_RECOVERY_CODE_PATTERN.fullmatch(code) is None:
+            raise BridgeEnvelopeError("BRIDGE_RESULT_INVALID", "pre_prompt_recovery failure code is invalid")
+        safe_codes.append(code)
+    return {"attempted": True, "cycles": cycles, "max_cycles": 2, "failure_codes": safe_codes}
 
 
 def normalize_bridge_envelope(
@@ -581,6 +608,9 @@ def normalize_bridge_envelope(
         "response_text": response_text,
         "receipt": receipt,
     }
+    recovery_value = _value(source, "pre_prompt_recovery", "prePromptRecovery", default=None)
+    if recovery_value is not None:
+        normalized["pre_prompt_recovery"] = _safe_pre_prompt_recovery(recovery_value)
     if receipt_path is not None:
         normalized["receipt_path"] = receipt_path
     if conversation_id is not None:

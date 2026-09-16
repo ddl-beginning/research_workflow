@@ -232,9 +232,16 @@ def _source_digest(text: str) -> str:
 
 
 def _parse_chatgpt_project_url(text: str) -> str | None:
-    """Extract the one optional Project target from REQUIREMENTS.md."""
+    """Extract the one optional Project target from Workflow Binding only."""
 
-    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    binding_sections = [
+        section for section in _sections(text)
+        if int(section["level"]) == 2
+        and _normalize_label(str(section["title"])) == "workflowbinding"
+    ]
+    if not binding_sections:
+        return None
+    lines = [line for section in binding_sections for line in section["body"]]
     candidates: list[str] = []
     for index, line in enumerate(lines):
         match = _CHATGPT_PROJECT_LABEL_RE.match(line)
@@ -988,9 +995,7 @@ def _render_workflow_plan(plan: Mapping[str, Any], change: Mapping[str, Any], *,
         lines.extend(["", "## 5. Work To Perform", ""])
         for index, task in enumerate(items(stage.get("tasks", []), stage["stage_goal"]), start=1):
             lines.append(f"- T{index:02d} — {task}")
-        lines.extend(["", "## 6. Expected Outputs", "", "### Human-visible", ""])
-        lines.extend(f"- {item}" for item in items(stage.get("human_visible_evidence", []), "No Human-visible artifact is required when Human Gate Required is NO."))
-        lines.extend(["", "### Machine-readable", ""])
+        lines.extend(["", "## 6. Expected Outputs", "", "### Machine-readable", ""])
         lines.extend(f"- {item}" for item in items(stage.get("expected_outputs", []), "The Stage outputs are present and accepted."))
         lines.extend(["", "## 7. Machine Evaluation", "", "### Primary", ""])
         lines.extend(f"- {item}" for item in items(stage.get("machine_evaluation_primary", []), "Primary machine checks pass."))
@@ -1006,11 +1011,11 @@ def _render_workflow_plan(plan: Mapping[str, Any], change: Mapping[str, Any], *,
             "",
         ])
         lines.extend(f"- {item}" for item in items(stage.get("pass_gate", []), "Primary machine checks pass and required outputs exist."))
-        lines.extend(["", "## 10. Replan / Stop Conditions", "", "### Replan", ""])
+        lines.extend(["", "## 10. Replan Conditions", ""])
         lines.extend(f"- {item}" for item in items(stage.get("replan_conditions", []), "Replan only after a technical/representation failure is proven."))
-        lines.extend(["", "### Stop", ""])
+        lines.extend(["", "## 11. Stop Conditions", ""])
         lines.extend(f"- {item}" for item in items(stage.get("stop_conditions", []), "Stop only for a validated Human Gate or genuine blocker."))
-        lines.extend(["", "## 11. On PASS", "", f"Next Stage: {stage.get('next_stage') or 'DONE'}", "", "Workflow Action:", "- close current Stage through StageController", "- update CURRENT_STATE.md from canonical journal", "- load and validate the next planned Stage", "- resolve its data and continue automatically unless a valid Human Gate is pending", ""])
+        lines.extend(["", "## 12. On PASS", "", f"Next Stage: {stage.get('next_stage') or 'DONE'}", "", "Workflow Action:", "- close current Stage through StageController", "- update CURRENT_STATE.md from canonical journal", "- load and validate the next planned Stage", "- resolve its data and continue automatically unless a valid Human Gate is pending", ""])
     if change.get("technical_review_required"):
         lines.extend(["## Plan Change Interpretation", "", "A source change touches the current, final, or accepted plan boundary. Workflow records a bounded technical/plan review requirement and does not rewrite journal history or user sources.", ""])
     return "\n".join(lines).rstrip() + "\n"
