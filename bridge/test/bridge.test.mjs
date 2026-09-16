@@ -10,6 +10,8 @@ import {
   DEFAULT_RESPONSE_TIMEOUT_MS,
   extractConversationIdFromUrl,
   FAILURE_CODES,
+  HOME_NAVIGATION_RETRY_SETTLE_MS,
+  MAX_HOME_NAVIGATION_RETRIES,
   MAX_RESPONSE_TIMEOUT_MS,
   MAX_CHATGPT_REQUESTS_PER_INVOCATION,
   normalizeResponseTimeoutMs,
@@ -75,6 +77,27 @@ test('one invocation permits exactly one ChatGPT request', () => {
     () => assertRequestBudget(2),
     (error) => error instanceof BridgeError && error.code === FAILURE_CODES.UNEXPECTED_PAGE_STATE,
   );
+});
+
+test('homepage navigation retries one transient failure without changing the prompt budget', async () => {
+  const bridge = new ChatGPTBridge({ navigationTimeoutMs: 10 });
+  bridge.context = {};
+  let gotoCount = 0;
+  const waits = [];
+  bridge.page = {
+    async goto() {
+      gotoCount += 1;
+      if (gotoCount === 1) throw new Error('transient browser transport failure');
+    },
+    async waitForTimeout(ms) { waits.push(ms); },
+    url() { return 'https://chatgpt.com/'; },
+  };
+
+  assert.equal(await bridge.navigate(), 'https://chatgpt.com/');
+  assert.equal(MAX_HOME_NAVIGATION_RETRIES, 1);
+  assert.equal(gotoCount, 2);
+  assert.deepEqual(waits, [HOME_NAVIGATION_RETRY_SETTLE_MS, 750]);
+  assert.equal(bridge.requestCount, 0);
 });
 
 test('extractor selects only one new stable assistant message', () => {

@@ -47,6 +47,8 @@ export const DEFAULT_MACHINE_RUNTIME_ROOT = DEFAULT_PROJECT_BROWSER_RUNTIME_ROOT
 export const DEFAULT_RESPONSE_TIMEOUT_MS = 180_000;
 export const MAX_RESPONSE_TIMEOUT_MS = 300_000;
 export const MAX_CHATGPT_REQUESTS_PER_INVOCATION = 1;
+export const MAX_HOME_NAVIGATION_RETRIES = 1;
+export const HOME_NAVIGATION_RETRY_SETTLE_MS = 500;
 export const MAX_ATTACHMENTS = 9;
 // Project navigation is allowed one browser-navigation-only retry.  This is
 // deliberately separate from the one-prompt budget: retrying page.goto must
@@ -2399,17 +2401,31 @@ export class ChatGPTBridge {
     if (failureCode === FAILURE_CODES.PROJECT_NAVIGATION_FAILED) {
       return this.navigateToProject(url, options);
     }
-    this.log(`opening ${url}`);
-    try {
-      await this.page.goto(url, {
-        waitUntil: 'domcontentloaded',
-        timeout: this.navigationTimeoutMs,
-      });
-      await this.page.waitForTimeout(750);
-      return this.page.url();
-    } catch (error) {
-      throw new BridgeError(failureCode, failureMessage(failureCode), error);
+    const maxRetries = failureCode === FAILURE_CODES.CHATGPT_NAVIGATION_FAILED
+      ? MAX_HOME_NAVIGATION_RETRIES
+      : 0;
+    let lastError = null;
+    for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+      this.log(`opening ${url} attempt=${attempt + 1}`);
+      try {
+        await this.page.goto(url, {
+          waitUntil: 'domcontentloaded',
+          timeout: this.navigationTimeoutMs,
+        });
+        await this.page.waitForTimeout(750);
+        return this.page.url();
+      } catch (error) {
+        lastError = error;
+        if (attempt >= maxRetries) break;
+        try {
+          await this.page.waitForTimeout(HOME_NAVIGATION_RETRY_SETTLE_MS);
+        } catch {
+          // The next bounded goto remains the recovery attempt. If the page
+          // is already closed, it will fail closed with the original code.
+        }
+      }
     }
+    throw new BridgeError(failureCode, failureMessage(failureCode), lastError);
   }
 
   /**
