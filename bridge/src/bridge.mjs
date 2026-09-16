@@ -47,7 +47,7 @@ export const DEFAULT_MACHINE_RUNTIME_ROOT = DEFAULT_PROJECT_BROWSER_RUNTIME_ROOT
 export const DEFAULT_RESPONSE_TIMEOUT_MS = 180_000;
 export const MAX_RESPONSE_TIMEOUT_MS = 300_000;
 export const MAX_CHATGPT_REQUESTS_PER_INVOCATION = 1;
-export const MAX_HOME_NAVIGATION_RETRIES = 1;
+export const MAX_HOME_NAVIGATION_RETRIES = 2;
 export const HOME_NAVIGATION_RETRY_SETTLE_MS = 500;
 export const MAX_ATTACHMENTS = 9;
 // Project navigation is allowed one browser-navigation-only retry.  This is
