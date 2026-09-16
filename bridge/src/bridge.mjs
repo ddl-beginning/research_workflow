@@ -2418,7 +2418,7 @@ export class ChatGPTBridge {
         lastError = error;
         if (attempt >= maxRetries) break;
         try {
-          await this.page.waitForTimeout(HOME_NAVIGATION_RETRY_SETTLE_MS);
+          await this.page.waitForTimeout(HOME_NAVIGATION_RETRY_SETTLE_MS * (attempt + 1));
         } catch {
           // The next bounded goto remains the recovery attempt. If the page
           // is already closed, it will fail closed with the original code.

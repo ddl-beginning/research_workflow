@@ -96,7 +96,7 @@ test('homepage navigation retries one transient failure without changing the pro
   assert.equal(await bridge.navigate(), 'https://chatgpt.com/');
   assert.equal(MAX_HOME_NAVIGATION_RETRIES, 2);
   assert.equal(gotoCount, MAX_HOME_NAVIGATION_RETRIES + 1);
-  assert.deepEqual(waits, [HOME_NAVIGATION_RETRY_SETTLE_MS, HOME_NAVIGATION_RETRY_SETTLE_MS, 750]);
+  assert.deepEqual(waits, [HOME_NAVIGATION_RETRY_SETTLE_MS, HOME_NAVIGATION_RETRY_SETTLE_MS * 2, 750]);
   assert.equal(bridge.requestCount, 0);
 });
 
