@@ -352,9 +352,8 @@ def _pre_prompt_attachment_receipt(
     *,
     failure_code: str,
     preexisting_receipts: set[Path] | None = None,
-    require_all_failed_attachments: bool = True,
 ) -> tuple[Path, Mapping[str, Any]]:
-    """Find the current invocation's failed-before-prompt receipt.
+    """Find the current invocation's failed-before-prompt attachment receipt.
 
     The clean-room validator is itself the bounded recovery caller.  It may
     recover only a newly-created receipt from this fresh project, and only
@@ -390,22 +389,14 @@ def _pre_prompt_attachment_receipt(
         )
     path, receipt = candidates[0]
     attachments = receipt.get("attachments")
-    if require_all_failed_attachments and (
-        not isinstance(attachments, list) or not attachments or not all(
-            isinstance(item, Mapping) and item.get("upload_status") == "failed" for item in attachments
-        )
+    if not isinstance(attachments, list) or not attachments or not all(
+        isinstance(item, Mapping) and item.get("upload_status") == "failed" for item in attachments
     ):
         raise ValidationFailure("attachment recovery receipt lacks all-failed attachment evidence")
     if failure_code == "ATTACHMENT_UPLOAD_FAILED":
         diagnostics = receipt.get("attachment_diagnostics")
         if not isinstance(diagnostics, Mapping) or diagnostics.get("request_count") != 0 or diagnostics.get("final_predicate") is not False:
             raise ValidationFailure("attachment recovery receipt lacks strict pre-prompt diagnostics")
-    if failure_code == "CHATGPT_NAVIGATION_FAILED":
-        if receipt.get("browser_failure_class") == "BROWSER_HUMAN_VERIFICATION_REQUIRED":
-            raise ValidationFailure("BROWSER_HUMAN_VERIFICATION_REQUIRED")
-        navigation = receipt.get("project_navigation_diagnostics")
-        if isinstance(navigation, Mapping) and navigation.get("failure_class") == "challenge":
-            raise ValidationFailure("BROWSER_HUMAN_VERIFICATION_REQUIRED")
     return path, receipt
 
 
@@ -424,13 +415,12 @@ def _plan_with_bounded_transport_recovery(
     error_code = error.get("code") if error else None
     if error_code is None:
         return planned, None
-    if error_code not in {"ATTACHMENT_NOT_READY", "ATTACHMENT_UPLOAD_FAILED", "CHATGPT_NAVIGATION_FAILED"}:
+    if error_code not in {"ATTACHMENT_NOT_READY", "ATTACHMENT_UPLOAD_FAILED"}:
         raise ValidationFailure(f"real GPT planning failed before bounded recovery: {error_code}")
     receipt_path, receipt = _pre_prompt_attachment_receipt(
         project,
         failure_code=error_code,
         preexisting_receipts=preexisting_receipts,
-        require_all_failed_attachments=error_code in {"ATTACHMENT_NOT_READY", "ATTACHMENT_UPLOAD_FAILED"},
     )
     recovery = {
         "planning_revision": planning_revision,
@@ -477,13 +467,12 @@ def _review_with_bounded_transport_recovery(
     error_code = error.get("code") if error else None
     if error_code is None:
         return reviewed, None
-    if error_code not in {"ATTACHMENT_NOT_READY", "ATTACHMENT_UPLOAD_FAILED", "CHATGPT_NAVIGATION_FAILED"}:
+    if error_code not in {"ATTACHMENT_NOT_READY", "ATTACHMENT_UPLOAD_FAILED"}:
         raise ValidationFailure(f"real GPT technical review failed: {error_code}")
     receipt_path, receipt = _pre_prompt_attachment_receipt(
         project,
         failure_code=error_code,
         preexisting_receipts=preexisting_receipts,
-        require_all_failed_attachments=error_code in {"ATTACHMENT_NOT_READY", "ATTACHMENT_UPLOAD_FAILED"},
     )
     request_body = review_request.get("request")
     if not isinstance(request_body, Mapping):
