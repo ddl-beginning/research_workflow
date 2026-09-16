@@ -439,6 +439,50 @@ def _plan_with_bounded_transport_recovery(
     }
 
 
+def _review_with_bounded_transport_recovery(
+    client: MCPClient,
+    *,
+    project: Path,
+    review_request: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Run CONSULT_REVIEW with one explicit no-effect attachment recovery."""
+
+    reviewed = client.call("workflow_run", review_request, allow_error=True)
+    error = reviewed.get("error") if isinstance(reviewed.get("error"), Mapping) else None
+    error_code = error.get("code") if error else None
+    if error_code is None:
+        return reviewed, None
+    if error_code not in {"ATTACHMENT_NOT_READY", "ATTACHMENT_UPLOAD_FAILED"}:
+        raise ValidationFailure(f"real GPT technical review failed: {error_code}")
+    receipt_path, receipt = _pre_prompt_attachment_receipt(project, failure_code=error_code)
+    request_body = review_request.get("request")
+    if not isinstance(request_body, Mapping):
+        raise ValidationFailure("technical review request has no request object for transport recovery")
+    revision = request_body.get("review_revision", 1)
+    if isinstance(revision, bool) or not isinstance(revision, int):
+        raise ValidationFailure("technical review revision is invalid for bounded recovery")
+    retry_request = {
+        **dict(review_request),
+        "request": {**dict(request_body), "review_revision": revision + 1},
+    }
+    recovered = client.call("workflow_run", retry_request, allow_error=True)
+    recovered_error = recovered.get("error") if isinstance(recovered.get("error"), Mapping) else None
+    if recovered_error is not None:
+        raise ValidationFailure(
+            f"bounded technical-review transport recovery failed: {recovered_error.get('code', 'UNKNOWN')}"
+        )
+    diagnostics = receipt.get("attachment_diagnostics")
+    return recovered, {
+        "attempts": 1,
+        "failure_code": error_code,
+        "receipt_path": str(receipt_path.relative_to(project)).replace("\\", "/"),
+        "request_count": receipt.get("request_count"),
+        "reattach_attempted": diagnostics.get("reattach_attempted") if isinstance(diagnostics, Mapping) else None,
+        "reattach_succeeded": diagnostics.get("reattach_succeeded") if isinstance(diagnostics, Mapping) else None,
+        "recovered_review_revision": revision + 1,
+    }
+
+
 def provider_probe(*, python: Path, engine: Path, project: Path, artifact_dir: Path, stage: Mapping[str, Any], baseline: str) -> dict[str, Any]:
     attempt = stage.get("attempt")
     if not isinstance(attempt, Mapping):
@@ -648,7 +692,10 @@ def run_installation_validation(args: argparse.Namespace) -> dict[str, Any]:
             assessment_id=assessment["assessment_id"],
             observation_id=observation["observation_id"],
         )
-        reviewed = client.call("workflow_run", {"workspace": str(project), "request": {"operation": "CONSULT_REVIEW", "stage_id": STAGE_ID, "review_revision": 1, "prompt": "Perform the technical review using only this fresh packet. The real provider succeeded, the immutable observation is SETTLED, the current assessment is ADMISSIBLE, the exact test passed, and the delta is exactly src/add.py. STAGE_READY is technical readiness for COMMIT_INTEGRATION, not Human approval. Do not execute or modify anything. Return one final standalone line exactly: WORKFLOW_DECISION: STAGE_READY", "context_pack": technical_pack}})
+        technical_review_request = {"workspace": str(project), "request": {"operation": "CONSULT_REVIEW", "stage_id": STAGE_ID, "review_revision": 1, "prompt": "Perform the technical review using only this fresh packet. The real provider succeeded, the immutable observation is SETTLED, the current assessment is ADMISSIBLE, the exact test passed, and the delta is exactly src/add.py. STAGE_READY is technical readiness for COMMIT_INTEGRATION, not Human approval. Do not execute or modify anything. Return one final standalone line exactly: WORKFLOW_DECISION: STAGE_READY", "context_pack": technical_pack}}
+        reviewed, technical_transport_recovery = _review_with_bounded_transport_recovery(
+            client, project=project, review_request=technical_review_request,
+        )
         technical = require_decision(reviewed, "STAGE_READY", "technical_review")
         decision = {"schema_version": "decision.v2", "decision_id": "decision-real-gpt-" + str(technical["response_digest"])[:24], "actor_kind": "GPT", "boundary": "TECHNICAL_REVIEW", "subject_id": assessment["assessment_id"], "subject_digest": assessment["assessment_id"], "subject_version": 1, "objective_identity": stage["objective_fingerprint"], "allowed_choices": ["STAGE_READY"], "requested_action": "Apply the exact real GPT technical-review result to the current assessment.", "provenance": {"request_count": technical["request_count"], "conversation_id": technical["conversation_id"], "response_digest": technical["response_digest"], "packet_digest": technical["packet_digest"]}, "supersedes": None}
         gpt_review_pipeline = evaluate_gpt_review_pipeline(
@@ -747,7 +794,7 @@ def run_installation_validation(args: argparse.Namespace) -> dict[str, Any]:
             "project": {"root": str(project), "project_id": project_id, "workspace_id": workspace_id, "baseline_commit": baseline, "integration_commit": integration_commit, "closeout_path": str(closeout_doc), "final_status": final_stage.get("status"), "owner_stage_id": final_stage.get("owner_stage_id")},
             "planning": {**{key: planning.get(key) for key in ("consultation_id", "conversation_id", "request_count", "packet_digest", "decision")}, "transport_recovery": planning_transport_recovery},
             "provider": {"provider_id": provider_view.get("provider_id"), "executor_request_id": provider_view.get("executor_request_id"), "actual_model": provider_view.get("actual_model"), "execution_profile": provider_view.get("execution_profile"), "reasoning_effort": provider_view.get("reasoning_effort"), "auth_mode": provider_view.get("auth_mode"), "status": provider_result.get("status"), "changed_files": provider_result.get("changed_files"), "tests": provider_result.get("tests"), "artifacts": str(artifact_dir)},
-            "technical_review": {key: technical.get(key) for key in ("consultation_id", "conversation_id", "request_count", "packet_digest", "decision")},
+            "technical_review": {**{key: technical.get(key) for key in ("consultation_id", "conversation_id", "request_count", "packet_digest", "decision")}, "transport_recovery": technical_transport_recovery},
             "gpt_review_pipeline": gpt_review_pipeline,
             "controller": {"observation_id": observation["observation_id"], "assessment_id": assessment["assessment_id"], "assessment_verdict": assessment["verdict"], "integration_operation_id": operation_id, "integration_effect_state": "SETTLED", "resume_at_intent": {"status": intent_stage.get("status"), "stage_id": intent_stage.get("stage_id"), "process_restarted": True}, "duplicate_closeout_no_new_effect": True},
             "relocation": {"doctor_ready": True, "resume_identity_preserved": True, "engine_status_clean": True, "engine": str(relocated_engine), "project": str(relocated_project)},
