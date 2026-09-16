@@ -347,19 +347,28 @@ def require_decision(value: Mapping[str, Any], expected: str, field: str) -> Map
     return record
 
 
-def _pre_prompt_attachment_receipt(project: Path, *, failure_code: str) -> tuple[Path, Mapping[str, Any]]:
-    """Find the single current failed-before-prompt attachment receipt.
+def _pre_prompt_attachment_receipt(
+    project: Path,
+    *,
+    failure_code: str,
+    preexisting_receipts: set[Path] | None = None,
+) -> tuple[Path, Mapping[str, Any]]:
+    """Find the current invocation's failed-before-prompt attachment receipt.
 
     The clean-room validator is itself the bounded recovery caller.  It may
-    recover only a receipt produced by this fresh project, and only when the
-    bridge proved that no prompt request was sent.  Ambiguous evidence fails
-    closed instead of guessing which consultation to retry.
+    recover only a newly-created receipt from this fresh project, and only
+    when the bridge proved that no prompt request was sent.  Older receipts
+    from an earlier planning/review call remain audit evidence but cannot make
+    the current recovery ambiguous.
     """
     candidates: list[tuple[Path, Mapping[str, Any]]] = []
     consultation_root = project / ".consultations"
     if not consultation_root.is_dir():
         raise ValidationFailure("attachment recovery found no consultation evidence root")
+    existing = {path.resolve() for path in (preexisting_receipts or set())}
     for path in consultation_root.glob("*/receipt.json"):
+        if path.resolve() in existing:
+            continue
         try:
             value = json_file(path)
         except (OSError, UnicodeError, json.JSONDecodeError):
@@ -400,6 +409,7 @@ def _plan_with_bounded_transport_recovery(
     planning_revision: int,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """Run PLAN_STAGE, allowing one explicit no-effect attachment recovery."""
+    preexisting_receipts = set((project / ".consultations").glob("*/receipt.json"))
     planned = client.call("workflow_run", planning_request, allow_error=True)
     error = planned.get("error") if isinstance(planned.get("error"), Mapping) else None
     error_code = error.get("code") if error else None
@@ -407,7 +417,11 @@ def _plan_with_bounded_transport_recovery(
         return planned, None
     if error_code not in {"ATTACHMENT_NOT_READY", "ATTACHMENT_UPLOAD_FAILED"}:
         raise ValidationFailure(f"real GPT planning failed before bounded recovery: {error_code}")
-    receipt_path, receipt = _pre_prompt_attachment_receipt(project, failure_code=error_code)
+    receipt_path, receipt = _pre_prompt_attachment_receipt(
+        project,
+        failure_code=error_code,
+        preexisting_receipts=preexisting_receipts,
+    )
     recovery = {
         "planning_revision": planning_revision,
         "stage_id": stage_id,
@@ -447,6 +461,7 @@ def _review_with_bounded_transport_recovery(
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """Run CONSULT_REVIEW with one explicit no-effect attachment recovery."""
 
+    preexisting_receipts = set((project / ".consultations").glob("*/receipt.json"))
     reviewed = client.call("workflow_run", review_request, allow_error=True)
     error = reviewed.get("error") if isinstance(reviewed.get("error"), Mapping) else None
     error_code = error.get("code") if error else None
@@ -454,7 +469,11 @@ def _review_with_bounded_transport_recovery(
         return reviewed, None
     if error_code not in {"ATTACHMENT_NOT_READY", "ATTACHMENT_UPLOAD_FAILED"}:
         raise ValidationFailure(f"real GPT technical review failed: {error_code}")
-    receipt_path, receipt = _pre_prompt_attachment_receipt(project, failure_code=error_code)
+    receipt_path, receipt = _pre_prompt_attachment_receipt(
+        project,
+        failure_code=error_code,
+        preexisting_receipts=preexisting_receipts,
+    )
     request_body = review_request.get("request")
     if not isinstance(request_body, Mapping):
         raise ValidationFailure("technical review request has no request object for transport recovery")
