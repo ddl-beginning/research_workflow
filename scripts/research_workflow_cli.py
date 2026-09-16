@@ -587,9 +587,10 @@ def _ensure_mcp_approval_config(paths: RuntimePaths) -> dict[str, Any]:
 def _restore_registration_argv(entry: Mapping[str, Any], name: str, codex: Path) -> list[str] | None:
     """Build a conservative compensating add command for a prior stdio entry.
 
-    The installer never copies environment values or URL credentials.  A
-    registration with env/cwd/URL state is therefore not auto-restored after a
-    failed replacement; the failure is reported for explicit operator repair.
+    The installer only restores the product's one allowlisted runtime-config
+    path. Arbitrary environment values, cwd state, and URL credentials are
+    never copied after a failed replacement; those cases are reported for
+    explicit operator repair.
     """
 
     transport = _transport(entry)
@@ -603,11 +604,26 @@ def _restore_registration_argv(entry: Mapping[str, Any], name: str, codex: Path)
     if (
         not isinstance(command, str)
         or not isinstance(args, list)
-        or env not in (None, {})
         or env_vars not in (None, [], {})
         or cwd not in (None, "")
     ):
         return None
+    restore_env: list[str] = []
+    if env not in (None, {}):
+        # The product's own registration carries one non-secret machine path.
+        # Preserve that path during a failed replacement, but keep rejecting
+        # arbitrary inherited/environment values that could contain secrets.
+        if (
+            not isinstance(env, Mapping)
+            or set(str(key) for key in env) != {"RESEARCH_WORKFLOW_RUNTIME_CONFIG"}
+            or not isinstance(env.get("RESEARCH_WORKFLOW_RUNTIME_CONFIG"), str)
+            or not env["RESEARCH_WORKFLOW_RUNTIME_CONFIG"].strip()
+        ):
+            return None
+        restore_env = [
+            "--env",
+            f"RESEARCH_WORKFLOW_RUNTIME_CONFIG={env['RESEARCH_WORKFLOW_RUNTIME_CONFIG']}",
+        ]
     values = [command, *args]
     if any(
         not isinstance(value, str)
@@ -615,7 +631,7 @@ def _restore_registration_argv(entry: Mapping[str, Any], name: str, codex: Path)
         for value in values
     ):
         return None
-    return [str(codex), "mcp", "add", name, "--", command, *[str(value) for value in args]]
+    return [str(codex), "mcp", "add", name, *restore_env, "--", command, *[str(value) for value in args]]
 
 
 def ensure_registration(paths: RuntimePaths, *, force: bool = False) -> dict[str, Any]:

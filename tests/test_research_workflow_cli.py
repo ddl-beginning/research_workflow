@@ -102,6 +102,26 @@ def test_failed_replacement_restore_is_conservative(tmp_path):
         "transport": {**prior["transport"], "env": {"TOKEN": "redacted"}},
     }
     assert _restore_registration_argv(secret_entry, "research-supervisor", paths.codex_executable) is None
+    runtime_config_entry = {
+        **prior,
+        "transport": {
+            **prior["transport"],
+            "env": {"RESEARCH_WORKFLOW_RUNTIME_CONFIG": str(tmp_path / "runtime.json")},
+        },
+    }
+    assert _restore_registration_argv(runtime_config_entry, "research-supervisor", paths.codex_executable) == [
+        str(paths.codex_executable),
+        "mcp",
+        "add",
+        "research-supervisor",
+        "--env",
+        f"RESEARCH_WORKFLOW_RUNTIME_CONFIG={tmp_path / 'runtime.json'}",
+        "--",
+        str(paths.python_executable),
+        str(paths.launcher),
+        "--mode",
+        "status",
+    ]
     inherited_env_entry = {
         **prior,
         "transport": {**prior["transport"], "env_vars": ["TOKEN"]},
