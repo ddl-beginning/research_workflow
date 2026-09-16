@@ -22,9 +22,9 @@ def audit(root: str | Path) -> dict[str, Any]:
     base = Path(root).expanduser().resolve()
     required_files = {
         "README.md": base / "README.md",
-        "INSTALL.md": base / "INSTALL.md",
-        "QUICKSTART.md": base / "QUICKSTART.md",
-        "TROUBLESHOOTING.md": base / "TROUBLESHOOTING.md",
+        "docs/installation.md": base / "docs" / "installation.md",
+        "docs/quickstart.md": base / "docs" / "quickstart.md",
+        "docs/troubleshooting.md": base / "docs" / "troubleshooting.md",
         "install.ps1": base / "install.ps1",
         "pyproject.toml": base / "pyproject.toml",
         "workflow.py": base / "scripts" / "workflow.py",
@@ -32,7 +32,7 @@ def audit(root: str | Path) -> dict[str, Any]:
         "product_doctor.py": base / "scripts" / "product_doctor.py",
         "workflow-launcher.SKILL.md": base / "skills" / "workflow-launcher" / "SKILL.md",
         "stage.schema.json": base / "schemas" / "workflow_v2" / "stage.schema.json",
-        "MODEL_ROUTING_AUDIT.md": base / "MODEL_ROUTING_AUDIT.md",
+        "docs/history/model-routing-audit-v2.1.6.md": base / "docs" / "history" / "model-routing-audit-v2.1.6.md",
     }
     checks: list[dict[str, str]] = []
     contents: dict[str, str] = {}
@@ -43,10 +43,10 @@ def audit(root: str | Path) -> dict[str, Any]:
             contents[label] = path.read_text(encoding="utf-8")
 
     requirements = {
-        "README.md": ("Workflow V2.1", "Install", "First-run authentication", "autonomous_research", "workflow.exe"),
-        "INSTALL.md": ("Prerequisites", "workflow.exe setup", "ChatGPT", "Browser Bridge", "Do not paste"),
-        "QUICKSTART.md": ("workflow.exe", "workflow.exe resume", "$workflow", "autonomous_research"),
-        "TROUBLESHOOTING.md": (
+        "README.md": ("Research Workflow", "5-minute Windows installation", "Engine vs Business Project", "REQUIREMENTS.md", "workflow.exe"),
+        "docs/installation.md": ("Prerequisites", "workflow.exe setup", "ChatGPT", "Browser Bridge", "Do not paste"),
+        "docs/quickstart.md": ("workflow.exe", "workflow.exe resume", "$workflow", "REQUIREMENTS.md"),
+        "docs/troubleshooting.md": (
             "CODEX_RUNTIME_UNAVAILABLE",
             "AUTHENTICATION_REQUIRED",
             "STANDARD_MODEL_UNAVAILABLE",
@@ -59,7 +59,7 @@ def audit(root: str | Path) -> dict[str, Any]:
             "cookie",
         ),
         "workflow-launcher.SKILL.md": ("$workflow", "workflow resume", "thin", "lifecycle"),
-        "MODEL_ROUTING_AUDIT.md": ("STANDARD", "FRONTIER", "codex exec", "parent", "child"),
+        "docs/history/model-routing-audit-v2.1.6.md": ("STANDARD", "FRONTIER", "codex exec", "parent", "child"),
     }
     for file_name, terms in requirements.items():
         text = contents.get(file_name, "").casefold()

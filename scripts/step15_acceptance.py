@@ -48,7 +48,7 @@ from src.stage_planning import (  # noqa: E402
 
 PASS_MARKER = STAGE_PLANNING_MARKER
 BLOCKED_MARKER = "STEP15_NOT_READY"
-PROJECT_URL = "https://chatgpt.com/g/g-p-6a9a2d82aec881918b65e066b18b95d8-ce-shi/project"
+PROJECT_URL = "https://chatgpt.com/g/g-p-example-project/project"
 
 
 class _DiscoveryConsult:

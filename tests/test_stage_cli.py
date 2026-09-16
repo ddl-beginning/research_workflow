@@ -271,7 +271,7 @@ class StageCliConsultationTests(unittest.TestCase):
         self.assertEqual([item["request_count"] for item in index["consultations"]], [1, 1])
 
     def test_real_stage_consultation_forwards_approved_project_binding(self):
-        project_url = "https://chatgpt.com/g/g-p-6a9a2d82aec881918b65e066b18b95d8-ce-shi/project"
+        project_url = "https://chatgpt.com/g/g-p-example-project/project"
         (self.root / ".research" / "PROJECT_BRIEF.json").write_text(
             json.dumps({"brief": {"chatgpt_project_url": project_url}}), encoding="utf-8"
         )

@@ -37,7 +37,7 @@ from src.project_intake import ProjectRequirementsIntake  # noqa: E402
 
 PASS_MARKER = "GPT_CODEX_BLUEPRINT_REVIEW_PASS"
 BLOCKED_MARKER = "STEP14_NOT_READY"
-PROJECT_URL = "https://chatgpt.com/g/g-p-6a9a2d82aec881918b65e066b18b95d8-ce-shi/project"
+PROJECT_URL = "https://chatgpt.com/g/g-p-example-project/project"
 _SECRET_PATTERNS = (
     re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----", re.I),
     re.compile(r"\b(?:sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b"),

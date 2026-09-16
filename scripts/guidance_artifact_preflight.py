@@ -19,7 +19,7 @@ from src.runtime_composition import load_runtime_composition_config  # noqa: E40
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--workspace", default=str(ROOT))
-    parser.add_argument("--bundle", default="specs/spec-kit-adoption-and-repository-architecture-v1")
+    parser.add_argument("--bundle", default="fixtures/guidance/spec-kit-adoption-and-repository-architecture-v1")
     parser.add_argument("--stage-contract-digest", required=True)
     args = parser.parse_args()
     root = Path(args.workspace).resolve(strict=True)

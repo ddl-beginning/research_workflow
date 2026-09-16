@@ -24,7 +24,7 @@ import {
 const CONVERSATION_ID = '12345678-1234-4234-8234-123456789abc';
 const CHAT_URL = `https://chatgpt.com/c/${CONVERSATION_ID}`;
 const PACK_HASH = 'a'.repeat(64);
-const PROJECT_URL = 'https://chatgpt.com/g/g-p-6aa9e406e64081918f3357e6e5a90908-outdoor/project';
+const PROJECT_URL = 'https://chatgpt.com/g/g-p-outdoor-project/project';
 
 function intentKey(value) {
   return crypto.createHash('sha256').update(value, 'utf8').digest('hex');

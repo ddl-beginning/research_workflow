@@ -22,3 +22,29 @@ bridge/playwright-report/
 bridge/test-results/
 bridge/*.auth.json
 bridge/*.log
+
+# Public repository must never capture machine credentials or browser state.
+.auth/
+**/.auth/
+browser-profile/
+**/browser-profile/
+cookies*.json
+**/cookies*.json
+storage-state*.json
+**/storage-state*.json
+*.pem
+*.p12
+*.key
+*.token
+*.secret
+.env
+.env.*
+
+# Local dependency/runtime caches.
+node_modules/
+**/node_modules/
+*.log
+playwright-report/
+**/playwright-report/
+test-results/
+**/test-results/

@@ -23,11 +23,11 @@ if str(ROOT) not in sys.path:
 
 from src.openai_codex_executor import OpenAICodexExecutor
 from src.contract_handshake import compare_handshake, compare_stage_action_handshake
+from src.product_metadata import PRODUCT_VERSION, checkout_provenance, current_provenance, is_engine_checkout
 from src.product_workflow_runtime import doctor_product_runtime
 from src.runtime_composition import RuntimeCompositionConfig, RuntimeCompositionError, load_runtime_composition_config
 
 
-PRODUCT_VERSION = "2.1.0"
 MCP_NAME = "research-supervisor"
 CONFIG_ENV = "RESEARCH_WORKFLOW_RUNTIME_CONFIG"
 
@@ -140,6 +140,26 @@ def _registration_check(config: RuntimeCompositionConfig | None) -> dict[str, An
 def run_doctor(workspace: str | os.PathLike[str], config_path: str | os.PathLike[str] | None = None) -> dict[str, Any]:
     project = Path(workspace).expanduser().resolve()
     checks: list[dict[str, Any]] = []
+    installed = current_provenance(ROOT)
+    checkout = checkout_provenance(project)
+    provenance_ok = True
+    provenance_code = None
+    provenance_detail = "business project; installed Engine provenance is not compared to project files"
+    if checkout is not None:
+        if checkout.get("version") != PRODUCT_VERSION:
+            provenance_ok = False
+            provenance_code = "INSTALLED_ENGINE_OUTDATED"
+            provenance_detail = (
+                f"checkout={checkout.get('version') or 'unknown'}; installed={PRODUCT_VERSION}; "
+                "the PATH launcher is resolving an older Workflow Engine"
+            )
+        elif checkout.get("commit") and installed.get("engine_commit") and checkout.get("commit") != installed.get("engine_commit"):
+            provenance_ok = False
+            provenance_code = "INSTALLED_ENGINE_COMMIT_MISMATCH"
+            provenance_detail = "the installed Engine commit does not match this Engine checkout"
+        else:
+            provenance_detail = f"Engine {PRODUCT_VERSION} matches checkout {checkout.get('commit') or 'unknown'}"
+    checks.append(_check("engine.provenance", provenance_ok, detail=provenance_detail, code=provenance_code))
     checks.append(_check("product.version", (ROOT / "pyproject.toml").is_file(), detail=PRODUCT_VERSION))
     checks.append(_check("product.source", (ROOT / "src" / "workflow_mcp.py").is_file() and (ROOT / "schemas" / "workflow_v2" / "stage.schema.json").is_file(), code="PRODUCT_FILES_MISSING"))
     checks.append(_check("project.workspace", project.is_dir(), code="WORKSPACE_INVALID"))
@@ -209,6 +229,7 @@ def run_doctor(workspace: str | os.PathLike[str], config_path: str | os.PathLike
     return {
         "schema_version": "workflow_v2_product_doctor.v1",
         "product_version": PRODUCT_VERSION,
+        "provenance": {"installed": installed, "checkout": checkout, "engine_checkout": is_engine_checkout(project)},
         "workspace": project.as_posix(),
         "config_path": config.config_path.as_posix() if config and config.config_path else None,
         "ready": ready,

@@ -222,7 +222,7 @@ class Step12ContextRetentionTests(unittest.TestCase):
                 brief={
                     "goal": "target",
                     "success_criteria": ["done"],
-                    "chatgpt_project_url": "https://chatgpt.com/g/g-p-7b9a2d82aec881918b65e066b18b95d8-ce-shi/project",
+                    "chatgpt_project_url": "https://chatgpt.com/g/g-p-other-project/project",
                     "chatgpt_project_binding": {"project_id": "local-project"},
                 },
             )

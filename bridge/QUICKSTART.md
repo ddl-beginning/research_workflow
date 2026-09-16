@@ -9,7 +9,7 @@ Workflow `project_id` 与 ChatGPT Project URL，避免多个项目共用进程�
 为本地项目保存一个明确的 ChatGPT Project URL，例如：
 
 ```text
-https://chatgpt.com/g/g-p-6a9a2d82aec881918b65e066b18b95d8-ce-shi/project
+https://chatgpt.com/g/g-p-example-project/project
 ```
 
 该 URL 是浏览器 UI navigation implementation detail。bridge 只接受 `https://chatgpt.com/g/g-p-.../project`，不接受普通 chat URL、外域、相对路径、query/hash 或 credentials；它不是 ChatGPT 官方 API。
@@ -17,7 +17,7 @@ https://chatgpt.com/g/g-p-6a9a2d82aec881918b65e066b18b95d8-ce-shi/project
 ## 2. 运行一次 fresh consultation
 
 ```powershell
-npm run consult -- --project-url "https://chatgpt.com/g/g-p-6a9a2d82aec881918b65e066b18b95d8-ce-shi/project" --prompt "Reply exactly: PROJECT_OK"
+npm run consult -- --project-url "https://chatgpt.com/g/g-p-example-project/project" --prompt "Reply exactly: PROJECT_OK"
 ```
 
 首次 consultation 会为该 Project 在 machine runtime 下创建独立 profile，并在需要时打开
@@ -30,7 +30,7 @@ Project Browser，再导航/验证绑定的 Project URL。首页只用于 bootst
 把成功 receipt 的 consultation id 与同一个 project URL 传回：
 
 ```powershell
-npm run consult -- --mode continue --continue-from CONSULT-YYYYMMDD-HHMMSS-xxxxxxxx --project-url "https://chatgpt.com/g/g-p-6a9a2d82aec881918b65e066b18b95d8-ce-shi/project" --prompt "Reply exactly: CONTINUE_OK"
+npm run consult -- --mode continue --continue-from CONSULT-YYYYMMDD-HHMMSS-xxxxxxxx --project-url "https://chatgpt.com/g/g-p-example-project/project" --prompt "Reply exactly: CONTINUE_OK"
 ```
 
 continue 只打开 bridge receipt 的 `chat_url`。若 parent receipt 已绑定 project，省略 `--project-url` 时会继承该绑定；若显式传入，必须与 parent 完全一致。跨项目或无效 URL 会在发送 prompt 前 fail-closed，`request_count` 保持为 0。没有 project scope 的旧 receipt 仍可按原有规则继续。

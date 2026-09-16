@@ -142,6 +142,53 @@ def detect_plan_sources(project_root: str | os.PathLike[str]) -> dict[str, Any]:
         status = "INCOMPLETE"
     else:
         status = "READY"
+    diagnostic: dict[str, Any] | None = None
+    if missing and (plan_dir := (root / PLAN_RELATIVE_PATH if (root / PLAN_RELATIVE_PATH).is_dir() else None)):
+        candidates = sorted(
+            (item for item in plan_dir.iterdir() if item.is_file()),
+            key=lambda item: item.name.casefold(),
+        )
+        for required in (REQUIREMENTS_RELATIVE_PATH, STAGE_PLAN_RELATIVE_PATH):
+            if required.as_posix() not in missing:
+                continue
+            expected_name = required.name
+            variants = [
+                item for item in candidates
+                if item.name.casefold() != expected_name.casefold()
+                and item.suffix.casefold() == ".md"
+                and (
+                    item.stem.casefold().startswith(required.stem.casefold())
+                    or (required.name.casefold() == "requirements.md" and item.name.casefold() == "requirement.md")
+                )
+            ]
+            numbered_requirements = [
+                item for item in variants
+                if required.name.casefold() == "requirements.md"
+                and re.fullmatch(r"requirements \(\d+\)", item.stem, flags=re.IGNORECASE)
+            ]
+            if len(numbered_requirements) >= 2:
+                status = "AMBIGUOUS"
+                diagnostic = {
+                    "code": "AMBIGUOUS_PLAN_SOURCE",
+                    "expected": required.as_posix(),
+                    "candidates": [str(item.relative_to(root)).replace("\\", "/") for item in numbered_requirements],
+                    "message": f"Multiple possible sources found; create exactly {required.as_posix()} after choosing one authoritative source.",
+                }
+                break
+            if variants and diagnostic is None:
+                candidate_paths = [str(item.relative_to(root)).replace("\\", "/") for item in variants]
+                diagnostic = {
+                    "code": "MISSING_CANONICAL_PLAN_FILE",
+                    "expected": required.as_posix(),
+                    "candidates": candidate_paths,
+                    "message": f"EXPECTED: {required.as_posix()}\nFOUND POSSIBLE MATCH: {candidate_paths[0]}\nRename the human source; Workflow will not rename it automatically.",
+                }
+    if diagnostic is not None:
+        error_code = diagnostic["code"]
+    elif status == "INCOMPLETE":
+        error_code = "PLAN_INPUT_MISSING"
+    else:
+        error_code = None
     return {
         "status": status,
         "plan_folder": PLAN_RELATIVE_PATH.as_posix(),
@@ -151,6 +198,9 @@ def detect_plan_sources(project_root: str | os.PathLike[str]) -> dict[str, Any]:
         "missing": missing,
         "user_source_files": [REQUIREMENTS_RELATIVE_PATH.as_posix(), STAGE_PLAN_RELATIVE_PATH.as_posix()],
         "generated_files": [WORKFLOW_PLAN_RELATIVE_PATH.as_posix(), CURRENT_STATE_RELATIVE_PATH.as_posix()],
+        "error_code": error_code,
+        "diagnostic": diagnostic,
+        "message": diagnostic.get("message") if diagnostic else None,
     }
 
 
@@ -578,9 +628,13 @@ def load_project_plan(project_root: str | os.PathLike[str]) -> dict[str, Any]:
     root = _root(project_root)
     discovery = detect_plan_sources(root)
     if discovery["status"] != "READY":
-        if discovery["status"] == "INCOMPLETE":
+        if discovery["status"] in {"INCOMPLETE", "AMBIGUOUS"}:
             missing = ", ".join(discovery["missing"])
-            raise ProjectPlanIngestionError("PLAN_INPUT_MISSING", f"Missing required planning input: {missing}", details={"missing": discovery["missing"]})
+            raise ProjectPlanIngestionError(
+                discovery.get("error_code") or "PLAN_INPUT_MISSING",
+                discovery.get("message") or f"Missing required planning input: {missing}",
+                details={"missing": discovery["missing"], "diagnostic": discovery.get("diagnostic")},
+            )
         raise ProjectPlanIngestionError("PLAN_INPUT_NOT_FOUND", "no plan sources are present")
     requirements_path = root / REQUIREMENTS_RELATIVE_PATH
     stage_plan_path = root / STAGE_PLAN_RELATIVE_PATH
@@ -1173,7 +1227,7 @@ def sync_project_plan(project_root: str | os.PathLike[str], *, controller: Any |
     discovery = detect_plan_sources(root)
     if discovery["status"] == "NO_PLAN":
         return {"status": "LEGACY_COMPATIBLE", "plan_discovery": discovery, "human_intervention_count": 0}
-    if discovery["status"] == "INCOMPLETE":
+    if discovery["status"] not in {"NO_PLAN", "READY"}:
         return {"status": "INCOMPLETE", "plan_discovery": discovery, "missing": discovery["missing"], "human_intervention_count": 0}
     prepared = ensure_plan_intake(root, intake=intake)
     plan = prepared["plan"]
@@ -1256,8 +1310,8 @@ def sync_project_plan(project_root: str | os.PathLike[str], *, controller: Any |
         # it for new-session recovery tooling.
         "context_recovery_order": ["plan/REQUIREMENTS.md", "plan/STAGE_PLAN.md", "plan/WORKFLOW_PLAN.md", "journal", "plan/CURRENT_STATE.md", "latest receipts"],
         "context_recovery_read_order": [
-            "docs/AUTONOMOUS_OBJECTIVE_COMPLETION_LOOP.md",
-            "docs/PROJECT_PLAN_INGESTION_CONTRACT.md",
+            "docs/outer-loop-contract.md",
+            "docs/project-planning.md",
             "plan/REQUIREMENTS.md",
             "plan/STAGE_PLAN.md",
             "plan/WORKFLOW_PLAN.md",

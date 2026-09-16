@@ -240,7 +240,7 @@ test('completion reloads once when a stopped empty assistant placeholder needs h
 
 test('hydration reload restores the saved Project conversation route after root redirect', async () => {
   const conversationId = '12345678-1234-4234-8234-123456789abc';
-  const savedRoute = `https://chatgpt.com/g/g-p-6a9a2d82aec881918b65e066b18b95d8-ce-shi/c/${conversationId}`;
+  const savedRoute = `https://chatgpt.com/g/g-p-example-project/c/${conversationId}`;
   let currentUrl = savedRoute;
   let reloadCount = 0;
   const gotoCalls = [];

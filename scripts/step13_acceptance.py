@@ -101,7 +101,7 @@ def _scenario() -> dict[str, Any]:
             brief={
                 "goal": "find a bounded reusable route",
                 "success_criteria": ["recommendation is locally checkable"],
-                "chatgpt_project_binding": {"url": "https://chatgpt.com/g/g-p-6a9a2d82aec881918b65e066b18b95d8-ce-shi/project"},
+                "chatgpt_project_binding": {"url": "https://chatgpt.com/g/g-p-example-project/project"},
             },
         )
         approved = intake.approve(rationale="offline acceptance")
@@ -116,7 +116,7 @@ def _scenario() -> dict[str, Any]:
         validate_instance(report, load_schema("discovery_report"))
         if len(consultant.calls) != 1:
             raise RuntimeError("discovery did not make exactly one fake consultation")
-        expected_url = "https://chatgpt.com/g/g-p-6a9a2d82aec881918b65e066b18b95d8-ce-shi/project"
+        expected_url = "https://chatgpt.com/g/g-p-example-project/project"
         if consultant.calls[0].get("project_url") != expected_url:
             raise RuntimeError("project_url was not forwarded from approved binding")
         report_path = root / DISCOVERY_REPORT_RELATIVE_PATH

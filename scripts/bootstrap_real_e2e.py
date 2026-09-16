@@ -50,7 +50,7 @@ from src.project_intake import ProjectRequirementsIntake  # noqa: E402
 from src.stage_integration import subprocess_bridge_runner  # noqa: E402
 
 
-APPROVED_PROJECT_URL = "https://chatgpt.com/g/g-p-6a9a2d82aec881918b65e066b18b95d8-ce-shi/project"
+APPROVED_PROJECT_URL = "https://chatgpt.com/g/g-p-example-project/project"
 BRIDGE_ROOT = ROOT.parents[0] / "chatgpt_browser_bridge"
 BOOTSTRAP_STATE_RELATIVE_PATH = Path(".research") / "bootstrap_state.json"
 BOOTSTRAP_RESEARCH_MARKER = "PROJECT_BOOTSTRAP_RESEARCH_PASS"

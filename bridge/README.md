@@ -17,7 +17,7 @@ Codex/CLI → Playwright → 独立 headed Chromium profile → ChatGPT Web
 - 等待生成状态结束并经过短 stability window；hard timeout 时返回 `RESPONSE_TIMEOUT`，不会把 partial response 当成功。
 - 成功输出 `CONSULTATION_STARTED`、`CHATGPT_RESPONSE_BEGIN/END`、`CONSULTATION_COMPLETE`，并写入本地 consultation receipt。
 - `fresh` 新建对话、`continue` 仅通过 bridge receipt 继续已验证对话，并保持 fresh-room isolation。
-- 可选用显式 `project_url`（CLI 的 `--project-url`）把本地项目绑定到一个 ChatGPT Project，例如 `https://chatgpt.com/g/g-p-6a9a2d82aec881918b65e066b18b95d8-ce-shi/project`；fresh 先落到该 project route、检查登录，再创建 fresh conversation。
+- 可选用显式 `project_url`（CLI 的 `--project-url`）把本地项目绑定到一个 ChatGPT Project，例如 `https://chatgpt.com/g/g-p-example-project/project`；fresh 先落到该 project route、检查登录，再创建 fresh conversation。
 - project URL 只接受 `https://chatgpt.com/g/g-p-.../project` 这一明确 UI route；任意外域、普通 chat URL、相对/模糊路径、query/hash 或 credentials 都会 fail-closed。continue 会继承 receipt 的 project binding，并拒绝跨项目 URL。
 - 可选本地 TXT/文档/PDF/PNG 等附件；使用 Playwright 原生 file upload。附件必须位于 bridge server-side allowed root，最多 9 个、单文件最多 8 MiB（这是本地 PoC safety cap，不是 ChatGPT 官方文件上限）。
 - 上传会等待 composer tile/preview、目标 basename、无 pending/error 状态及可用 composer/send control；上传失败或未 ready 不发送 prompt。
@@ -158,10 +158,10 @@ CLI 示例：
 npm run consult -- --mode fresh --prompt "Remember this nonce: CTX_demo. Reply exactly: TURN_A_OK"
 
 # 将本地项目显式绑定到一个 ChatGPT Project URL
-npm run consult -- --mode fresh --project-url "https://chatgpt.com/g/g-p-6a9a2d82aec881918b65e066b18b95d8-ce-shi/project" --prompt "Reply exactly: PROJECT_TURN_OK"
+npm run consult -- --mode fresh --project-url "https://chatgpt.com/g/g-p-example-project/project" --prompt "Reply exactly: PROJECT_TURN_OK"
 
 # 使用上一个成功 receipt 继续同一房间
-npm run consult -- --mode continue --continue-from CONSULT-YYYYMMDD-HHMMSS-xxxxxxxx --project-url "https://chatgpt.com/g/g-p-6a9a2d82aec881918b65e066b18b95d8-ce-shi/project" --prompt "Reply with exactly the nonce I asked you to remember."
+npm run consult -- --mode continue --continue-from CONSULT-YYYYMMDD-HHMMSS-xxxxxxxx --project-url "https://chatgpt.com/g/g-p-example-project/project" --prompt "Reply with exactly the nonce I asked you to remember."
 
 # 显式上传一个 server-side allowed root 下的文件
 npm run consult -- --mode fresh --attachment "test/fixtures/attachment_nonce.txt" --prompt "Read the attached file and reply with exactly FIXTURE_ATTACHMENT_NONCE and nothing else."

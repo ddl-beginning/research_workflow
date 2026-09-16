@@ -25,10 +25,10 @@ import {
   validateContinuationReceipt,
 } from '../src/bridge.mjs';
 
-const PROJECT_URL = 'https://chatgpt.com/g/g-p-6a9a2d82aec881918b65e066b18b95d8-ce-shi/project';
-const OTHER_PROJECT_URL = 'https://chatgpt.com/g/g-p-7b9a2d82aec881918b65e066b18b95d8-ce-shi/project';
+const PROJECT_URL = 'https://chatgpt.com/g/g-p-example-project/project';
+const OTHER_PROJECT_URL = 'https://chatgpt.com/g/g-p-other-project/project';
 const CONVERSATION_ID = '12345678-1234-4234-8234-123456789abc';
-const PROJECT_CONVERSATION_URL = `https://chatgpt.com/g/g-p-6a9a2d82aec881918b65e066b18b95d8-ce-shi/c/${CONVERSATION_ID}`;
+const PROJECT_CONVERSATION_URL = `https://chatgpt.com/g/g-p-example-project/c/${CONVERSATION_ID}`;
 const ROOT_ID = 'CONSULT-20260904-000000-aabbccdd';
 const BRIDGE_ROOT = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 
@@ -233,7 +233,7 @@ test('new receipts bind the target mode and fresh Project chat marker', () => {
 });
 
 test('conversation identity accepts the nested route emitted by a Project composer', () => {
-  const nestedUrl = `https://chatgpt.com/g/g-p-6a9a2d82aec881918b65e066b18b95d8-ce-shi/c/${CONVERSATION_ID}`;
+  const nestedUrl = `https://chatgpt.com/g/g-p-example-project/c/${CONVERSATION_ID}`;
   assert.equal(extractConversationIdFromUrl(nestedUrl), CONVERSATION_ID);
   assert.equal(extractConversationIdFromUrl(`${nestedUrl}?view=latest#reply`), CONVERSATION_ID);
   assert.equal(extractConversationIdFromUrl('https://chatgpt.com/g/other-project/c/not-a-uuid'), null);
@@ -244,7 +244,7 @@ test('Project continuation route validation requires the exact bound slug and co
   assert.equal(isValidProjectConversationUrl(PROJECT_CONVERSATION_URL, PROJECT_URL, CONVERSATION_ID), true);
   assert.equal(isValidProjectConversationUrl(`https://chatgpt.com/c/${CONVERSATION_ID}`, PROJECT_URL, CONVERSATION_ID), false);
   assert.equal(isValidProjectConversationUrl(
-    `https://chatgpt.com/g/g-p-7b9a2d82aec881918b65e066b18b95d8-ce-shi/c/${CONVERSATION_ID}`,
+    `https://chatgpt.com/g/g-p-other-project/c/${CONVERSATION_ID}`,
     PROJECT_URL,
     CONVERSATION_ID,
   ), false);
@@ -840,7 +840,7 @@ test('Project continuation rejects global or wrong-slug parent chat routes befor
     },
     {
       label: 'wrong project slug',
-      chatUrl: `https://chatgpt.com/g/g-p-7b9a2d82aec881918b65e066b18b95d8-ce-shi/c/${CONVERSATION_ID}`,
+      chatUrl: `https://chatgpt.com/g/g-p-other-project/c/${CONVERSATION_ID}`,
     },
   ];
   for (const item of cases) {
@@ -870,7 +870,7 @@ test('Project continuation rejects global or wrong-slug parent chat routes befor
 test('Project continuation rejects a landed conversation identity mismatch without sending', async () => {
   const parent = projectReceipt();
   const wrongConversationId = '12345678-1234-4234-8234-123456789abd';
-  const wrongLandingUrl = `https://chatgpt.com/g/g-p-6a9a2d82aec881918b65e066b18b95d8-ce-shi/c/${wrongConversationId}`;
+  const wrongLandingUrl = `https://chatgpt.com/g/g-p-example-project/c/${wrongConversationId}`;
   const { rootDir } = await createReceiptRoot(parent);
   const fake = fakeBridge({
     finalUrl: wrongLandingUrl,

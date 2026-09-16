@@ -20,12 +20,12 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from .execution_profile import ExecutionProfileError, ensure_execution_profile
+from .product_metadata import PRODUCT_VERSION
 from .project_state import PROJECT_BRIEF_RELATIVE_PATH, load_project_brief, resolve_project_root
 
 
 MACHINE_ROOT_ENV = "RESEARCH_WORKFLOW_MACHINE_ROOT"
 BRIDGE_ROOT_ENV = "RESEARCH_WORKFLOW_BRIDGE_ROOT"
-PRODUCT_VERSION = "2.1"
 RUNTIME_CONFIG_FILENAME = "product-v2-runtime.json"
 WORKSPACE_REGISTRY_FILENAME = "workspace-registry.json"
 HEALTH_FILENAME = "health.json"
@@ -386,6 +386,38 @@ def ensure_machine_config(
 
     current = load_machine_config(paths)
     if current is not None and not force:
+        # Preserve operator-owned choices, but refresh the packaged Bridge
+        # identity after an Engine update. Otherwise setup provisions the new
+        # source and then the old machine digest makes its own doctor fail.
+        if bridge_root is not None:
+            try:
+                identity = bridge_source_identity(bridge_root)
+            except StartupError:
+                identity = None
+            existing_bridge = current.get("bridge") if isinstance(current.get("bridge"), Mapping) else {}
+            if identity is not None and (
+                existing_bridge.get("root") != bridge_root.as_posix()
+                or existing_bridge.get("version") != identity.get("version")
+                or existing_bridge.get("source_digest") != identity.get("source_digest")
+                or existing_bridge.get("dependency_lock_digest") != identity.get("dependency_lock_digest")
+            ):
+                refreshed = copy.deepcopy(current)
+                bridge = dict(existing_bridge)
+                bridge.update(
+                    {
+                        "enabled": True,
+                        "root": bridge_root.as_posix(),
+                        "entrypoint": identity.get("entrypoint", BRIDGE_ENTRYPOINT),
+                        "version": identity.get("version"),
+                        "source_digest": identity.get("source_digest"),
+                        "dependency_lock_digest": identity.get("dependency_lock_digest"),
+                        "source_mode": "packaged",
+                    }
+                )
+                refreshed["bridge"] = bridge
+                _reject_sensitive_keys(refreshed)
+                _atomic_json(paths.config, refreshed)
+                return refreshed, True
         return current, False
     config = default_runtime_config(
         paths,

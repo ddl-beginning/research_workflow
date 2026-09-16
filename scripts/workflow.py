@@ -20,9 +20,9 @@ from scripts import product_doctor
 from scripts import research_workflow_cli as installer
 from src.execution_profile import ExecutionProfileError
 from src.human_summary import build_human_presentation, render_human_presentation
+from src.product_metadata import PRODUCT_VERSION, checkout_provenance, current_provenance, format_version, is_engine_checkout
 from src.openai_codex_executor import OpenAICodexExecutor
 from src.portable_startup import (
-    PRODUCT_VERSION,
     MachinePaths,
     StartupError,
     bridge_source_identity,
@@ -68,6 +68,28 @@ def _workspace(value: str | None) -> Path:
     if not resolved.is_dir():
         raise CommandError("WORKSPACE_INVALID", "project path is not a directory")
     return resolved
+
+
+def resolve_default_command(workspace: str | os.PathLike[str]) -> str:
+    """Resolve the no-argument entrypoint without creating project state."""
+
+    root = _workspace(str(workspace))
+    plan_status = detect_plan_sources(root)["status"]
+    return "resume" if project_identity_present(root) or plan_status != "NO_PLAN" else "init"
+
+
+def _engine_repository_error(workspace: Path, command: str) -> dict[str, Any]:
+    return {
+        "schema_version": "workflow_directory_error.v1",
+        "operation": command,
+        "ready": False,
+        "code": "THIS_IS_WORKFLOW_ENGINE_REPOSITORY",
+        "message": "This directory is the Workflow Engine repository. Run Workflow from your business project directory.",
+        "workspace": workspace.as_posix(),
+        "expected": "Run Workflow from your business project directory.",
+        "next": "Set-Location D:\\work\\my_business_project and run workflow.exe resume.",
+        "writes_performed": False,
+    }
 
 
 def _codex_home() -> Path:
@@ -196,12 +218,20 @@ def _doctor_report(workspace: Path, paths: MachinePaths, config_path: Path, *, p
             "provider_dispatch_performed": False,
             "gpt_calls_performed": False,
         }
-    config = load_machine_config(paths)
+    selected_paths = paths if config_path == paths.config else MachinePaths(
+        config_path.parent,
+        config_path,
+        paths.runtime,
+        paths.browser_profile,
+        paths.workspace_registry,
+        paths.health,
+    )
+    config = load_machine_config(selected_paths)
     browser_check = _bridge_check(config)
     if probe and config is not None:
-        browser_probe = probe_browser(config, paths)
+        browser_probe = probe_browser(config, selected_paths)
     else:
-        health = load_health(paths)
+        health = load_health(selected_paths)
         if health and health.get("status") == "PASS":
             browser_probe = {"status": "PASS", "code": "OK", "detail": "last bounded browser health probe passed"}
         elif health and health.get("code") == "GPT_AUTH_REQUIRED":
@@ -215,8 +245,25 @@ def _doctor_report(workspace: Path, paths: MachinePaths, config_path: Path, *, p
     summary = project_brief_summary(workspace) if project_identity_present(workspace) else None
     profile_ok = bool(summary and isinstance(summary.get("profile"), Mapping) and summary["profile"].get("name") == "autonomous_research")
     journal_path = workspace / ".workflow-v2" / "journal.json"
-    project_status = "READY" if summary and profile_ok and journal_path.is_file() else "INITIALIZE REQUIRED" if summary else "NOT INITIALIZED"
+    project_status = "ENGINE REPOSITORY" if is_engine_checkout(workspace) else "READY" if summary and profile_ok and journal_path.is_file() else "INITIALIZE REQUIRED" if summary else "NOT INITIALIZED"
     check_by_name = {str(item.get("name")): item for item in product.get("checks", []) if isinstance(item, Mapping)}
+    launcher_expected = selected_paths.root / "bin" / "workflow.exe"
+    launcher_value = shutil.which("workflow.exe")
+    launcher_path = Path(launcher_value).resolve() if launcher_value else None
+    launcher_available = launcher_expected.is_file() and launcher_path is not None
+    launcher_shadowed = launcher_available and launcher_path != launcher_expected.resolve()
+    launcher_check = {
+        "status": "PASS" if launcher_available else "FAIL",
+        "code": "PATH_LAUNCHER_SHADOWED" if launcher_shadowed else "OK" if launcher_available else "PATH_LAUNCHER_NOT_STABLE",
+        "detail": (
+            f"active={launcher_path.as_posix()}; stable={launcher_expected.as_posix()} (an earlier PATH entry wins)"
+            if launcher_shadowed
+            else launcher_path.as_posix() if launcher_path else "workflow.exe was not found on PATH"
+        ),
+        "expected": launcher_expected.as_posix(),
+    }
+    installed_provenance = current_provenance(ROOT)
+    checkout = checkout_provenance(workspace)
 
     def state(name: str, fallback: bool = False) -> str:
         return "OK" if check_by_name.get(name, {}).get("status") == "PASS" else "FAIL"
@@ -230,6 +277,7 @@ def _doctor_report(workspace: Path, paths: MachinePaths, config_path: Path, *, p
             item == "OK"
             for item in (
                 state("product.source"),
+                state("engine.provenance"),
                 state("python"),
                 state("codex.runtime"),
                 state("chatgpt.auth"),
@@ -238,25 +286,35 @@ def _doctor_report(workspace: Path, paths: MachinePaths, config_path: Path, *, p
                 state("mcp.product_entry"),
                 state("contract.stage_actions"),
                 state("runtime.config"),
-                "OK" if project_status == "READY" else "FAIL",
+                "OK" if project_status in {"READY", "ENGINE REPOSITORY"} else "FAIL",
+                launcher_check["status"] == "PASS" and "OK" or "FAIL",
             )
         ),
         "checks": {
             "Workflow Engine": {"status": "OK" if state("product.source") == "OK" else "FAIL", "detail": "installed Product files"},
             "Workflow Version": {"status": "OK", "detail": f"v{PRODUCT_VERSION}"},
+            "Engine Provenance": {
+                "status": "OK" if state("engine.provenance") == "OK" else "FAIL",
+                "detail": check_by_name.get("engine.provenance", {}).get("detail", "not checked"),
+                "code": check_by_name.get("engine.provenance", {}).get("code", "OK"),
+            },
+            "Launcher": {"status": "OK" if launcher_available else "FAIL", "detail": launcher_check["detail"], "code": launcher_check["code"], "expected": launcher_check["expected"]},
             "Codex": {"status": "OK" if state("codex.runtime") == "OK" else "FAIL", "detail": "Codex CLI"},
             "Codex Auth": {"status": "OK" if state("chatgpt.auth") == "OK" else "LOGIN REQUIRED", "detail": "Sign in to Codex with ChatGPT." if state("chatgpt.auth") != "OK" else "ChatGPT auth is available."},
             "GPT Browser": {"status": "OK" if browser_probe["status"] == "PASS" else "LOGIN REQUIRED" if browser_probe["code"] == "GPT_AUTH_REQUIRED" else "CHECK SETUP", "detail": browser_probe["detail"]},
             "Browser Bridge": {"status": "OK" if browser_check["status"] == "PASS" else "FAIL", "detail": browser_check["detail"]},
+            "Bridge Source": {"status": "OK" if browser_check["status"] == "PASS" else "FAIL", "detail": browser_check["detail"], "version": browser_check.get("version"), "source_digest": browser_check.get("source_digest"), "code": browser_check.get("code", "OK")},
             "MCP": {"status": "OK" if state("mcp.product_entry") == "OK" else "FAIL", "detail": "research-supervisor registration"},
             "Stage Contract": {"status": "OK" if state("contract.stage_actions") == "OK" else "FAIL", "detail": "canonical Stage propagation handshake"},
-            "Machine Runtime": {"status": "OK" if state("runtime.config") == "OK" else "FAIL", "detail": paths.root.as_posix()},
-            "Project": {"status": "OK" if summary else "NOT INITIALIZED", "detail": summary.get("project_name") if summary else workspace.name},
-            "Project Workflow": {"status": project_status, "detail": "autonomous_research profile + V2 journal" if project_status == "READY" else "run workflow init"},
+            "Machine Runtime": {"status": "OK" if state("runtime.config") == "OK" else "FAIL", "detail": selected_paths.root.as_posix()},
+            "Project": {"status": "N/A" if project_status == "ENGINE REPOSITORY" else "OK" if summary else "NOT INITIALIZED", "detail": "Engine checkout; no business project is expected here" if project_status == "ENGINE REPOSITORY" else summary.get("project_name") if summary else workspace.name},
+            "Project Workflow": {"status": project_status, "detail": "run business Workflow commands from a project directory" if project_status == "ENGINE REPOSITORY" else "autonomous_research profile + V2 journal" if project_status == "READY" else "add the two canonical plan files and run workflow.exe resume"},
         },
         "profile": summary.get("profile") if summary else None,
         "product": product,
         "browser_probe": browser_probe,
+        "provenance": {"installed": installed_provenance, "checkout": checkout},
+        "launcher": launcher_check,
         "writes_performed": bool(probe),
         "cookie_export": False,
     }
@@ -364,16 +422,17 @@ def _init(args: argparse.Namespace, workspace: Path) -> dict[str, Any]:
     # runtime has not been provisioned yet; setup readiness is a separate
     # concern and must not mask project input.
     plan_discovery = detect_plan_sources(workspace)
-    if plan_discovery["status"] == "INCOMPLETE":
+    if plan_discovery["status"] != "NO_PLAN" and plan_discovery["status"] != "READY":
         missing = ", ".join(plan_discovery["missing"])
         return {
             "schema_version": "workflow_init.v1",
             "operation": "init",
             "ready": False,
-            "code": "PLAN_INPUT_MISSING",
-            "message": f"Missing required planning input: {missing}",
+            "code": plan_discovery.get("error_code", "PLAN_INPUT_MISSING"),
+            "message": plan_discovery.get("message") or f"Missing required planning input: {missing}",
             "missing": plan_discovery["missing"],
             "plan_discovery": plan_discovery,
+            "diagnostic": plan_discovery.get("diagnostic"),
             "writes_performed": False,
         }
     if not config_path.is_file():
@@ -420,16 +479,17 @@ def _init(args: argparse.Namespace, workspace: Path) -> dict[str, Any]:
 
 def _resume(args: argparse.Namespace, workspace: Path) -> dict[str, Any]:
     plan_discovery = detect_plan_sources(workspace)
-    if plan_discovery["status"] == "INCOMPLETE":
+    if plan_discovery["status"] != "NO_PLAN" and plan_discovery["status"] != "READY":
         missing = ", ".join(plan_discovery["missing"])
         return {
             "schema_version": "workflow_resume.v1",
             "operation": "resume",
             "ready": False,
-            "code": "PLAN_INPUT_MISSING",
-            "message": f"Missing required planning input: {missing}",
+            "code": plan_discovery.get("error_code", "PLAN_INPUT_MISSING"),
+            "message": plan_discovery.get("message") or f"Missing required planning input: {missing}",
             "missing": plan_discovery["missing"],
             "plan_discovery": plan_discovery,
+            "diagnostic": plan_discovery.get("diagnostic"),
             "writes_performed": False,
         }
     plan_bound = plan_discovery["status"] == "READY"
@@ -499,19 +559,29 @@ def _status(args: argparse.Namespace, workspace: Path) -> dict[str, Any]:
 
 
 def _human_doctor(report: Mapping[str, Any]) -> str:
-    lines = ["Workflow V2.1", ""]
+    lines = [f"{PRODUCT_VERSION} — Research Workflow", ""]
     for name, item in report.get("checks", {}).items():
         status = str(item.get("status", "FAIL"))
         lines.append(f"{name:<22} {status}")
     if not report.get("ready"):
-        lines.extend(["", "Action:", "Run workflow setup"])
-        browser_status = report.get("checks", {}).get("GPT Browser", {}).get("status")
-        if browser_status == "LOGIN REQUIRED":
-            lines.append("Sign in to ChatGPT in the dedicated browser profile, then rerun workflow.exe doctor --probe-browser.")
-        elif browser_status == "CHECK SETUP":
-            lines.append("Run workflow.exe doctor --probe-browser for a fresh GPT browser check.")
-        if report.get("checks", {}).get("Project Workflow", {}).get("status") != "READY":
-            lines.append("For a new project, run workflow init --goal \"...\".")
+        lines.extend(["", "Diagnostics:"])
+        for name, item in report.get("checks", {}).items():
+            status = str(item.get("status", "FAIL"))
+            if status in {"OK", "PASS", "READY", "N/A", "ENGINE REPOSITORY"} and str(item.get("code") or "OK") == "OK":
+                continue
+            code = str(item.get("code") or "CHECK_FAILED")
+            detail = str(item.get("detail") or "the check did not pass")
+            if code in {"PATH_LAUNCHER_NOT_STABLE", "PATH_LAUNCHER_SHADOWED"}:
+                next_action = "Run .\\install.ps1 from the Engine checkout, then open a new PowerShell."
+            elif code == "INSTALLED_ENGINE_OUTDATED":
+                next_action = "Run .\\install.ps1 from this checkout, then open a new PowerShell."
+            elif status == "LOGIN REQUIRED":
+                next_action = "Complete the normal interactive login in the named client, then rerun workflow.exe doctor --probe-browser."
+            elif name == "Project Workflow":
+                next_action = "Add plan/REQUIREMENTS.md and plan/STAGE_PLAN.md, then run workflow.exe resume from the business project."
+            else:
+                next_action = "Run workflow.exe setup, fix the reported dependency, then rerun workflow.exe doctor --probe-browser."
+            lines.extend([f"WHAT FAILED: {name} [{code}]", f"WHY: {detail}", f"NEXT: {next_action}"])
     return "\n".join(lines)
 
 
@@ -525,6 +595,7 @@ def _human_setup(result: Mapping[str, Any]) -> str:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Portable Workflow V2.1 startup and first-run setup")
+    parser.add_argument("--version", action="version", version=format_version(ROOT))
     parser.add_argument("command", nargs="?", choices=("setup", "doctor", "init", "resume", "status"), help="operation; omitted means resume or init guidance")
     parser.add_argument("--project", "--workspace", dest="workspace", help="project directory; defaults to the current directory")
     parser.add_argument("--machine-root", help="override %%LOCALAPPDATA%%/ResearchWorkflow")
@@ -548,8 +619,9 @@ def run_command(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     workspace = _workspace(args.workspace)
     command = args.command
     if command is None:
-        plan_status = detect_plan_sources(workspace)["status"]
-        command = "resume" if project_identity_present(workspace) or plan_status != "NO_PLAN" else "init"
+        command = resolve_default_command(workspace)
+    if command in {"init", "resume"} and is_engine_checkout(workspace):
+        return 1, _engine_repository_error(workspace, command)
     if command == "setup":
         result = _setup(args, workspace)
         return (0 if result["ready"] else 1), result

@@ -89,7 +89,7 @@ class GuidanceArtifactTests(unittest.TestCase):
 
     def test_old_guidance_remains_readable(self) -> None:
         self.assertTrue(Path("README.md").is_file())
-        self.assertTrue(Path("ARCHITECTURE.md").is_file())
+        self.assertTrue(Path("docs/history/architecture-v2.1.6.md").is_file())
 
     def test_parent_traversal_and_dependency_cycles_fail_closed(self) -> None:
         with self.assertRaises(GuidanceArtifactError):
@@ -102,7 +102,7 @@ class GuidanceArtifactTests(unittest.TestCase):
             validate_tasks_binding(cyclic, self.plan, allowed_paths=["templates", "src"])
 
     def test_actual_markdown_digest_chain(self) -> None:
-        root = Path("specs/spec-kit-adoption-and-repository-architecture-v1")
+        root = Path("fixtures/guidance/spec-kit-adoption-and-repository-architecture-v1")
         # This is a derived human-facing bundle.  Its committed V2 binding is
         # the authority for this validation; the old V1 workflow-state.json
         # checkpoint is intentionally not part of a fresh Product workspace.

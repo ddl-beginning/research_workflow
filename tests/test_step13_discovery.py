@@ -71,7 +71,7 @@ class Step13DiscoveryTests(unittest.TestCase):
                 "goal": "find a bounded reusable route",
                 "success_criteria": ["recommendation is locally checkable"],
                 "constraints": list(constraints or []),
-                "chatgpt_project_url": "https://chatgpt.com/g/g-p-6a9a2d82aec881918b65e066b18b95d8-ce-shi/project",
+                "chatgpt_project_url": "https://chatgpt.com/g/g-p-example-project/project",
             },
         )
         approved = intake.approve(rationale="Step 13 test")
@@ -102,7 +102,7 @@ class Step13DiscoveryTests(unittest.TestCase):
             intake = ProjectRequirementsIntake(root)
             intake.initialize(
                 mode="USER_CONFIRMED_BRIEF",
-                brief={"goal": "target", "success_criteria": ["done"], "chatgpt_project_url": "https://chatgpt.com/g/g-p-7b9a2d82aec881918b65e066b18b95d8-ce-shi/project"},
+                brief={"goal": "target", "success_criteria": ["done"], "chatgpt_project_url": "https://chatgpt.com/g/g-p-other-project/project"},
             )
             consult = _FakeConsult(self._response("https://github.com/example/repo"))
             with self.assertRaises(ProjectDiscoveryError) as raised:
@@ -129,7 +129,7 @@ class Step13DiscoveryTests(unittest.TestCase):
             verifier = _FakeVerifier()
             report = discover_project(root, consultant=consult, verifier=verifier)
             self.assertEqual(len(consult.calls), 1)
-            self.assertEqual(consult.calls[0]["project_url"], "https://chatgpt.com/g/g-p-6a9a2d82aec881918b65e066b18b95d8-ce-shi/project")
+            self.assertEqual(consult.calls[0]["project_url"], "https://chatgpt.com/g/g-p-example-project/project")
             self.assertEqual(consult.calls[0]["mode"], "fresh")
             self.assertIn(ANTI_TUNNEL_RESEARCH_RULE, consult.calls[0]["prompt"])
             self.assertEqual(report["consultation"]["request_count"], 1)
@@ -435,7 +435,7 @@ class Step13DiscoveryTests(unittest.TestCase):
     def test_03p_adapter_rejects_secret_in_discarded_wrapper_and_preserves_https_values(self) -> None:
         payload = self._response("https://example.com/repo?next=/tmp/repo")
         payload["search_summary"] = "remote https://example.com/foo-/bar"
-        raw = "prefix api_key=synthetic-secret /tmp/hidden\n" + json.dumps(payload, ensure_ascii=False)
+        raw = "prefix api_key=not-real /tmp/hidden\n" + json.dumps(payload, ensure_ascii=False)
         with self.assertRaises(ProjectDiscoveryError) as raised:
             _sanitize_consultant_response(raw)
         self.assertEqual(raised.exception.code, "DISCOVERY_SECRET_REJECTED")

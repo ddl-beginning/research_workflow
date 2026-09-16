@@ -285,9 +285,14 @@ class ProductWorkflowRuntime:
             intake=self.intake,
             auto_start=auto_start,
         )
-        if result.get("status") == "INCOMPLETE":
+        if result.get("status") not in {"INGESTED", "LEGACY_COMPATIBLE"}:
             missing = ", ".join(str(item) for item in result.get("missing", []))
-            raise ProjectPlanIngestionError("PLAN_INPUT_MISSING", f"Missing required planning input: {missing}", details={"missing": result.get("missing", [])})
+            discovery = result.get("plan_discovery") if isinstance(result.get("plan_discovery"), Mapping) else {}
+            raise ProjectPlanIngestionError(
+                str(discovery.get("error_code") or "PLAN_INPUT_MISSING"),
+                str(discovery.get("message") or f"Missing required planning input: {missing}"),
+                details={"missing": result.get("missing", []), "diagnostic": discovery.get("diagnostic")},
+            )
         return result
 
     def _bound_project_url(self) -> str | None:
@@ -511,7 +516,7 @@ class ProductWorkflowRuntime:
         if brief is None:
             raise WorkflowRuntimeError("WORKFLOW_NOT_FOUND", "workflow has not been started")
         projection = self.controller.resume_projection()
-        contract_path = Path(__file__).resolve().parents[1] / "docs" / "AUTONOMOUS_OBJECTIVE_COMPLETION_LOOP.md"
+        contract_path = Path(__file__).resolve().parents[1] / "docs" / "outer-loop-contract.md"
         try:
             contract_text = contract_path.read_text(encoding="utf-8")
         except OSError as exc:

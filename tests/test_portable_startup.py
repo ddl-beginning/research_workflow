@@ -105,6 +105,28 @@ def test_setup_provisions_one_bridge_root_and_is_idempotent(tmp_path: Path, monk
     assert (first_root / "node_modules" / "playwright").is_dir()
 
 
+def test_machine_config_refreshes_packaged_bridge_identity_after_update(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    source = tmp_path / "packaged-bridge"
+    (source / "scripts").mkdir(parents=True)
+    (source / "package.json").write_text(
+        json.dumps({"name": "chatgpt-browser-bridge", "version": "2.0.0", "dependencies": {"playwright": "1.0.0"}}),
+        encoding="utf-8",
+    )
+    (source / "package-lock.json").write_text("{}\n", encoding="utf-8")
+    (source / "scripts" / "consult-pack.mjs").write_text("// updated entry\n", encoding="utf-8")
+    paths = machine_paths(tmp_path / "machine")
+    ensure_machine_directories(paths)
+    old = dict(default_runtime_config(paths, bridge_root=source))
+    old["bridge"] = dict(old["bridge"], source_digest="old-digest", version="0.1.0")
+    paths.config.write_text(json.dumps(old), encoding="utf-8")
+
+    refreshed, changed = ensure_machine_config(paths, bridge_root=source)
+
+    assert changed is True
+    assert refreshed["bridge"]["version"] == "2.0.0"
+    assert refreshed["bridge"]["source_digest"] == bridge_source_identity(source)["source_digest"]
+
+
 def test_profile_is_persisted_in_canonical_project_brief(tmp_path: Path):
     _brief(tmp_path)
     first = ensure_execution_profile(tmp_path)

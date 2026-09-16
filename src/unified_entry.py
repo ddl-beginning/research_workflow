@@ -471,7 +471,6 @@ def _load_anchor_sources(anchor: Path) -> list[_Source]:
 
     names = (
         "PROJECT_HANDOFF.json",
-        "PROJECT_HANDOFF.md",
         "LOCAL_BRIDGE_HANDOFF.json",
         "LOCAL_BRIDGE_HANDOFF.md",
         ".research/PROJECT_HANDOFF.json",

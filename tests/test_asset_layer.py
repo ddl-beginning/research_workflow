@@ -28,7 +28,7 @@ from src.project_discovery import discover_project
 from src.project_intake import ProjectRequirementsIntake
 
 
-PROJECT_URL = "https://chatgpt.com/g/g-p-6a9a2d82aec881918b65e066b18b95d8-ce-shi/project"
+PROJECT_URL = "https://chatgpt.com/g/g-p-example-project/project"
 
 
 class _DiscoveryConsult:

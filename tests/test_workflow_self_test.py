@@ -10,9 +10,11 @@ from scripts.workflow_self_test import run_self_test
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+HISTORICAL_ARCHITECTURE_RECEIPT = REPO_ROOT / ".consultations" / "CONSULT-20260906-070055-bef2fdb6" / "receipt.json"
 
 
 class WorkflowSelfTestHarnessTests(unittest.TestCase):
+    @unittest.skipUnless(HISTORICAL_ARCHITECTURE_RECEIPT.is_file(), "historical architecture receipt is not part of a fresh public checkout")
     def test_human_gate_flow_is_bounded_and_keeps_raw_reply_out_of_files(self) -> None:
         # The run is still present while assertions inspect its three fixed
         # artifacts.  TemporaryDirectory then removes only this disposable run.
@@ -46,6 +48,7 @@ class WorkflowSelfTestHarnessTests(unittest.TestCase):
             self.assertIn("ActionMap", decision_log)
             self.assertIn("fake Codex/Luna", decision_log)
 
+    @unittest.skipUnless(HISTORICAL_ARCHITECTURE_RECEIPT.is_file(), "historical architecture receipt is not part of a fresh public checkout")
     def test_stage_ready_closeout_uses_same_single_step_path(self) -> None:
         with tempfile.TemporaryDirectory(
             dir=str(REPO_ROOT / ".tmp"),

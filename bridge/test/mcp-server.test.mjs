@@ -19,7 +19,7 @@ import { BRIDGE_ROOT } from '../src/bridge.mjs';
 import { buildContextPack } from '../src/context-pack.mjs';
 
 test('consult_gpt input requires a non-empty prompt and rejects bridge controls', () => {
-  const projectUrl = 'https://chatgpt.com/g/g-p-6a9a2d82aec881918b65e066b18b95d8-ce-shi/project';
+  const projectUrl = 'https://chatgpt.com/g/g-p-example-project/project';
   assert.equal(MAX_TIMEOUT_MS, MAX_RESPONSE_TIMEOUT_MS);
   assert.equal(MAX_TIMEOUT_MS, 300_000);
   assert.equal(consultGptInputSchema.safeParse({ prompt: '' }).success, false);
@@ -79,7 +79,7 @@ test('consult_gpt returns complete response and receipt metadata from an injecte
 });
 
 test('consult_gpt forwards project_url without exposing bridge controls', async () => {
-  const projectUrl = 'https://chatgpt.com/g/g-p-6a9a2d82aec881918b65e066b18b95d8-ce-shi/project';
+  const projectUrl = 'https://chatgpt.com/g/g-p-example-project/project';
   const calls = [];
   const handler = createConsultGptHandler({
     consult: async (prompt, options) => {
