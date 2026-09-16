@@ -435,6 +435,20 @@ def _init(args: argparse.Namespace, workspace: Path) -> dict[str, Any]:
             "diagnostic": plan_discovery.get("diagnostic"),
             "writes_performed": False,
         }
+    if (
+        plan_discovery["status"] == "NO_PLAN"
+        and not project_identity_present(workspace)
+        and not args.goal
+        and not args.brief
+    ):
+        return {
+            "schema_version": "workflow_init.v1",
+            "operation": "init",
+            "ready": False,
+            "code": "INIT_INPUT_REQUIRED",
+            "message": "No project identity exists. Run workflow init --goal \"...\" or provide --brief.",
+            "writes_performed": False,
+        }
     if not config_path.is_file():
         raise CommandError("SETUP_REQUIRED", "run workflow setup before workflow init")
     preflight = product_doctor.run_doctor(workspace, config_path)
