@@ -467,7 +467,7 @@ def run_installation_validation(args: argparse.Namespace) -> dict[str, Any]:
     if validation_root.exists() and any(validation_root.iterdir()):
         raise ValidationFailure(f"validation root must be new or empty: {validation_root}")
     validation_root.mkdir(parents=True, exist_ok=True)
-    config = Path(args.runtime_config).expanduser().resolve(strict=True)
+    authoritative_config = Path(args.runtime_config).expanduser().resolve(strict=True)
     bridge_root = Path(args.bridge_root).expanduser().resolve(strict=True)
     profile_dir = Path(args.profile_dir).expanduser().resolve(strict=True)
     codex = shutil.which("codex")
@@ -482,6 +482,21 @@ def run_installation_validation(args: argparse.Namespace) -> dict[str, Any]:
     relocated_project = validation_root / "relocation-smoke"
     artifact_dir = validation_root / "provider-artifacts"
     trace = validation_root / "mcp-transport.trace.jsonl"
+    # The CLI profile argument is part of the clean-room contract. Keep the
+    # authoritative machine config untouched, but make the validation process
+    # use the explicitly supplied Bridge/profile paths rather than silently
+    # falling back to a possibly unauthenticated global profile.
+    base_config = json_file(authoritative_config)
+    if not isinstance(base_config, Mapping):
+        raise ValidationFailure("runtime config must be a JSON object")
+    validation_config = validation_root / "runtime-config.json"
+    validation_config_payload = dict(base_config)
+    validation_bridge = dict(base_config.get("bridge", {})) if isinstance(base_config.get("bridge"), Mapping) else {}
+    validation_bridge["root"] = bridge_root.as_posix()
+    validation_bridge["profile_dir"] = profile_dir.as_posix()
+    validation_config_payload["bridge"] = validation_bridge
+    write_json(validation_config, validation_config_payload)
+    config = validation_config
     source_commit = git(PRODUCT_ROOT, "rev-parse", tag).stdout.strip()
     run(["git", "clone", "--no-local", "--branch", tag, str(PRODUCT_ROOT), str(engine)], cwd=validation_root, timeout=180)
 
@@ -746,7 +761,7 @@ def run_installation_validation(args: argparse.Namespace) -> dict[str, Any]:
         # Restore the authoritative current checkout registration even when a
         # validation assertion fails.  The config contains only a path and is
         # never echoed or read as a secret.
-        temporary_mcp_registration(codex, python=Path(sys.executable), launcher=original_launcher, config=config, cwd=PRODUCT_ROOT)
+        temporary_mcp_registration(codex, python=Path(sys.executable), launcher=original_launcher, config=authoritative_config, cwd=PRODUCT_ROOT)
 
 
 def main(argv: list[str] | None = None) -> int:
