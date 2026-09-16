@@ -240,6 +240,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 const args = process.argv.slice(2);
 const spec = JSON.parse(await fs.readFile(args[args.indexOf('--spec') + 1], 'utf8'));
+if (spec.project_id !== 'adapter-project') throw new Error('project_id was not forwarded');
 const id = 'CONSULT-20260904-000002-aabbccdd';
 const dir = path.join(spec.root_dir, '.consultations', id);
 await fs.mkdir(dir, { recursive: true });
@@ -282,6 +283,7 @@ console.log(JSON.stringify({
                 profile_dir=None,
                 bridge_root=bridge_root,
                 project_url=PROJECT_URL,
+                project_id="adapter-project",
             )
             self.assertEqual(result["response_text"], '{"bridge":"native"}')
             self.assertEqual(result["request_count"], 1)

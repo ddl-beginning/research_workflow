@@ -894,6 +894,7 @@ class ProjectScopedBridgeConsultant:
         bridge_root: str | os.PathLike[str] | None = None,
         timeout_ms: int = 300_000,
         context_pack: Mapping[str, Any] | None = None,
+        project_id: str | None = None,
     ) -> None:
         if not callable(bridge_runner):
             raise BridgeEnvelopeError("BRIDGE_RUNNER_INVALID", "bridge_runner must be callable")
@@ -905,6 +906,7 @@ class ProjectScopedBridgeConsultant:
             raise BridgeEnvelopeError("TIMEOUT_INVALID", "timeout_ms is outside its bounded range")
         self.timeout_ms = timeout_ms
         self.context_pack = copy.deepcopy(dict(context_pack)) if isinstance(context_pack, Mapping) else None
+        self.project_id = project_id.strip() if isinstance(project_id, str) and project_id.strip() else None
         self.calls = 0
 
     def consult(self, **kwargs: Any) -> Mapping[str, Any]:
@@ -966,6 +968,16 @@ class ProjectScopedBridgeConsultant:
             "timeout_ms": self.timeout_ms,
             "project_url": project_url,
         }
+        project_id = self.project_id
+        if project_id is None:
+            for source in (kwargs.get("brief"), evidence, packet):
+                if isinstance(source, Mapping):
+                    candidate = source.get("project_id") or source.get("PROJECT_ID")
+                    if isinstance(candidate, str) and candidate.strip():
+                        project_id = candidate.strip()
+                        break
+        if project_id is not None:
+            call_kwargs["project_id"] = project_id
         if self.bridge_root is not None:
             call_kwargs["bridge_root"] = self.bridge_root
         # Do not catch TypeError and retry: a real request may already have

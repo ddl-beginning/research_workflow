@@ -288,6 +288,7 @@ def test_bound_project_targets_are_isolated_and_each_review_is_fresh(
     second_result = second._consult({"prompt": "review B", "context_pack": pack}, purpose="technical")
 
     assert [call["project_url"] for call in calls] == [first_url, second_url]
+    assert all(call["profile_dir"] is None for call in calls)
     assert all(call["transport"] is None for call in calls)
     assert [call["mode"] for call in calls] == ["fresh", "fresh"]
     assert [first_result["conversation_id"], second_result["conversation_id"]] == [

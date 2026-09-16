@@ -1669,10 +1669,17 @@ class ProductWorkflowRuntime:
         bound_project_url = self._bound_project_url()
         effective_project_url = bound_project_url or cfg.project_url
         effective_transport = None if bound_project_url is not None else cfg.bridge_transport
+        # ``bridge.profile_dir`` is the legacy machine bootstrap profile used
+        # by setup/doctor.  A real Project consultation must not inherit that
+        # shared path: the Bridge derives the machine-local, per-project
+        # profile from ``project_id`` when no explicit project override is
+        # supplied.
+        project_profile_dir = None if effective_project_url is not None else cfg.bridge_profile_dir
         try:
             raw = subprocess_bridge_runner(prompt, mode="fresh", continue_from=None, context_pack=pack,
-                    root_dir=str(self.root), profile_dir=cfg.bridge_profile_dir, bridge_root=cfg.bridge_root,
-                    node_executable=cfg.node_executable, project_url=effective_project_url, transport=effective_transport,
+                    root_dir=str(self.root), profile_dir=project_profile_dir, bridge_root=cfg.bridge_root,
+                    node_executable=cfg.node_executable, project_url=effective_project_url,
+                    project_id=str(self.intake.state["project_id"]), transport=effective_transport,
                     timeout_ms=min(int(cfg.timeout_seconds * 1000), 300000))
         except StageIntegrationError as exc:
             raise WorkflowRuntimeError(exc.code, str(exc), details=exc.details) from exc

@@ -8,11 +8,12 @@ one consultation, explicitly read the response, and then explicitly execute a
 scoped local action.
 
 The bridge is injected as ``bridge_runner`` so deterministic tests do not need
-the browser.  ``subprocess_bridge_runner`` is provided for the disposable
-headed E2E and invokes the existing Node ``consult-pack`` entry point exactly
-once per call.  It removes transient request/response/spec files after the
-bounded metadata has been read; receipts never contain prompts, raw replies,
-cookies, tokens, session state, or DOM dumps.
+the browser.  ``subprocess_bridge_runner`` is provided for the headed E2E and
+invokes the existing Node ``consult-pack`` entry point exactly once per call.
+The Node bridge may reconnect to a machine-local Project Browser owned across
+these short-lived invocations. It removes transient request/response/spec
+files after the bounded metadata has been read; receipts never contain
+prompts, raw replies, cookies, tokens, session state, or DOM dumps.
 """
 
 from __future__ import annotations
@@ -269,6 +270,8 @@ def _summary_receipt(receipt: Mapping[str, Any]) -> dict[str, Any]:
         "chatgpt_target_origin",
         "chatgpt_project_target_verified",
         "fresh_project_chat_created",
+        "browser_process_evidence",
+        "browser_failure_class",
     }
     return {key: copy.deepcopy(value) for key, value in receipt.items() if key in allowed}
 
@@ -1218,6 +1221,7 @@ def subprocess_bridge_runner(
     node_executable: str = "node",
     bridge_root: str | os.PathLike[str] | None = None,
     project_url: str | None = None,
+    project_id: str | None = None,
     transport: str | None = None,
 ) -> dict[str, Any]:
     """Invoke the existing one-request Node bridge for disposable E2E.
@@ -1260,6 +1264,15 @@ def subprocess_bridge_runner(
         # keep it in the spec so a single argv shape works across bridge
         # revisions while the bridge remains the owner of URL validation.
         spec["project_url"] = normalized_project_url
+    effective_project_id = project_id
+    if effective_project_id is None and isinstance(context_pack, Mapping):
+        for key in ("PROJECT_ID", "project_id"):
+            value = context_pack.get(key)
+            if isinstance(value, str) and value.strip():
+                effective_project_id = value.strip()
+                break
+    if effective_project_id is not None:
+        spec["project_id"] = _bounded_text(effective_project_id, "project_id", maximum=128)
     if continue_from is not None:
         spec["continue_from"] = _bounded_text(continue_from, "continue_from", maximum=256)
     temporary_spec: Path | None = None
